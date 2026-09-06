@@ -10,3 +10,7 @@ Thumbs.db
 # 临时
 tmp/
 *.log
+
+# 私有本地数据
+storage_output/
+*.db

@@ -1,0 +1,128 @@
+{
+ "version": "1.0",
+ "weight_g": {
+  "g": 1.0,
+  "grm": 1.0,
+  "gm": 1.0,
+  "kg": 1000.0,
+  "oz": 28.35,
+  "onz": 28.35,
+  "oza": 28.35,
+  "lb": 453.6,
+  "stick": 113.4,
+  "mg": 0.001
+ },
+ "volume_ml": {
+  "cup": 240.0,
+  "tbsp": 15.0,
+  "tsp": 5.0,
+  "floz": 29.57,
+  "pint": 473.2,
+  "quart": 946.4,
+  "gallon": 3785.4,
+  "ml": 1.0
+ },
+ "density_rules": [
+  {
+   "match": [
+    "beverage",
+    "juice",
+    "drink",
+    "water",
+    "milk",
+    "tea",
+    "coffee",
+    "soda",
+    "energy drink"
+   ],
+   "g_per_ml": 1.03
+  },
+  {
+   "match": [
+    "fruit"
+   ],
+   "g_per_ml": 0.62
+  },
+  {
+   "match": [
+    "vegetable",
+    "salad",
+    "greens"
+   ],
+   "g_per_ml": 0.55
+  },
+  {
+   "match": [
+    "grain",
+    "bread",
+    "cereal",
+    "rice",
+    "pasta",
+    "flour",
+    "bakery",
+    "muffin",
+    "roll",
+    "biscuit"
+   ],
+   "g_per_ml": 0.55
+  },
+  {
+   "match": [
+    "nut",
+    "seed",
+    "dried",
+    "dehydrated"
+   ],
+   "g_per_ml": 0.5
+  },
+  {
+   "match": [
+    "oil",
+    "fat",
+    "butter",
+    "margarine",
+    "shortening"
+   ],
+   "g_per_ml": 0.92
+  },
+  {
+   "match": [
+    "syrup",
+    "honey",
+    "molasses",
+    "maple"
+   ],
+   "g_per_ml": 1.35
+  },
+  {
+   "match": [
+    "sugar",
+    "sweetener"
+   ],
+   "g_per_ml": 0.85
+  },
+  {
+   "match": [
+    "meat",
+    "poultry",
+    "chicken",
+    "beef",
+    "pork",
+    "lamb",
+    "fish",
+    "seafood",
+    "turkey",
+    "ham",
+    "sausage",
+    "bacon"
+   ],
+   "g_per_ml": 1.03
+  }
+ ],
+ "default_density": 1.0,
+ "non_weight_units": [
+  "icl",
+  "iu",
+  "mc"
+ ]
+}

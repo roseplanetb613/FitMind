@@ -1,0 +1,280 @@
+{
+  "version": "1.0",
+  "description": "Canonical muscle ontology. aliases are raw dataset terms.",
+  "muscles": [
+    {
+      "id": "pectorals",
+      "name_en": "Pectorals",
+      "name_zh": "胸大肌",
+      "region": "chest",
+      "aliases": [
+        "pectorals",
+        "chest",
+        "upper chest"
+      ]
+    },
+    {
+      "id": "serratus_anterior",
+      "name_en": "Serratus Anterior",
+      "name_zh": "前锯肌",
+      "region": "chest",
+      "aliases": [
+        "serratus anterior"
+      ]
+    },
+    {
+      "id": "trapezius",
+      "name_en": "Trapezius",
+      "name_zh": "斜方肌",
+      "region": "back",
+      "aliases": [
+        "traps",
+        "trapezius"
+      ]
+    },
+    {
+      "id": "latissimus_dorsi",
+      "name_en": "Latissimus Dorsi",
+      "name_zh": "背阔肌",
+      "region": "back",
+      "aliases": [
+        "lats",
+        "latissimus dorsi"
+      ]
+    },
+    {
+      "id": "rhomboids",
+      "name_en": "Rhomboids",
+      "name_zh": "菱形肌",
+      "region": "back",
+      "aliases": [
+        "rhomboids"
+      ]
+    },
+    {
+      "id": "upper_back",
+      "name_en": "Upper Back",
+      "name_zh": "上背部",
+      "region": "back",
+      "aliases": [
+        "upper back",
+        "back"
+      ]
+    },
+    {
+      "id": "lower_back",
+      "name_en": "Lower Back",
+      "name_zh": "下背部（竖脊肌区）",
+      "region": "back",
+      "aliases": [
+        "lower back"
+      ]
+    },
+    {
+      "id": "spine",
+      "name_en": "Spine",
+      "name_zh": "脊柱肌群",
+      "region": "back",
+      "aliases": [
+        "spine"
+      ]
+    },
+    {
+      "id": "levator_scapulae",
+      "name_en": "Levator Scapulae",
+      "name_zh": "肩胛提肌",
+      "region": "back",
+      "aliases": [
+        "levator scapulae"
+      ]
+    },
+    {
+      "id": "deltoids",
+      "name_en": "Deltoids",
+      "name_zh": "三角肌",
+      "region": "shoulders",
+      "aliases": [
+        "delts",
+        "deltoids",
+        "rear deltoids",
+        "shoulders"
+      ]
+    },
+    {
+      "id": "rotator_cuff",
+      "name_en": "Rotator Cuff",
+      "name_zh": "肩袖肌群",
+      "region": "shoulders",
+      "aliases": [
+        "rotator cuff"
+      ]
+    },
+    {
+      "id": "biceps",
+      "name_en": "Biceps",
+      "name_zh": "肱二头肌",
+      "region": "upper_arms",
+      "aliases": [
+        "biceps",
+        "brachialis"
+      ]
+    },
+    {
+      "id": "triceps",
+      "name_en": "Triceps",
+      "name_zh": "肱三头肌",
+      "region": "upper_arms",
+      "aliases": [
+        "triceps"
+      ]
+    },
+    {
+      "id": "forearms",
+      "name_en": "Forearms",
+      "name_zh": "前臂肌群",
+      "region": "forearms",
+      "aliases": [
+        "forearms",
+        "wrist flexors",
+        "wrist extensors",
+        "wrists",
+        "hands",
+        "grip muscles"
+      ]
+    },
+    {
+      "id": "glutes",
+      "name_en": "Glutes",
+      "name_zh": "臀肌",
+      "region": "glutes",
+      "aliases": [
+        "glutes"
+      ]
+    },
+    {
+      "id": "quadriceps",
+      "name_en": "Quadriceps",
+      "name_zh": "股四头肌",
+      "region": "upper_legs",
+      "aliases": [
+        "quads",
+        "quadriceps"
+      ]
+    },
+    {
+      "id": "hamstrings",
+      "name_en": "Hamstrings",
+      "name_zh": "腘绳肌",
+      "region": "upper_legs",
+      "aliases": [
+        "hamstrings"
+      ]
+    },
+    {
+      "id": "calves",
+      "name_en": "Calves",
+      "name_zh": "小腿后群",
+      "region": "lower_legs",
+      "aliases": [
+        "calves",
+        "soleus",
+        "ankles"
+      ]
+    },
+    {
+      "id": "tibialis_anterior",
+      "name_en": "Tibialis Anterior",
+      "name_zh": "胫骨前肌",
+      "region": "lower_legs",
+      "aliases": [
+        "shins"
+      ]
+    },
+    {
+      "id": "abductors",
+      "name_en": "Hip Abductors",
+      "name_zh": "髋外展肌",
+      "region": "hips",
+      "aliases": [
+        "abductors"
+      ]
+    },
+    {
+      "id": "adductors",
+      "name_en": "Hip Adductors",
+      "name_zh": "髋内收肌",
+      "region": "hips",
+      "aliases": [
+        "adductors",
+        "groin",
+        "inner thighs"
+      ]
+    },
+    {
+      "id": "hip_flexors",
+      "name_en": "Hip Flexors",
+      "name_zh": "髋屈肌",
+      "region": "hips",
+      "aliases": [
+        "hip flexors"
+      ]
+    },
+    {
+      "id": "rectus_abdominis",
+      "name_en": "Rectus Abdominis",
+      "name_zh": "腹直肌",
+      "region": "core",
+      "aliases": [
+        "abs",
+        "abdominals",
+        "lower abs"
+      ]
+    },
+    {
+      "id": "obliques",
+      "name_en": "Obliques",
+      "name_zh": "腹斜肌",
+      "region": "core",
+      "aliases": [
+        "obliques"
+      ]
+    },
+    {
+      "id": "core",
+      "name_en": "Core",
+      "name_zh": "核心肌群",
+      "region": "core",
+      "aliases": [
+        "core"
+      ]
+    },
+    {
+      "id": "ankle_stabilizers",
+      "name_en": "Ankle Stabilizers",
+      "name_zh": "踝部稳定肌",
+      "region": "lower_legs",
+      "aliases": [
+        "ankle stabilizers",
+        "feet"
+      ]
+    },
+    {
+      "id": "sternocleidomastoid",
+      "name_en": "Sternocleidomastoid",
+      "name_zh": "胸锁乳突肌",
+      "region": "neck",
+      "aliases": [
+        "sternocleidomastoid"
+      ]
+    },
+    {
+      "id": "cardio_system",
+      "name_en": "Cardiovascular System",
+      "name_zh": "心肺系统",
+      "region": "cardio",
+      "aliases": [
+        "cardiovascular system"
+      ]
+    }
+  ]
+}

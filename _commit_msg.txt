@@ -1,0 +1,6 @@
+chore: 建立 FitMind 仓库骨架
+
+- data/ 集中两个数据集包（动作 enrich 全链 + 营养 foods_core/中文名/同源族/换算）
+- lib/ 消费层（exercise_repo / foods_repo / serving_units / portion_reference）
+- examples/ 组合查询演示
+- 去除数据包内嵌套 git，根仓库统一管理

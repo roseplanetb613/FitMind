@@ -1,0 +1,34 @@
+{
+  "version": "1.0",
+  "source": "ACSM Guidelines for Exercise Testing and Prescription (11th ed.) 等公开共识【起草待审】",
+  "disclaimer": "本表为运动处方 FITT 参数参考（知识符号化），供计划编排使用；正式临床/商用前须核校官方指南原文。",
+  "intensity_scale": {
+    "cardio": { "rpe_10": [4, 7], "hrr_pct": [40, 85], "vo2max_pct": [40, 85] },
+    "resistance": { "rpe_10": [5, 9], "percent_1rm": { "novice": [40, 50], "intermediate": [60, 70], "advanced": [70, 85] } }
+  },
+  "cardiorespiratory": {
+    "frequency": "每周 3-5 天",
+    "intensity": "中等 60-79%HRmax/40-59%HRR，或高强度 80-89%HRmax（RPE4-7/10）",
+    "time": "累计 150min/周中等，或 75min/周高强度；单次 20-60min",
+    "type": "大肌群、节律性、持续感（快走/跑步/单车/游泳/划船）",
+    "sets_weekly_note": "可拆分 10min 以上段累计"
+  },
+  "resistance": {
+    "frequency": "每周 2-3 天（同一肌群间隔 ≥48h）",
+    "intensity": "新手 40-50%1RM；中级 60-70%1RM；高级 70-85%1RM（大重量复合 80%+）",
+    "volume": "每肌群 2-4 组 × 8-12 次（力量向 3-6 次、耐力向 15+ 次）",
+    "rest": "大复合 2-3min；中/小肌群 60-90s",
+    "type": "多关节（深蹲/卧推/划船/硬拉）+ 单关节（飞鸟/弯举/提踵）",
+    "progression_note": "遵循渐进超负荷：首次尝试后按结果 +2.5-5kg（见 progression.py）"
+  },
+  "flexibility": {
+    "frequency": "每周 ≥2-3 天（理想每日）",
+    "intensity": "拉伸至牵拉感，不痛",
+    "time": "每动作 10-30s × 2-4 次",
+    "type": "静态/动态/PNF；训练前后配合热身与整理"
+  },
+  "references": [
+    "ACSM Guidelines 11th ed. 运动频率-强度-时间-类型",
+    "WHO 身体活动指南（成年人 150min/周 中强度基线）【待审】"
+  ]
+}

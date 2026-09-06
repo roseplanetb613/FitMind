@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "disclaimer": "流行病学数字为公开综述/权威摘要参考值（非本系统实测），供风险提示与教育用途；商用发布前须引用权威综述原文并核校。",
+  "source_note": "依据常见运动损伤流行病学综述（如《Journal of Athletic Training》《Sports Medicine》相关综述）整理【起草待审】",
+  "conditions": [
+    {
+      "id": "ep01",
+      "injury_zh": "踝关节扭伤（外侧韧带复合体）",
+      "injury_en": "Lateral ankle sprain",
+      "body_part": "ankle",
+      "most_common_in": ["basketball", "running", "jump-heavy sports", "soccer"],
+      "incidence_note": "运动损伤中最常见之一；占下肢损伤约 15-20%（参考值）",
+      "risk_factors": ["既往踝扭伤史", "平衡能力弱", "跳跃落地不良", "场地/鞋不合适"],
+      "prevention": ["平衡/本体感觉训练", "踝部贴扎或护具（高危期）", "落地技术训练"],
+      "source": "踝扭伤流行病学综述【待审】"
+    },
+    {
+      "id": "ep02",
+      "injury_zh": "膝关节前交叉韧带损伤（ACL）",
+      "injury_en": "ACL injury",
+      "body_part": "knee",
+      "most_common_in": ["soccer", "basketball", "handball", "skiing"],
+      "incidence_note": "约 70% 为非接触机制；女性发生率高于男性（参考值）",
+      "risk_factors": ["急停/变向/落地扭转", "膝内扣(动态膝外翻)", "股四头肌/腿后肌失衡", "疲劳"],
+      "prevention": ["神经肌肉训练(跳-落地-变向)", "核心与臀肌强化", "北欧腘绳肌训练降低相关损伤"],
+      "source": "ACL 损伤预防共识【待审】"
+    },
+    {
+      "id": "ep03",
+      "injury_zh": "腘绳肌拉伤",
+      "injury_en": "Hamstring strain",
+      "body_part": "hamstring",
+      "most_common_in": ["sprinting sports", "soccer", "track"],
+      "incidence_note": "短跑/速度运动最常见肌肉拉伤之一；复发率高",
+      "risk_factors": ["速度训练突然增量", "腘绳肌偏心力量不足", "既往拉伤史", "疲劳与热身不足"],
+      "prevention": ["北欧腘绳肌训练", "渐进冲刺训练", "保持偏心负荷频率"],
+      "source": "腘绳肌损伤综述【待审】"
+    },
+    {
+      "id": "ep04",
+      "injury_zh": "腰椎/下背痛（非特异性）",
+      "injury_en": "Non-specific low back pain",
+      "body_part": "lower back",
+      "most_common_in": ["general population", "weightlifting carry", "desk work"],
+      "incidence_note": "成人终生患病率极高；运动人群以过度负荷/久坐叠加为主",
+      "risk_factors": ["久坐", "核心耐力不足", "深蹲/硬拉技术差", "心理压力"],
+      "prevention": ["核心稳定(死虫/鸟狗/平板)", "髋铰链动作教学", "规律活动"],
+      "source": "下背痛运动处方共识【待审】"
+    },
+    {
+      "id": "ep05",
+      "injury_zh": "肩袖损伤/肩峰下撞击",
+      "injury_en": "Rotator cuff / subacromial impingement",
+      "body_part": "shoulder",
+      "most_common_in": ["overhead sports", "swimming", "volleyball", "weightlifting push"],
+      "incidence_note": "过顶与推举类运动高发；多与肩后侧僵硬/外旋肌弱相关",
+      "risk_factors": ["过顶训练过量", "肩后关节囊紧", "肩胛控制差", "训练量突增"],
+      "prevention": ["外旋/后伸弹力带训练", "肩胛稳定训练", "推举量管理"],
+      "source": "肩撞击处理共识【待审】"
+    },
+    {
+      "id": "ep06",
+      "injury_zh": "跟腱病变（跟腱病/跟腱炎）",
+      "injury_en": "Achilles tendinopathy",
+      "body_part": "achilles",
+      "most_common_in": ["running", "jumping sports", "soccer", "basketball"],
+      "incidence_note": "跑步与跳跃项目高发；与负荷激增强相关",
+      "risk_factors": ["跑量/强度突增", "小腿柔韧与力量不足", "扁平足/高足弓", "旧鞋"],
+      "prevention": ["渐进负荷管理", "提踵离心训练", "本体感觉训练"],
+      "source": "跟腱病变共识【待审】"
+    }
+  ]
+}

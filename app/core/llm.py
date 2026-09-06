@@ -28,6 +28,8 @@ _RULES = [
     (("你好", "您好", "hi", "hello", "嗨", "你是谁", "你叫什么",
       "谢谢", "再见", "拜拜"), "smalltalk",
      lambda t, kw: {"topic": t}),
+    (("tfcc", "acl", "mcl", "半月板", "十字韧带", "韧带"), "guard",
+     lambda t, kw: {"signal": t}),
 ]
 
 
@@ -61,10 +63,16 @@ class StubProvider(LLMProvider):
 
     def classify(self, text, profile=None) -> Classification:
         self.calls.append("classify")
+        t = (text or "").strip()
+        # 纯语气词/单字/无意义输入 → smalltalk（不落 qa 检索；"卧推""深蹲"等
+        # 两字实义词不受影响，继续走词表规则）
+        if len(t) <= 1 or all(ch in "啊嗯哦哈诶嘿呀嘛吧呢？?。！! " for ch in t):
+            return Classification("smalltalk", {"topic": t})
+        p = t.lower()
         for kws, tt, build in reversed(_RULES):
-            if any(k in text for k in kws):
-                return Classification(tt, build(text, kws))
-        return Classification("qa", {"query": text})   # 默认问答
+            if any(k in p or k in t for k in kws):
+                return Classification(tt, build(t, kws))
+        return Classification("qa", {"query": t})   # 默认问答
 
     def plan(self, task, available) -> list[PlannedCall]:
         self.calls.append("plan")
@@ -167,10 +175,10 @@ class DeepSeekProvider(LLMProvider):
         sys_p = ("你是 FitMind 健身助手的意图路由器。仅输出一个 JSON 对象，不要任何其他内容。"
                  "task_type ∈ {qa, teach, plan, progress, guard, smalltalk, fallback}；"
                  "params 是简要参数字典（如 {\"query\": \"<原句>\"} 或 {\"signal\": \"<原句>\"}）。"
-                 "规则：含 疾病/疼痛/疼/伤/晕/骨折/断/扭伤 等健康风险信号→guard；"
-                 "问候/自我介绍/道谢/道别→smalltalk；含 怎么做/要领/怎么练→teach；"
-                 "含 计划/安排/一周→plan；含 下一组/加重量/减载→progress；否则 qa。"
-                 "注意：不能确定且无检索必要（如闲聊、寒暄）优先 smalltalk。")
+                 "规则：含 疾病/疼痛/疼/伤/晕/骨折/断/扭伤/TFCC/ACL/半月板/韧带 等健康或损伤"
+                 "信号→guard；纯语气词/单字/乱码/问候/自我介绍/道谢/道别→smalltalk；"
+                 "含 怎么做/要领/怎么练→teach；含 计划/安排/一周→plan；含 下一组/加重量/减载→progress；"
+                 "否则 qa。注意：不能确定且无检索必要（闲聊、寒暄、无意义输入）优先 smalltalk。")
         try:
             data = self._invoke_json(sys_p, text, "task_type")
             return Classification(str(data.get("task_type") or "qa"),

@@ -4,9 +4,10 @@ from __future__ import annotations
 from app.skills.base import Skill, SkillResult
 import screening
 
-# 症状级信号（口语表达，命中即黄色拦截+咨询医生；matters：绝不误报绿灯）
+# 症状级信号（口语表达+常见损伤缩写，命中即黄色拦截+咨询医生；绝不误报绿灯）
 SYMPTOMS = ("疼", "痛", "眩晕", "头晕", "胸闷", "发烧", "发热",
-            "骨折", "断了", "扭伤", "脱臼", "麻木", "麻", "刺痛", "发炎")
+            "骨折", "断了", "扭伤", "脱臼", "麻木", "麻", "刺痛", "发炎",
+            "拉伤", "半月板", "十字韧带", "韧带", "tfcc", "acl", "mcl")
 
 
 class GuardSkill(Skill):
@@ -35,7 +36,7 @@ class GuardSkill(Skill):
             outcome = {"blocked": out["level"] != "green",
                        "level_label": out["level_label"], "advice": advice,
                        "blocks": out["blocks"]}
-        elif any(k in signal for k in SYMPTOMS):
+        elif any(k in signal.lower() for k in SYMPTOMS):
             outcome = {"blocked": True, "level_label": "黄色",
                        "advice": "出现症状建议暂停训练并咨询医生，切勿硬撑", "blocks": []}
         src = ["guard#screening.plan_check"] if hits else ["guard#keyword"]

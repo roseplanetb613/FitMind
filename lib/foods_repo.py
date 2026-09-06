@@ -29,17 +29,31 @@ ALLERGEN_KEYS = ["contains_gluten", "contains_dairy", "contains_nuts",
 
 
 class FoodsRepo:
-    def __init__(self, data_dir: Path = DATA_DIR):
+    def __init__(self, data_dir: Path = DATA_DIR,
+                 china_dir: Optional[Path] = None):
+        """
+        data_dir   营养核心集目录（USDA+OFF）
+        china_dir  中国食物成分表核心集目录（source='china'），默认自动探测
+        """
         self.data_dir = Path(data_dir)
+        if china_dir is None:
+            china_dir = Path(__file__).resolve().parent.parent / "data" \
+                / "china-food" / "data"
+        self.china_dir = Path(china_dir)
 
         def _read(name):
-            with open(self.data_dir / name, encoding="utf-8") as f:
+            with open(Path(name), encoding="utf-8") as f:
                 return json.load(f)
 
-        core = _read("foods_core.json")
+        core = _read(self.data_dir / "foods_core.json")
         self.by_id = {f["food_id"]: f for f in core["foods"]}
-        self.name_zh = _read("name_zh.json")
-        fam = _read("food_families.json")
+        # 中国食物成分表源（存在即合并）
+        china_core = self.china_dir / "foods_china.json"
+        if china_core.exists():
+            for f in _read(china_core)["foods"]:
+                self.by_id[f["food_id"]] = f
+        self.name_zh = _read(self.data_dir / "name_zh.json")
+        fam = _read(self.data_dir / "food_families.json")
         self.families = {f["family_id"]: f for f in fam.get("families", [])}
         # 成员索引: food_id -> family_id
         self.member_family = {}
@@ -48,7 +62,8 @@ class FoodsRepo:
                 self.member_family[m["food_id"]] = fid
         # 注入记录级扩展字段
         for rid, r in self.by_id.items():
-            r["name_zh"] = self.name_zh.get(r["name"].strip().lower(), r["name"])
+            r["name_zh"] = r.get("name_zh") or self.name_zh.get(
+                r["name"].strip().lower(), r["name"])
             r["family"] = self.member_family.get(rid)
             r["family_name"] = (self.families[r["family"]]["stem"]
                                 if r["family"] else None)

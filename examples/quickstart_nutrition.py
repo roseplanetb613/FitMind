@@ -58,7 +58,24 @@ if __name__ == "__main__":
         p = info["per_serving"] or {}
         print(f"    {info['name_zh']}：一份 {info['grams']}g（{info['serving_note']}）"
               f" → {p.get('calories_kcal')} kcal / 蛋白 {p.get('protein_g')}g")
-    # 演示"无法换算"的诚实返回（基础生鲜无官方份量）
+    # 基础生鲜（无官方份量时诚实返回）
     egg = next(r for r in repo.search("egg, whole, raw") if r["source"] == "usda")
     info = repo.nutrition_for_serving(egg["food_id"])
-    print(f"    基础生鲜（{info['name_zh']}）→ {info['error']}")
+    if "error" in info:
+        print(f"    基础生鲜（{info['name_zh']}）→ {info['error']}")
+    else:
+        print(f"    基础生鲜（{info['name_zh']}）→ 一份 {info['grams']}g"
+              f"（{info['serving_note']}），{info['per_serving']['calories_kcal']} kcal")
+
+    # 8) 中国食物成分表源（source='china'）
+    cn = [r for r in repo.filter(source="china", limit=100000)]
+    print(f"\n⑧ 中国食物成分表源：{len(cn)} 条已并入检索层")
+    for q in ["大米", "红烧", "猪肉", "老豆腐"]:
+        hits = repo.search(q, limit=3)
+        cn_hits = [r for r in hits if r["source"] == "china"]
+        if cn_hits:
+            for r in cn_hits[:2]:
+                p = r["per_100g"]
+                e = r.get("extra") or {}
+                print(f"    {q} → [{r['food_id']}] {r['name']} | {p['calories_kcal']}kcal "
+                      f"蛋{p['protein_g']}g 脂{p['fat_g']}g | 可食部{e.get('edible')}%")

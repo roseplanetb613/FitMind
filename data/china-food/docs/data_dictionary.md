@@ -16,29 +16,15 @@
 
 ## 1. 文件清单
 
-| 文件                                                        | 说明                                            |
-| --------------------------------------------------------- | --------------------------------------------- |
-| `raw/repo/json_data_v3_20260825_qwen38max_kimi_k3_fixed/` | 原始 61 个类别 JSON(**勿改**)                        |
-| **`data/foods_china.json`**                               | **★标准化核心集(1,677 条,source='china')**           |
-| `scripts/build_china.py`                                  | 标准化管道(幂等):`—`→None、字段映射、能量钳制                  |
-| `scripts/validate_china.py`                               | 校验(结构/条数/id/范围/extra)                         |
-| `scripts/probe.py`                                        | 原始结构探测                                        |
-| **`data/off_cn.json`**                                    | **★OFF 中国区品牌食品(826 条,source='off\_cn',ODbL)** |
-| `scripts/build_off_cn.py`                                 | OFF 拉取+归一(断点续传,需联网)                           |
-| `scripts/validate_off_cn.py`                              | off\_cn 校验                                    |
-| `raw/off_cn_raw/`                                         | OFF 原始分页响应(审计用)                               |
+| 文件                                                        | 说明                                  |
+| --------------------------------------------------------- | ----------------------------------- |
+| `raw/repo/json_data_v3_20260825_qwen38max_kimi_k3_fixed/` | 原始 61 个类别 JSON(**勿改**)              |
+| **`data/foods_china.json`**                               | **★标准化核心集(1,677 条,source='china')** |
+| `scripts/build_china.py`                                  | 标准化管道(幂等):`—`→None、字段映射、能量钳制        |
+| `scripts/validate_china.py`                               | 校验(结构/条数/id/范围/extra)               |
+| `scripts/probe.py`                                        | 原始结构探测                              |
 
-## 2. OFF 中国区(`off_cn.json`)
-
-- **来源**:Open Food Facts 官方 API(`countries_tags_en=china`),**ODbL 许可**(商用可,须署名并共享衍生,见 <https://opendatacommons.org/licenses/odbl/>)
-
-- **数量:826 条**(2026-09-06 拉取;OFF 全量中国区约 1,669 条,**本次受 OFF 限流仅获约 50%**)
-
-- 字段:品牌/成分/过敏原 6 布尔推断/营养评分(Nutri-Score/NOVA)/每 100g
-
-- **补齐方式**:限流解除后重跑 `python scripts/build_off_cn.py`(断点续传,重复全量拉取代价小)
-
-## 3. 标准化口径
+## 2. 标准化口径
 
 - **单位:每 100g 可食部**(另有 `extra.edible` 可食部分%供换算)
 

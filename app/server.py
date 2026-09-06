@@ -20,11 +20,11 @@ class ChatRequest(BaseModel):
 
 def create_app() -> FastAPI:
     from app.core.agent import Agent
-    from app.core.llm import StubProvider
+    from app.core.llm import build_provider
     from app.skills import build_default_registry
 
     app = FastAPI(title="FitMind Agent")
-    agent = Agent(registry=build_default_registry(), llm=StubProvider())
+    agent = Agent(registry=build_default_registry(), llm=build_provider())
     app.state.agent = agent   # 测试/调用方可经此建档（Profile 进 Session）
 
     @app.get("/health")

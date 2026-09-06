@@ -47,11 +47,12 @@ class FoodsRepo:
 
         core = _read(self.data_dir / "foods_core.json")
         self.by_id = {f["food_id"]: f for f in core["foods"]}
-        # 中国食物成分表源（存在即合并）
-        china_core = self.china_dir / "foods_china.json"
-        if china_core.exists():
-            for f in _read(china_core)["foods"]:
-                self.by_id[f["food_id"]] = f
+        # 中国数据源（存在即合并）：食物成分表 + OFF 中国区
+        for src_file in ("foods_china.json", "off_cn.json"):
+            src = self.china_dir / src_file
+            if src.exists():
+                for f in _read(src)["foods"]:
+                    self.by_id[f["food_id"]] = f
         self.name_zh = _read(self.data_dir / "name_zh.json")
         fam = _read(self.data_dir / "food_families.json")
         self.families = {f["family_id"]: f for f in fam.get("families", [])}

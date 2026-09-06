@@ -79,3 +79,16 @@ if __name__ == "__main__":
                 e = r.get("extra") or {}
                 print(f"    {q} → [{r['food_id']}] {r['name']} | {p['calories_kcal']}kcal "
                       f"蛋{p['protein_g']}g 脂{p['fat_g']}g | 可食部{e.get('edible')}%")
+
+    # 9) OFF 中国区品牌食品（source='off_cn'）
+    offcn = [r for r in repo.filter(source="off_cn", limit=10000)]
+    print(f"\n⑨ OFF 中国区品牌食品：{len(offcn)} 条已并入（含营养评分/过敏原）")
+    for q in ["茶", "牛奶", "饼干"]:
+        hits = [r for r in repo.search(q, limit=5) if r["source"] == "off_cn"]
+        if hits:
+            for r in hits[:2]:
+                p = r["per_100g"]
+                lb = r.get("labels") or {}
+                print(f"    {q} → [{r['food_id']}] {r['name'][:34]} | {p['calories_kcal']}kcal "
+                      f"蛋{p['protein_g']}g 脂{p['fat_g']}g | Score:{lb.get('nutriscore')} "
+                      f"NOVA:{lb.get('nova')} | 无过敏:{not any(r['flags'].values())}")

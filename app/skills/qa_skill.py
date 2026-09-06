@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""知识问答：动作/食物检索，结果带来源标注（不发 LLM，纯规则）。"""
+"""知识问答：动作/食物检索，结果带来源标注（不发 LLM，纯规则；科学语境补 RAG 块）。"""
 from __future__ import annotations
 import re
 from app.skills.base import Skill, SkillResult
@@ -23,13 +23,22 @@ class QaSkill(Skill):
     description = "动作/食物/知识检索问答"
     task_types = ("qa", "fallback")
 
+    # 科学/医学语境触发词 → 追加 RAG 知识块（training-science / sports-medicine）
+    _SCIENCE_KW = ("强度", "RPE", "心率", "渐进", "免疫", "肌肉生长",
+                   "营养", "增肌", "减脂", "代谢", "激素", "运动科学",
+                   "科学", "原理", "机制", "恢复")
+
     def execute(self, ctx, params) -> SkillResult:
         ex, fr = repos()
         query = str(params.get("query", "")).strip()
         kind = params.get("kind")
         if kind == "food" or (kind != "exercise" and self._sounds_food(query)):
-            return self._foods(fr, query)
-        return self._exercises(ex, query)
+            res = self._foods(fr, query)
+        else:
+            res = self._exercises(ex, query)
+        if res.ok and res.data.get("items"):
+            self._rag_science(res.data["items"], query)
+        return res
 
     def _foods(self, fr, query: str) -> SkillResult:
         items = []
@@ -84,6 +93,26 @@ class QaSkill(Skill):
                                provenance=["qa#exercise_repo.search"])
         return SkillResult(ok=True, data={"items": items},
                            provenance=[f"ex:{it['id']}" for it in items])
+
+    def _rag_science(self, items: list, query: str) -> None:
+        """科学/医学语境 → 追加 top1 science_doc 知识块。全 try/except 静默降级。"""
+        if not any(k in query for k in QaSkill._SCIENCE_KW):
+            return
+        try:
+            from app.rag import retriever
+            from app.rag.store import PgStore
+            from app.rag.embedder import OllamaEmbedder
+            store, embedder = PgStore(), OllamaEmbedder()
+            qv = retriever.embed_query(embedder, query)
+            hits = retriever.vector_search(
+                store, qv, getattr(embedder, "model", "bge-m3"),
+                top_k=1, chunk_types=("science_doc",))
+        except Exception:
+            return
+        if not hits:
+            return
+        items.append({"name": "知识块(RAG)", "content": hits[0]["content"],
+                      "pending_review": True, "rag": True})
 
     @staticmethod
     def _sounds_food(q: str) -> bool:

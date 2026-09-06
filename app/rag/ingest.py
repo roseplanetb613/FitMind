@@ -202,6 +202,15 @@ def build(store: PgStore | None = None, fill_embeddings: bool = True) -> dict:
                 node("pattern", dp)
                 edge(cid, node_ids["pattern"][dp], "contraindicates")
 
+        # 同族（family）：节点 + 动作→member_of→family 边（同族可替代变体）
+        for family_id, meta in ex.families.items():
+            node("family", family_id, meta)
+        for e in ex.by_id.values():
+            fid = e.get("family")
+            if fid and fid in node_ids["family"]:
+                edge(node_ids["exercise"][e["id"]], node_ids["family"][fid],
+                     "member_of")
+
         conn.commit()
 
     embedder = OllamaEmbedder()

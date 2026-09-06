@@ -52,23 +52,12 @@ class Agent:
 
         # 1) 意图+复杂度
         intent = self.classifier.intent_for(message, sess.profile)
-        # 2) 模式路由
-        mode = route(intent.complexity)
-        # 3) 执行（按模式）
+        # 2) 模式路由（含配置异常兜底）
+        mode = self._route_with_fallback(intent)
+        # 3) 执行（含失败降级）
         ctx = ExecutionContext(session=sess, profile=sess.profile,
                                mode=mode.value, skill_log=[])
-        if mode is Mode.REACT:
-            outcome = run_react(self.registry, self.llm, ctx,
-                                intent.task_type, intent.params)
-        elif mode is Mode.REWOO:
-            outcome = run_rewoo(self.registry, self.llm, ctx,
-                                intent.task_type, intent.params)
-        elif mode in (Mode.PLAN_EXEC,):
-            outcome = run_plan_exec(self.registry, self.llm, ctx,
-                                    intent.task_type, intent.params)
-        else:
-            outcome = execute_skills(self.registry, intent.task_type, ctx,
-                                     intent.params, mode)
+        mode, outcome = self._execute_with_fallback(mode, intent, ctx)
         # 4) 规则校验兜底
         outcome = self.validator.check(outcome, intent)
         # 5) 渲染
@@ -76,12 +65,64 @@ class Agent:
                       "sources": outcome["provenance"]}
         if outcome["ok"]:
             structured["data"] = outcome["data"]
-        reply = self.llm.render(structured)
+        try:
+            reply = self.llm.render(structured)
+        except Exception:
+            reply = self._render_fallback(structured)
         sess.history.append({"role": "user", "text": message})
         sess.history.append({"role": "assistant", "text": reply})
         return ChatResponse(session_id=sess.id, reply=reply,
                             structured=structured, mode_used=mode.value,
                             provenance=outcome["provenance"], guard=gres)
+
+    def _render_fallback(self, structured: dict) -> str:
+        d = structured.get("data") or {}
+        lines = [str(structured.get("title", "回答")).replace("qa", "检索结果")]
+        for it in d.get("items", []):
+            nm = it.get("name") or it.get("name_zh")
+            if nm:
+                lines.append(f"· {nm}")
+        if "macros" in d:
+            m = d["macros"]
+            lines.append(f"目标热量 {m.get('target_kcal')} kcal，"
+                         f"蛋白 {m.get('protein_g')}g")
+        if structured.get("sources"):
+            lines.append("来源: " + ", ".join(structured["sources"][:3]))
+        return "\n".join(lines) if lines else "（渲染服务暂不可用）"
+
+    def _route_with_fallback(self, intent: Intent) -> Mode:
+        try:
+            return route(intent.complexity, intent.task_type)
+        except Exception:
+            return Mode.DIRECT   # 配置异常 → 最安全模式
+
+    def _execute_with_fallback(self, mode: Mode, intent: Intent,
+                               ctx: ExecutionContext) -> tuple[Mode, dict]:
+        """执行；PlanExec/ReWOO/ReAct 失败 → 降级 DIRECT 规则直答。"""
+        if mode is Mode.DIRECT:
+            return mode, execute_skills(self.registry, intent.task_type, ctx,
+                                        intent.params, mode)
+        try:
+            if mode is Mode.REACT:
+                out = run_react(self.registry, self.llm, ctx, intent.task_type,
+                                intent.params)
+            elif mode is Mode.REWOO:
+                out = run_rewoo(self.registry, self.llm, ctx, intent.task_type,
+                                intent.params)
+            else:
+                out = run_plan_exec(self.registry, self.llm, ctx,
+                                    intent.task_type, intent.params)
+        except Exception:
+            out = {"ok": False, "data": {}, "provenance": [],
+                   "error": "executor_failed"}
+        if not out.get("ok") and out.get("error"):
+            ctx.skill_log.append({"skill": "_degrade", "params": {},
+                                  "result": {"from": mode.value}})
+            d = execute_skills(self.registry, intent.task_type, ctx,
+                               intent.params, Mode.DIRECT)
+            d["_degraded_from"] = mode.value
+            return Mode.DIRECT, d
+        return mode, out
 
     def _render_guard(self, gres) -> str:
         d = gres.data

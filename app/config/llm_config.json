@@ -1,0 +1,4 @@
+{
+  "provider": "stub",
+  "models": { "classify": "stub", "plan": "stub", "render": "stub" }
+}

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """执行模式动态变换：感知层(LLM) + 规则信号 → 模式。"""
 from __future__ import annotations
+import json
 from enum import Enum
+from pathlib import Path
 from app.core.intent import Intent
 from app.core.llm import LLMProvider
 
@@ -13,12 +15,22 @@ class Mode(Enum):
     REWOO = "rewoo"
 
 
-def route(complexity: str) -> Mode:
-    """复杂度→模式映射（S5 改为 router_config.json 可配置）。"""
-    return {"simple": Mode.DIRECT,
-            "medium": Mode.REACT,
-            "complex": Mode.PLAN_EXEC,
-            "batch": Mode.REWOO}.get(complexity, Mode.DIRECT)
+CONFIG = Path(__file__).resolve().parent.parent / "config" / "router_config.json"
+
+_MODE_MAP = {"direct": Mode.DIRECT, "react": Mode.REACT,
+             "plan_exec": Mode.PLAN_EXEC, "rewoo": Mode.REWOO}
+
+
+def load_router_config() -> dict:
+    return json.load(open(CONFIG, encoding="utf-8"))
+
+
+def route(complexity: str, task_type: str = "") -> Mode:
+    cfg = load_router_config()
+    ov = cfg.get("overrides", {}).get(task_type)
+    if ov:
+        return _MODE_MAP[ov]
+    return _MODE_MAP[cfg["default"].get(complexity, "direct")]
 
 
 class RouteClassifier:

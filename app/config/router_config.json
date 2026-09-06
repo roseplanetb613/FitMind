@@ -1,0 +1,13 @@
+{
+  "default": {
+    "simple": "direct",
+    "medium": "react",
+    "complex": "plan_exec",
+    "batch": "rewoo"
+  },
+  "overrides": {
+    "plan": "plan_exec",
+    "teach": "direct",
+    "progress": "direct"
+  }
+}

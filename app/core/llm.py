@@ -12,6 +12,8 @@ class Classification:
     task_type: str
     params: dict
     complexity: str = "simple"
+    confidence: float = 1.0
+    needs_clarify: bool = False
 
 
 # 规则意图词典（stub 分类用；真实 provider 接管后可删）
@@ -67,12 +69,13 @@ class StubProvider(LLMProvider):
         # 纯语气词/单字/无意义输入 → smalltalk（不落 qa 检索；"卧推""深蹲"等
         # 两字实义词不受影响，继续走词表规则）
         if len(t) <= 1 or all(ch in "啊嗯哦哈诶嘿呀嘛吧呢？?。！! " for ch in t):
-            return Classification("smalltalk", {"topic": t})
+            return Classification("smalltalk", {"topic": t}, confidence=1.0)
         p = t.lower()
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
-                return Classification(tt, build(t, kws))
-        return Classification("qa", {"query": t})   # 默认问答
+                # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
+                return Classification(tt, build(t, kws), confidence=1.0)
+        return Classification("qa", {"query": t}, confidence=0.3)  # 非强命中信号
 
     def plan(self, task, available) -> list[PlannedCall]:
         self.calls.append("plan")
@@ -110,6 +113,61 @@ class StubProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------- DeepSeek
+# 意图白名单（LLM 分类输出受限集合，外部不可越界）
+INTENT_WHITELIST = frozenset(
+    {"qa", "teach", "plan", "progress", "guard", "smalltalk", "fallback"})
+
+# function-calling schema：强制 LLM 按受限选择题+置信度返回
+CLASSIFY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "classify_intent",
+        "description": "将用户健身消息归类为以下意图之一，并给出置信度与简要参数",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_type": {
+                    "type": "string",
+                    "enum": sorted(INTENT_WHITELIST),
+                    "description": "意图类型",
+                },
+                "params": {
+                    "type": "object",
+                    "description": "简要参数，如 {'query': '<原句>' } 或 {'signal': '<原句>'}",
+                },
+                "confidence": {
+                    "type": "number", "minimum": 0, "maximum": 1,
+                    "description": "本分类的确信度",
+                },
+            },
+            "required": ["task_type", "params", "confidence"],
+        },
+    },
+}
+
+
+def arbitrate(task_type, confidence: float, params: dict,
+              fallback: Classification) -> Classification:
+    """置信仲裁（纯函数，独立单测）：白名单校验 + 三级置信决策。"""
+    if task_type not in INTENT_WHITELIST:
+        return fallback
+    try:
+        conf = float(confidence)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf >= 0.7:
+        return Classification(task_type, params or {}, confidence=conf)
+    if conf >= 0.4:
+        # 不确定但不至于否定：不硬猜，标记澄清（图走 clarify_node 反问）
+        base = fallback if fallback.task_type == task_type else Classification(
+            task_type, params or {})
+        base.complexity = "simple"
+        base.confidence = conf
+        base.needs_clarify = True
+        return base
+    return fallback
+
+
 def load_dotenv(path: str | None = None) -> bool:
     """零依赖 .env 加载器：把 `KEY=VALUE` 行写入 os.environ（已存在则跳过）。
     默认读项目根 .env（gitignored）。返回是否加载到文件。"""
@@ -171,20 +229,29 @@ class DeepSeekProvider(LLMProvider):
 
     # ---- LLMProvider 接口 ----
     def classify(self, text, profile=None) -> Classification:
+        """三层意图分类：①规则强信号（命中即返回，不碰 LLM）→ ②function-calling
+        schema（受限选择题+置信度）→ ③arbitrate 仲裁（白名单+置信，中低不回硬猜）。"""
         self.calls.append("classify")
-        sys_p = ("你是 FitMind 健身助手的意图路由器。仅输出一个 JSON 对象，不要任何其他内容。"
-                 "task_type ∈ {qa, teach, plan, progress, guard, smalltalk, fallback}；"
-                 "params 是简要参数字典（如 {\"query\": \"<原句>\"} 或 {\"signal\": \"<原句>\"}）。"
-                 "规则：含 疾病/疼痛/疼/伤/晕/骨折/断/扭伤/TFCC/ACL/半月板/韧带 等健康或损伤"
-                 "信号→guard；纯语气词/单字/乱码/问候/自我介绍/道谢/道别→smalltalk；"
-                 "含 怎么做/要领/怎么练→teach；含 计划/安排/一周→plan；含 下一组/加重量/减载→progress；"
-                 "否则 qa。注意：不能确定且无检索必要（闲聊、寒暄、无意义输入）优先 smalltalk。")
+        rule = self._fallback.classify(text, profile)      # Stub 规则（强命中=1.0）
+        if rule.confidence >= 0.7:                          # ① 强信号直接采用
+            return rule
+        sys_p = ("你是 FitMind 健身助手的意图路由器。只能从给定 task_type 枚举中选一个，"
+                 "并给出确信度。规则参考：疾病/疼痛/伤/晕/骨折/断/扭伤/TFCC/ACL/半月板/"
+                 "韧带等健康信号→guard；问候/寒暄/语气词→smalltalk；怎么做/要领→teach；"
+                 "计划/安排/一周→plan；下一组/加重量/减载→progress；食物/动作知识检索→qa。"
+                 "若实在无法判断，confidence 给低值，不要乱猜。")
         try:
-            data = self._invoke_json(sys_p, text, "task_type")
-            return Classification(str(data.get("task_type") or "qa"),
-                                  data.get("params") or {"query": text})
+            bound = self._llm.bind_tools([CLASSIFY_TOOL])
+            resp = bound.invoke([("system", sys_p), ("user", text)])
+            calls = getattr(resp, "tool_calls", None) or []
+            if not calls:
+                raise ValueError("LLM 未返回工具调用")
+            args = dict(calls[0].get("args", {}))
+            return arbitrate(str(args.get("task_type") or "fallback"),
+                             args.get("confidence"),
+                             dict(args.get("params") or {}), rule)
         except Exception:
-            return self._fallback.classify(text, profile)   # 规则回落
+            return rule      # ②/③ 任何失败 → 规则兜底（无 key 环境等价 Stub 原行为）
 
     def plan(self, task, available) -> list[PlannedCall]:
         self.calls.append("plan")

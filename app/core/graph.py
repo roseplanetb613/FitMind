@@ -37,6 +37,7 @@ def build_graph(registry, llm, classifier=None, validator=None,
 
     g.add_node("guard", nodes["guard"])
     g.add_node("classify", nodes["classify"])
+    g.add_node("clarify", nodes["clarify"])
     g.add_node("execute", nodes["execute"])
     g.add_node("plan_node", nodes["plan_node"])
     g.add_node("aggregate", nodes["aggregate"])
@@ -50,13 +51,15 @@ def build_graph(registry, llm, classifier=None, validator=None,
     # guard 无条件前置：blocked → END（reply 已在 guard 写就）；否则进 classify
     g.add_conditional_edges("guard", nodes["guard_route"],
                             {"blocked": END, "pass": "classify"})
-    # classify：按 mode_used 条件路由（direct/react/plan_exec/rewoo）
+    # classify：按 mode_used 条件路由（direct/react/plan_exec/rewoo/clarify）
     g.add_conditional_edges("classify", nodes["mode_route"], {
         "direct": "execute",
         "react": "think",
         "plan_exec": "plan_node",
         "rewoo": "plan_node",
+        "clarify": "clarify",
     })
+    g.add_edge("clarify", END)   # 低置信反问：直接收束，不耗 render token
     # plan_node：plan_exec 走顺序 aggregate；rewoo 走 fan-out
     g.add_conditional_edges("plan_node", nodes["plan_route"], {
         "seq": "aggregate", "parallel": "execute_step0",

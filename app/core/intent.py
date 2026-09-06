@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Intent:
-    task_type: str                    # guard/qa/teach/plan/progress/fallback
+    task_type: str                    # guard/qa/teach/plan/progress/fallback/smalltalk
     params: dict
     raw_text: str
     complexity: str = "simple"        # simple/medium/complex/batch
     confidence: float = 1.0
+    needs_clarify: bool = False       # 低置信：图走 clarify_node 反问后重入
 
 
 @dataclass

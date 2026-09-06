@@ -46,10 +46,27 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             mode = route(intent.complexity, intent.task_type)
         except Exception:
             mode = Mode.DIRECT
-        return {"intent": intent.__dict__, "mode_used": mode.value}
+        # 低置信（needs_clarify）→ 不硬猜：模式定向 clarify，触发反问
+        if intent.needs_clarify:
+            mode = Mode.DIRECT  # 占位，mode_used 由下方显式置 "clarify"
+        out = {"intent": {**intent.__dict__, "needs_clarify": intent.needs_clarify}}
+        out["mode_used"] = "clarify" if intent.needs_clarify else mode.value
+        return out
 
     def mode_route(state: dict) -> str:
-        return state.get("mode_used", "direct")
+        m = state.get("mode_used", "direct")
+        return "clarify" if m == "clarify" else m
+
+    # ---------------- clarify（低置信反问；直接 END，不耗 render） ----------------
+    def clarify(state: dict) -> dict:
+        it = state.get("intent") or {}
+        tt = it.get("task_type", "fallback")
+        opts = {"teach": "动作怎么做", "plan": "制定训练/饮食计划",
+                "progress": "根据记录给下一组建议", "qa": "查询食物或动作",
+                "smalltalk": "随便聊聊"}.get(tt, "查询食物或动作")
+        return {"reply": (f"我有点不确定你想做哪件事——你是想{opts}，"
+                          "还是有别的问题？直接告诉我，我马上帮你。"),
+                "mode_used": "clarify"}
 
     # ---------------- 技能执行 ----------------
     def _call_skill(state: dict, name: str, params: dict, mode: str):
@@ -173,6 +190,7 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     nodes = {"guard": guard, "guard_route": guard_route,
              "classify": classify, "mode_route": mode_route,
+             "clarify": clarify,
              "execute": execute,
              "plan_node": plan_node, "plan_route": plan_route,
              "aggregate": aggregate,

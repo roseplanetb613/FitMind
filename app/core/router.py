@@ -47,4 +47,5 @@ class RouteClassifier:
         if "请" in text and "计划" in text and "一周" in text:
             complexity = "batch"
         return Intent(task_type=c.task_type, params=c.params, raw_text=text,
-                      complexity=complexity)
+                      complexity=complexity, confidence=c.confidence,
+                      needs_clarify=c.needs_clarify)

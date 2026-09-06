@@ -2,7 +2,7 @@
 """Agent 宿主：guard 前置 → 分类 → 路由 → 执行 → 校验 → 渲染。"""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from app.core.executors import execute_skills, run_react, run_plan_exec
+from app.core.executors import execute_skills, run_react, run_plan_exec, run_rewoo
 from app.core.llm import LLMProvider
 from app.core.registry import SkillRegistry
 from app.core.router import Mode, RouteClassifier, route
@@ -60,7 +60,10 @@ class Agent:
         if mode is Mode.REACT:
             outcome = run_react(self.registry, self.llm, ctx,
                                 intent.task_type, intent.params)
-        elif mode in (Mode.PLAN_EXEC, Mode.REWOO):
+        elif mode is Mode.REWOO:
+            outcome = run_rewoo(self.registry, self.llm, ctx,
+                                intent.task_type, intent.params)
+        elif mode in (Mode.PLAN_EXEC,):
             outcome = run_plan_exec(self.registry, self.llm, ctx,
                                     intent.task_type, intent.params)
         else:

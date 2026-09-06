@@ -64,3 +64,20 @@ def run_plan_exec(reg: SkillRegistry, llm: LLMProvider, ctx: ExecutionContext,
     ok = all(x["ok"] for x in results)
     data = results[-1]["data"] if results else {}
     return {"ok": ok, "data": data, "provenance": prov, "_steps": results}
+
+
+def run_rewoo(reg: SkillRegistry, llm: LLMProvider, ctx: ExecutionContext,
+              task_type: str, params: dict) -> dict:
+    """ReWOO：一次规划出全部调用 → 全部执行完 → 观察汇总（无中间推理往返）。"""
+    plan = llm.plan(task_type, reg.names)
+    obs = []
+    prov = []
+    for call in plan:
+        r = _call(reg, call.skill, ctx, call.params)
+        obs.append({"step": call.step_id, "skill": call.skill,
+                    "ok": r.ok, "data": r.data, "error": r.error})
+        prov.extend(r.provenance or [])
+    ok = all(o["ok"] for o in obs)
+    last = obs[-1]["data"] if obs else {}
+    return {"ok": ok, "data": last, "provenance": prov,
+            "_observations": obs}

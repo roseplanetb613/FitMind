@@ -84,6 +84,11 @@ class StubProvider(LLMProvider):
     def render(self, structured, tone="coach") -> str:
         self.calls.append("render")
         parts = [str(structured.get("title", "回答"))]
+        data = structured.get("data") or {}
+        if data:
+            for k in ("macros", "training", "meals"):
+                if k in data:
+                    parts.append(f"[{k}]")
         for it in structured.get("items", []):
             parts.append(f"· {it}")
         for s in structured.get("sources", []):

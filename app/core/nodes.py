@@ -130,16 +130,22 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             ok = all(s.get("ok", False) for s in act_steps) if act_steps else False
             last = act_steps[-1].get("data", {}) if act_steps else {}
             prov = [f"react:{s['skill']}" for s in act_steps]
+            err = next((s.get("error") for s in act_steps if not s.get("ok")),
+                       None)
             return {"outcome": {"ok": ok, "data": last, "provenance": prov,
-                                "_react_steps": steps}, "provenance": prov}
+                                "error": err, "_react_steps": steps},
+                    "provenance": prov}
         if not obs:
             return {"outcome": {"ok": False, "data": {}, "provenance": [],
                                 "error": "无执行观测"}}
         ok = all(o["ok"] for o in obs)
         last = obs[-1]["data"] if obs else {}
+        # 失败：透传首个失败观测的具体原因（如 plan 缺档案字段），不泛化
+        err = next((o["error"] for o in obs if not o["ok"]), None)
         prov = [f"{o['skill']}:{o['step']}" for o in obs]
         return {"outcome": {"ok": ok, "data": last, "provenance": prov,
-                            "_observations": obs}, "provenance": prov}
+                            "error": err, "_observations": obs},
+                "provenance": prov}
 
     # ---------------- ReAct 循环 ----------------
     def think(state: dict) -> dict:
@@ -182,6 +188,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
                       "sources": outcome.get("provenance", [])}
         if outcome.get("ok"):
             structured["data"] = outcome.get("data", {})
+        else:
+            # 失败原因透传渲染（如 plan 缺档案），禁止 LLM 臆造"没找到"
+            err = outcome.get("_error") or outcome.get("error")
+            if err:
+                structured["error"] = err
         try:
             reply = llm.render(structured)
         except Exception:

@@ -49,6 +49,10 @@ class Agent:
                       "items": [], "sources": result.get("provenance", [])}
         if outcome.get("ok"):
             structured["data"] = outcome.get("data", {})
+        else:
+            err = outcome.get("_error") or outcome.get("error")
+            if err:
+                structured["error"] = err
         reply = result.get("reply", "")
         sess.history.append({"role": "user", "text": message})
         sess.history.append({"role": "assistant", "text": reply})

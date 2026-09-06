@@ -18,6 +18,11 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ProfileRequest(BaseModel):
+    session_id: str
+    profile: dict
+
+
 def create_app() -> FastAPI:
     from app.core.agent import Agent
     from app.core.llm import build_provider
@@ -37,6 +42,25 @@ def create_app() -> FastAPI:
         return {"session_id": resp.session_id, "reply": resp.reply,
                 "mode_used": resp.mode_used, "provenance": resp.provenance,
                 "structured": resp.structured}
+
+    @app.post("/v1/profile")
+    def set_profile(req: ProfileRequest):
+        from fastapi.responses import JSONResponse
+        try:
+            profile = agent.update_profile(req.session_id, req.profile)
+        except ValueError as e:
+            return JSONResponse(status_code=422,
+                                content={"error": "profile 校验失败",
+                                         "details": [s.strip() for s in str(e).split(";")]})
+        return {"session_id": req.session_id, "profile": profile}
+
+    @app.get("/v1/profile/{session_id}")
+    def get_profile(session_id: str):
+        profile = agent.get_profile(session_id)
+        if profile is None:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "会话不存在"})
+        return {"session_id": session_id, "profile": profile}
 
     return app
 

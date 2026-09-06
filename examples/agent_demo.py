@@ -25,8 +25,9 @@ CASES = [
 
 if __name__ == "__main__":
     app = create_app()
-    app.state.agent.sessions.create("demo-plan").profile = PROFILE   # plan 建档
     client = TestClient(app)
+    client.post("/v1/profile", json={"session_id": "demo-plan",
+                                     "profile": PROFILE})   # 走端点建档
     for msg, sid in CASES:
         r = client.post("/v1/chat", json={"message": msg, "session_id": sid})
         b = r.json()

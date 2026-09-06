@@ -57,3 +57,39 @@ class Agent:
                             mode_used=result.get("mode_used", "direct"),
                             provenance=result.get("provenance", []),
                             guard=result.get("guard_data"))
+
+    # ------------------------------------------------------------ 建档
+    def update_profile(self, session_id: str, profile: dict) -> dict:
+        """合并更新会话档案（未传字段保留）；非法字段抛 ValueError（details 列表）。"""
+        errors = validate_profile(profile)
+        if errors:
+            raise ValueError("; ".join(errors))
+        sess = self.sessions.get(session_id) or self.sessions.create(session_id)
+        sess.profile.update(profile)
+        return dict(sess.profile)
+
+    def get_profile(self, session_id: str) -> dict | None:
+        sess = self.sessions.get(session_id)
+        return dict(sess.profile) if sess else None
+
+
+def validate_profile(profile: dict) -> list[str]:
+    """建档字段校验（系统入口边界）：返回错误列表，空=合法。"""
+    errors: list[str] = []
+    rules = {
+        "sex": lambda v: v in ("male", "female"),
+        "age": lambda v: isinstance(v, int) and 1 <= v <= 120,
+        "height_cm": lambda v: isinstance(v, (int, float)) and 50 <= v <= 250,
+        "weight_kg": lambda v: isinstance(v, (int, float)) and 5 <= v <= 400,
+        "activity": lambda v: isinstance(v, (int, float)) and 1.0 <= v <= 3.0,
+        "goal": lambda v: v in ("lose_fat", "maintain", "build_muscle"),
+        "deficit_kcal": lambda v: isinstance(v, (int, float)) and 0 <= v <= 2000,
+        "protein_g_per_kg": lambda v: isinstance(v, (int, float)) and 0 <= v <= 4,
+        "fat_g_per_kg": lambda v: isinstance(v, (int, float)) and 0 <= v <= 3,
+        "conditions": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+        "patterns": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+    }
+    for key, ok in rules.items():
+        if key in profile and not ok(profile[key]):
+            errors.append(f"{key} 取值非法: {profile[key]!r}")
+    return errors

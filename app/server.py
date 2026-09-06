@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="FitMind Agent")
     agent = Agent(registry=build_default_registry(), llm=StubProvider())
+    app.state.agent = agent   # 测试/调用方可经此建档（Profile 进 Session）
 
     @app.get("/health")
     def health():

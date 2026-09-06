@@ -2,6 +2,7 @@
 """私有用户记录（训练/饮食）——仅本地 SQLite，不入 git。"""
 from __future__ import annotations
 import sqlite3
+import threading
 from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "storage_output" / "user_log.db"
@@ -9,9 +10,20 @@ DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "storage_output" / 
 
 class LogStore:
     def __init__(self, path: Path | str = DEFAULT_DB):
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path))
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._tid = None
+        self._conn = None
+        self._ensure_thread()   # 惰性+跨线程：每次访问按当前线程重连
+
+    def _ensure_thread(self):
+        """TestClient 等会在线程池执行 sync 端点；SQLite 连接有线程亲和性，
+        故按线程重连（幂等建表），避免跨线程共享单连接。"""
+        tid = threading.get_ident()
+        if self._conn is not None and tid == self._tid:
+            return
+        self._tid = tid
+        self._conn = sqlite3.connect(str(self._path))
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS workout_set(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,12 +38,14 @@ class LogStore:
         self._conn.commit()
 
     def log_workout_set(self, exercise, weight_kg, reps, rir=0.0, date=""):
+        self._ensure_thread()
         self._conn.execute(
             "INSERT INTO workout_set(exercise,weight_kg,reps,rir,date) "
             "VALUES(?,?,?,?,?)", (exercise, weight_kg, reps, rir, date))
         self._conn.commit()
 
     def history(self, exercise, top=3) -> list[dict]:
+        self._ensure_thread()
         cur = self._conn.execute(
             "SELECT weight_kg,reps,rir,date FROM workout_set "
             "WHERE exercise=? ORDER BY id DESC LIMIT ?", (exercise, top))
@@ -40,12 +54,14 @@ class LogStore:
                 for r in reversed(rows)]
 
     def log_diet(self, food_id, food_name, grams, date=""):
+        self._ensure_thread()
         self._conn.execute(
             "INSERT INTO diet_log(food_id,food_name,grams,date) VALUES(?,?,?,?)",
             (food_id, food_name, grams, date))
         self._conn.commit()
 
     def diet(self, limit=20) -> list[dict]:
+        self._ensure_thread()
         cur = self._conn.execute(
             "SELECT food_id,food_name,grams,date FROM diet_log "
             "ORDER BY id DESC LIMIT ?", (limit,))

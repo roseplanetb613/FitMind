@@ -74,8 +74,19 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
     def plan_node(state: dict) -> dict:
         task = (state.get("intent") or {}).get("task_type", "fallback")
         calls = llm.plan(task, registry.names)
-        return {"plan_calls": [{"step_id": c.step_id, "skill": c.skill,
-                                "params": c.params} for c in calls]}
+        plan_calls = [{"step_id": c.step_id, "skill": c.skill,
+                       "params": c.params} for c in calls]
+        out: dict = {"plan_calls": plan_calls}
+        # plan_exec（seq）：图边直连 aggregate，无 fan-out 槽位 → 在本节点顺序执行计划
+        if state.get("mode_used") == "plan_exec":
+            observations = []
+            for c in plan_calls:
+                r = _call_skill(state, c["skill"], c["params"], "plan_exec")
+                observations.append({"step": c["step_id"], "skill": c["skill"],
+                                     "ok": r.ok, "data": r.data,
+                                     "error": r.error})
+            out["observations"] = observations
+        return out
 
     def plan_route(state: dict) -> str:
         return "parallel" if state.get("mode_used") == "rewoo" else "seq"

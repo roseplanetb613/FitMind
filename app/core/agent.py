@@ -2,7 +2,7 @@
 """Agent 宿主：guard 前置 → 分类 → 路由 → 执行 → 校验 → 渲染。"""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from app.core.executors import execute_skills
+from app.core.executors import execute_skills, run_react, run_plan_exec
 from app.core.llm import LLMProvider
 from app.core.registry import SkillRegistry
 from app.core.router import Mode, RouteClassifier, route
@@ -54,11 +54,18 @@ class Agent:
         intent = self.classifier.intent_for(message, sess.profile)
         # 2) 模式路由
         mode = route(intent.complexity)
-        # 3) 执行
+        # 3) 执行（按模式）
         ctx = ExecutionContext(session=sess, profile=sess.profile,
                                mode=mode.value, skill_log=[])
-        outcome = execute_skills(self.registry, intent.task_type, ctx,
-                                 intent.params, mode)
+        if mode is Mode.REACT:
+            outcome = run_react(self.registry, self.llm, ctx,
+                                intent.task_type, intent.params)
+        elif mode in (Mode.PLAN_EXEC, Mode.REWOO):
+            outcome = run_plan_exec(self.registry, self.llm, ctx,
+                                    intent.task_type, intent.params)
+        else:
+            outcome = execute_skills(self.registry, intent.task_type, ctx,
+                                     intent.params, mode)
         # 4) 规则校验兜底
         outcome = self.validator.check(outcome, intent)
         # 5) 渲染

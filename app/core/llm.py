@@ -22,8 +22,12 @@ _RULES = [
      lambda t, kw: {"query": t}),
     (("下一组", "加重量", "减重量", "加几公斤", "减载"), "progress",
      lambda t, kw: {"query": t}),
-    (("腰", "膝", "伤", "痛", "禁忌", "能不能练"), "guard",
+    (("腰", "膝", "伤", "痛", "疼", "晕", "闷", "烧", "断", "扭", "麻",
+      "禁忌", "能不能练", "咋办", "怎么办"), "guard",
      lambda t, kw: {"signal": t}),
+    (("你好", "您好", "hi", "hello", "嗨", "你是谁", "你叫什么",
+      "谢谢", "再见", "拜拜"), "smalltalk",
+     lambda t, kw: {"topic": t}),
 ]
 
 
@@ -161,10 +165,12 @@ class DeepSeekProvider(LLMProvider):
     def classify(self, text, profile=None) -> Classification:
         self.calls.append("classify")
         sys_p = ("你是 FitMind 健身助手的意图路由器。仅输出一个 JSON 对象，不要任何其他内容。"
-                 "task_type ∈ {qa, teach, plan, progress, guard, fallback}；"
+                 "task_type ∈ {qa, teach, plan, progress, guard, smalltalk, fallback}；"
                  "params 是简要参数字典（如 {\"query\": \"<原句>\"} 或 {\"signal\": \"<原句>\"}）。"
-                 "规则：含 疾病/疼痛/损伤/禁忌 信号→guard；含 怎么做/要领/怎么练→teach；"
-                 "含 计划/安排/怎么练一周→plan；含 下一组/加重量/减载→progress；否则 qa。")
+                 "规则：含 疾病/疼痛/疼/伤/晕/骨折/断/扭伤 等健康风险信号→guard；"
+                 "问候/自我介绍/道谢/道别→smalltalk；含 怎么做/要领/怎么练→teach；"
+                 "含 计划/安排/一周→plan；含 下一组/加重量/减载→progress；否则 qa。"
+                 "注意：不能确定且无检索必要（如闲聊、寒暄）优先 smalltalk。")
         try:
             data = self._invoke_json(sys_p, text, "task_type")
             return Classification(str(data.get("task_type") or "qa"),
@@ -205,7 +211,13 @@ class DeepSeekProvider(LLMProvider):
     def render(self, structured, tone="coach") -> str:
         self.calls.append("render")
         sys_p = ("你是 FitMind 的中文健身教练，语气亲切专业（Apple 风格：简洁、正向、不说教）。"
-                 "非诊断、风险提示明确。依据结构化结果组织 3-6 句回答，可含分项。")
+                 "非诊断、风险提示明确。依据结构化结果组织 3-6 句回答，可含分项。"
+                 "硬性约束："
+                 "1) 若 data.items 为空或 data 含 empty/reason（检索未命中），务必如实说"
+                 "'没有找到相关内容'并给出换关键词建议，绝不虚构数据或健康结论；"
+                 "2) 绝不输出'绿灯/健康无风险/一切正常'这类健康评估结论，除非该结论明确来自"
+                 "结构化结果中的 screening 字段；"
+                 "3) 若 data 含 message 字段（闲聊/固定应答），直接以同样友好的口气回应它。")
         try:
             import json as _json
             return str(self._llm.invoke(

@@ -9,11 +9,12 @@ def build_default_registry():
     from app.skills.plan_skill import PlanSkill
     from app.skills.teach_skill import TeachSkill
     from app.skills.progress_skill import ProgressSkill
+    from app.skills.smalltalk_skill import SmallTalkSkill
     reg = SkillRegistry()
     reg.register(GuardSkill())
     reg.register(QaSkill())
     reg.register(PlanSkill())
     reg.register(TeachSkill())
     reg.register(ProgressSkill())
-    # S2 起在此注册：qa/teach/plan/progress
+    reg.register(SmallTalkSkill())
     return reg

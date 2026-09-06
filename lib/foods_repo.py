@@ -56,6 +56,11 @@ class FoodsRepo:
         self.name_zh = _read(self.data_dir / "name_zh.json")
         fam = _read(self.data_dir / "food_families.json")
         self.families = {f["family_id"]: f for f in fam.get("families", [])}
+        # 统一大类映射（跨源类目对齐）
+        self.categories = []
+        cat_path = self.data_dir / "food_categories.json"
+        if cat_path.exists():
+            self.categories = _read(cat_path)["categories"]
         # 成员索引: food_id -> family_id
         self.member_family = {}
         for fid, famobj in self.families.items():
@@ -72,6 +77,21 @@ class FoodsRepo:
     # ------------------------------------------------------------ 基础查询
     def get(self, food_id: str):
         return self.by_id.get(food_id)
+
+    def category_unified(self, food: dict | str) -> str:
+        """把任意源食物的类目归一到统一大类 id（fruits/meat/…）。"""
+        if isinstance(food, str):
+            food = self.by_id.get(food)
+            if not food:
+                return "other"
+        text = " ".join(filter(None, [
+            (food.get("name") or ""),
+            (food.get("food_type") or ""),
+            (food.get("category") or "")])).lower()
+        for c in self.categories:
+            if any(k in text for k in c["match"]):
+                return c["id"]
+        return "other"
 
     @staticmethod
     def _score(text: str, query: str) -> int:
@@ -134,6 +154,7 @@ class FoodsRepo:
     def filter(self, *,
                source: Optional[str] = None,
                food_type: Optional[str] = None,
+               category: Optional[str] = None,
                food_id_in: Optional[Iterable[str]] = None,
                kcal_min: Optional[float] = None, kcal_max: Optional[float] = None,
                protein_min: Optional[float] = None, protein_max: Optional[float] = None,
@@ -156,6 +177,8 @@ class FoodsRepo:
         out = []
         for r in self.by_id.values():
             if source is not None and r["source"] != source:
+                continue
+            if category is not None and self.category_unified(r) != category:
                 continue
             if ft and r.get("food_type") and ft not in r["food_type"].lower():
                 continue

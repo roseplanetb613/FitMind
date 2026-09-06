@@ -1,0 +1,185 @@
+{
+  "version": "1.0",
+  "note": "食物统一大类映射：把 4 个来源（USDA food_type / OFF en: 标签 / 中国成分表中文类目）归一到 13 个统一大类，供跨源过滤/统计。关键词匹配，未命中归 other。",
+  "categories": [
+    {
+      "id": "fruits",
+      "name_zh": "水果",
+      "match": [
+        "fruit",
+        "水果",
+        "实"
+      ]
+    },
+    {
+      "id": "vegetables",
+      "name_zh": "蔬菜",
+      "match": [
+        "vegetable",
+        "蔬菜",
+        "菜",
+        "菌",
+        "藻",
+        "薯"
+      ]
+    },
+    {
+      "id": "meat",
+      "name_zh": "肉禽",
+      "match": [
+        "meat",
+        "poultry",
+        "beef",
+        "pork",
+        "lamb",
+        "chicken",
+        "bacon",
+        "sausage",
+        "牛肉",
+        "猪肉",
+        "羊肉",
+        "鸡肉",
+        "鸭肉",
+        "鹅肉",
+        "兔肉",
+        "肉"
+      ]
+    },
+    {
+      "id": "seafood",
+      "name_zh": "水产",
+      "match": [
+        "fish",
+        "seafood",
+        "鱼",
+        "虾",
+        "蟹",
+        "贝",
+        "鱿鱼",
+        "海"
+      ]
+    },
+    {
+      "id": "dairy",
+      "name_zh": "乳制品",
+      "match": [
+        "dairy",
+        "milk",
+        "yogurt",
+        "cheese",
+        "乳",
+        "奶",
+        "dairie",
+        "cream",
+        "奶粉"
+      ]
+    },
+    {
+      "id": "eggs",
+      "name_zh": "蛋类",
+      "match": [
+        "egg",
+        "蛋"
+      ]
+    },
+    {
+      "id": "grains",
+      "name_zh": "谷薯主食",
+      "match": [
+        "grain",
+        "cereal",
+        "rice",
+        "pasta",
+        "bread",
+        "flour",
+        "谷",
+        "米",
+        "面",
+        "麦",
+        "淀粉"
+      ]
+    },
+    {
+      "id": "legumes_nuts",
+      "name_zh": "豆类坚果",
+      "match": [
+        "bean",
+        "lentil",
+        "pea",
+        "soy",
+        "tofu",
+        "nut",
+        "seed",
+        "豆",
+        "坚果",
+        "芝麻"
+      ]
+    },
+    {
+      "id": "beverages",
+      "name_zh": "饮品",
+      "match": [
+        "beverage",
+        "drink",
+        "juice",
+        "tea",
+        "coffee",
+        "soda",
+        "饮品",
+        "饮料",
+        "茶",
+        "酒"
+      ]
+    },
+    {
+      "id": "oils_fats",
+      "name_zh": "油脂",
+      "match": [
+        "oil",
+        "fat",
+        "butter",
+        "margarine",
+        "shortening",
+        "油",
+        "脂"
+      ]
+    },
+    {
+      "id": "snacks_sweets",
+      "name_zh": "零食甜点",
+      "match": [
+        "snack",
+        "sweet",
+        "candy",
+        "cookie",
+        "chocolate",
+        "dessert",
+        "零食",
+        "甜",
+        "饼干",
+        "巧克力",
+        "糖"
+      ]
+    },
+    {
+      "id": "condiments",
+      "name_zh": "调味品",
+      "match": [
+        "condiment",
+        "sauce",
+        "seasoning",
+        "salt",
+        "spice",
+        "调味",
+        "酱",
+        "盐",
+        "香料"
+      ]
+    },
+    {
+      "id": "other",
+      "name_zh": "其他",
+      "match": []
+    }
+  ]
+}

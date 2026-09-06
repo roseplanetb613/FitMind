@@ -1,4 +1,4 @@
 {
-  "provider": "stub",
-  "models": { "classify": "stub", "plan": "stub", "render": "stub" }
+  "provider": "auto",
+  "models": { "classify": "deepseek-chat", "plan": "deepseek-chat", "render": "deepseek-chat" }
 }

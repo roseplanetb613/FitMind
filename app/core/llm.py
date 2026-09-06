@@ -98,16 +98,38 @@ class StubProvider(LLMProvider):
 
 
 # ---------------------------------------------------------------- DeepSeek
+def load_dotenv(path: str | None = None) -> bool:
+    """零依赖 .env 加载器：把 `KEY=VALUE` 行写入 os.environ（已存在则跳过）。
+    默认读项目根 .env（gitignored）。返回是否加载到文件。"""
+    import os as _os
+    from pathlib import Path as _Path
+    root = _Path(__file__).resolve().parent.parent.parent
+    env_file = _Path(path) if path else root / ".env"
+    if not env_file.exists():
+        return False
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k and k not in _os.environ:
+            _os.environ[k] = v
+    return True
+
+
 class DeepSeekProvider(LLMProvider):
     """真实 LLM（DeepSeek，OpenAI 兼容）实现。
     决策路径原则不变：guard/plan/progress 数值决策锁定规则链；本类只做
-    意图/计划分类与渲染。调用或解析失败由调用方回落（见 build_provider 与图 render）。"""
+    意图/计划分类与渲染。调用或解析失败由调用方回落（见 build_provider 与图 render）。
+    Key 来源（优先级）：构造参数 > 环境变量 > 项目根 .env。"""
 
     is_stub: bool = False
     BASE_URL = "https://api.deepseek.com"
 
     def __init__(self, key: str | None = None, model: str = "deepseek-chat",
                  temperature: float = 0.2):
+        load_dotenv()                            # .env 兜底（幂等）
         self.key = key or os.environ.get("DEEPSEEK_API_KEY") or ""
         if not self.key:
             raise ValueError("DEEPSEEK_API_KEY 未设置：无法构造 DeepSeekProvider")

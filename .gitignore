@@ -14,3 +14,6 @@ tmp/
 # 私有本地数据
 storage_output/
 *.db
+
+# 密钥（绝不入 git）
+.env

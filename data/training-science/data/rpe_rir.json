@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "note": "RPE×次数 → %1RM 参考锚点（Helms 等共识区间，中等取整；来源: RPE-based loading literature, RPE表 for strength, 2024）。实际精度受个体差异影响，仅供编排参考。",
+  "method": "%1RM 每 +1RIR 约下调 4%；reps 每 +1 约下调 3%（powerlifting 区间近似）",
+  "anchors": [
+    { "reps": 1,  "rpe": 10, "pct_1rm": 100 },
+    { "reps": 2,  "rpe": 10, "pct_1rm": 95  },
+    { "reps": 3,  "rpe": 10, "pct_1rm": 92  },
+    { "reps": 4,  "rpe": 10, "pct_1rm": 89  },
+    { "reps": 5,  "rpe": 10, "pct_1rm": 86  },
+    { "reps": 6,  "rpe": 10, "pct_1rm": 83  },
+    { "reps": 8,  "rpe": 10, "pct_1rm": 78  },
+    { "reps": 10, "rpe": 10, "pct_1rm": 73  },
+    { "reps": 12, "rpe": 10, "pct_1rm": 68  }
+  ],
+  "rpe_reps_below_max_offset": 4,
+  "max_anchor_reps": 12
+}

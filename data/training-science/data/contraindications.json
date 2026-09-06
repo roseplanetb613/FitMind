@@ -1,0 +1,73 @@
+{
+  "version": "1.0",
+  "disclaimer": "【非医学建议】本表为训练禁忌/替代的粗略参考，依据 ACSM 运动测试与处方指南、中国运动处方专家共识(2023) 等公开资料起草，**须经专业（医师/康复师）审核后使用**。本系统不做诊断，只做“发现风险→提示咨询专业人士→给出保守替代”。急性伤/活动性病变一律先就医。",
+  "risk_levels": { "red": "暂停相关训练，建议就医", "yellow": "规避危险动作，用替代/降载继续安全部分", "green": "可正常训练（仍建议保持良好技术）" },
+  "conditions": [
+    {
+      "id": "cn01",
+      "condition_zh": "腰椎间盘突出/坐骨神经痛（活动期或明显症状）",
+      "condition_en": "Lumbar disc herniation / sciatica",
+      "risk_level": "yellow",
+      "danger_patterns": ["hinge", "squat"],
+      "danger_notes": "铰链(硬拉/早安)与负重深蹲对脊柱轴向压力高；症状加重的动作应立即停止",
+      "safe_prescriptions": ["保持中立脊柱的臀桥/髋推", "轻载六角杠硬拉或提髋(仅症状稳定时)", "核心稳定训练(死虫/鸟狗)"],
+      "alternatives": ["glute bridge", "hip thrust", "bird dog"],
+      "source": "ACSM 运动测试与处方指南（疑似椎间盘突出处理原则）【起草待审】"
+    },
+    {
+      "id": "cn02",
+      "condition_zh": "肩袖损伤/肩撞击（症状未缓解）",
+      "condition_en": "Rotator cuff injury / shoulder impingement",
+      "risk_level": "yellow",
+      "danger_patterns": ["push"],
+      "danger_notes": "过顶推举、大重量卧推、引体等力肩动作可能加重撞击",
+      "safe_prescriptions": ["外旋/内旋弹力带训练", "面拉", "暂以小重量、痛域内幅度训练", "避免疼痛区间"],
+      "alternatives": ["face pull", "external rotation", "band pull-apart"],
+      "source": "肩撞击训练处理共识（外旋肌强化为主）【起草待审】"
+    },
+    {
+      "id": "cn03",
+      "condition_zh": "高血压（未控制 或 静息收缩压≥160）",
+      "condition_en": "Uncontrolled hypertension",
+      "risk_level": "yellow",
+      "danger_patterns": ["hinge", "squat", "carry"],
+      "danger_notes": "Valsalva 憋气的大重量复合动作使血压骤升",
+      "safe_prescriptions": ["低中强度有氧为主", "力量训练减小重量、正常呼吸、避免屏气", "测量管理即可训练"],
+      "alternatives": ["walking", "cycling", "light circuit"],
+      "source": "ACSM 血压与运动立场声明【起草待审】"
+    },
+    {
+      "id": "cn04",
+      "condition_zh": "膝骨关节炎/半月板术后",
+      "condition_en": "Knee OA / post meniscus surgery",
+      "risk_level": "yellow",
+      "danger_patterns": ["squat", "lunge"],
+      "danger_notes": "深幅深蹲、跳跃与冲击性动作加重膝关节负荷",
+      "safe_prescriptions": ["浅幅至无痛幅度蹲、坐式腿举受限", "避免跳跃/跑步冲击", "四头肌等长与股四训练"],
+      "alternatives": ["leg extension", "wall sit", "water exercises"],
+      "source": "膝 OA 运动处方共识（无痛范围内训练）【起草待审】"
+    },
+    {
+      "id": "cn05",
+      "condition_zh": "近期骨折/术后（骨科）",
+      "condition_en": "Recent fracture / orthopedic surgery",
+      "risk_level": "red",
+      "danger_patterns": ["push", "pull", "squat", "hinge", "lunge"],
+      "danger_notes": "受累部位传力训练有再损伤风险",
+      "safe_prescriptions": ["遵医嘱阶段康复", "健侧训练与活动度训练", "未获医师许可前不返回力量训练"],
+      "alternatives": ["physical therapy program"],
+      "source": "骨科术后康复通则【起草待审】"
+    },
+    {
+      "id": "cn06",
+      "condition_zh": "心血管疾病史（心梗/冠脉支架/心衰）",
+      "condition_en": "Cardiovascular disease history",
+      "risk_level": "red",
+      "danger_patterns": ["squat", "hinge", "carry"],
+      "danger_notes": "高强度抗阻与屏气有心血管风险",
+      "safe_prescriptions": ["先完成医学评估（运动激发试验等）", "在监护/医师指导下渐进低强度训练"],
+      "alternatives": ["supervised cardiac rehab"],
+      "source": "ACSM 心血管患者运动指南【起草待审】"
+    }
+  ]
+}

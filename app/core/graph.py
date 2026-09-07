@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """LangGraph 编排图：guard→classify→(execute|plan|react)→validate→render。
-执行模式动态变换 = 条件边；checkpointer：InMemorySaver（开发）。"""
+执行模式动态变换 = 条件边；checkpointer 可注入（默认无持久化）。"""
 from __future__ import annotations
 import operator
 from typing import Annotated, Any, TypedDict
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 
@@ -77,7 +76,7 @@ def build_graph(registry, llm, classifier=None, validator=None,
     g.add_edge("validate", "render")
     g.add_edge("render", END)
 
-    return g.compile(checkpointer=checkpointer or InMemorySaver())
+    return g.compile(checkpointer=checkpointer)
 
 
 def state_to_intent(intent_dict: dict):
@@ -88,3 +87,31 @@ def state_to_intent(intent_dict: dict):
                   raw_text=intent_dict.get("raw_text", ""),
                   complexity=intent_dict.get("complexity", "simple"),
                   confidence=intent_dict.get("confidence", 1.0))
+
+
+# task_type 英文枚举 → 中文语义标题（render 节点与 API 响应共用，防双写漂移；
+# 避免 LLM 把 "teach" 当 query 脑补"与teach相关"）
+TITLE_ZH = {"qa": "知识问答", "teach": "动作教学", "plan": "训练计划",
+            "progress": "进度建议", "guard": "安全提示",
+            "smalltalk": "闲聊", "fallback": "回答"}
+
+
+def build_structured(intent: dict | None, outcome: dict | None,
+                     sources: list | None = None) -> dict:
+    """组装 render/API 共用的结构化结果（单源）。失败原因透传到 error 字段，
+    由渲染侧如实转述；不再携带恒空的 items 死键。
+    sources 缺省取 outcome.provenance；API 侧可传图顶层 provenance（guard 短路
+    时 outcome 为空，顶层仍保留守卫来源标注）。"""
+    intent = intent or {}
+    outcome = outcome or {}
+    structured = {"title": TITLE_ZH.get(intent.get("task_type", "fallback"),
+                                        "回答"),
+                  "sources": (sources if sources is not None
+                              else outcome.get("provenance", []))}
+    if outcome.get("ok"):
+        structured["data"] = outcome.get("data", {})
+    else:
+        err = outcome.get("_error") or outcome.get("error")
+        if err:
+            structured["error"] = err
+    return structured

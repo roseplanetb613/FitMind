@@ -2,12 +2,12 @@
 """风险守卫：规则拦截最优先，任何模式不得绕过。非诊断提示。"""
 from __future__ import annotations
 from app.skills.base import Skill, SkillResult
+from app.core.vocab import GUARD_SYMPTOMS
 import screening
 
-# 症状级信号（口语表达+常见损伤缩写，命中即黄色拦截+咨询医生；绝不误报绿灯）
-SYMPTOMS = ("疼", "痛", "眩晕", "头晕", "胸闷", "发烧", "发热",
-            "骨折", "断了", "扭伤", "脱臼", "麻木", "麻", "刺痛", "发炎",
-            "拉伤", "半月板", "十字韧带", "韧带", "tfcc", "acl", "mcl")
+# 症状词表单源化：与意图分类(llm._RULES)共用 app.core.vocab.GUARD_SYMPTOMS，
+# 避免双写漂移（压测 G1 '闷/晕/卡卡/扭着' 缺口根因）。改词表只改 vocab.py。
+SYMPTOMS = GUARD_SYMPTOMS
 
 
 class GuardSkill(Skill):

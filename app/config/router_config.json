@@ -9,5 +9,12 @@
     "plan": "plan_exec",
     "teach": "direct",
     "progress": "direct"
+  },
+  "semantic": {
+    "enabled": true,
+    "adopt_sim": 0.62,
+    "guard_adopt_sim": 0.55,
+    "sim_floor": 0.40,
+    "sim_ceil": 0.75
   }
 }

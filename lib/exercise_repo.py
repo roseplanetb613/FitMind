@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 exercise_repo.py — 健身动作检索/推荐层
 ======================================
@@ -28,6 +28,66 @@ DATA_DIR = REPO_ROOT / "data" / "exercises-dataset" / "data"
 
 DIFF_LABEL = {1: "beginner", 2: "intermediate", 3: "advanced"}
 LABEL_DIFF = {v: k for k, v in DIFF_LABEL.items()}
+
+# 口语别名 → 库内可检索名称片段（压测补全：库收录"杠铃 弓步"但用户说"箭步蹲"等）
+# 使用方：teach_skill/qa_skill 的中文检索在匹配前先经 expand_aliases 归一。
+NAME_ALIASES = {
+    "箭步蹲": "弓步",
+    "箭步": "弓步",
+    "保加利亚分腿蹲": "分腿深蹲",
+    "保加利亚蹲": "分腿深蹲",
+    "臀推": "臀冲",
+    "双杠臂屈伸": "臂屈伸",
+    "后蹲": "完全深蹲",
+}
+
+
+def expand_aliases(text: str) -> str:
+    """把常见口语动作名替换为库内可检索名片段（首个命中即返回）。"""
+    for alias, target in NAME_ALIASES.items():
+        if alias in text:
+            return text.replace(alias, target)
+    return text
+
+
+def norm_zh(s: str) -> str:
+    """中文检索归一：去空格+小写（'杠铃 卧推'→'杠铃卧推'）。装配与查询两侧共用。"""
+    return "".join((s or "").split()).lower()
+
+
+# 中文问句修饰词表：剥离后提取核心动作名（qa/teach 统一，单源）
+_ZH_PREFIX = ("你知道", "我想查", "我想问", "请问", "查一下", "帮我查",
+              "帮我找", "我想了解", "了解一下", "能不能", "可以吗", "你能告诉我")
+# 长的在前，保证 '应该怎么做' 先于 '怎么做' 命中；'的区别/哪个好' 等比较问法也剥
+_ZH_SUFFIX = ("应该怎么做", "应该怎么练", "是什么意思", "怎么做", "怎么练",
+              "如何做", "如何练", "的做法", "的区别", "是什么", "怎么样",
+              "哪个练腿", "哪个练臀", "哪个练胸", "哪个练背", "哪个练肩",
+              "哪个好", "哪个多", "哪个难", "怎么选", "怎么", "如何",
+              "动作", "哪个", "吗", "呢", "啊", "呀", "嘛", "吧")
+
+
+def split_zh_query(query: str) -> list[str]:
+    """复合查询切分 + 修饰词剥离 → 核心词列表。
+    例：'深蹲和硬拉的区别' → ['深蹲', '硬拉']；'你知道深蹲吗' → ['深蹲']。"""
+    q = (query or "").strip().lower()
+    parts = re.split(r"[和与、/]|还是|对比|vs|跟|以及", q)
+    out: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        for pre in _ZH_PREFIX:
+            if p.startswith(pre) and len(p) > len(pre):
+                p = p[len(pre):]
+                break
+        for suf in _ZH_SUFFIX:
+            if p.endswith(suf) and len(p) > len(suf):
+                p = p[:-len(suf)]
+                break
+        p = p.strip()
+        if p:
+            out.append(p)
+    return out or ([q] if q else [])
 
 
 class ExerciseRepo:
@@ -81,6 +141,8 @@ class ExerciseRepo:
         # 中文动作名（缺翻译时回退英文原名）
         record["name_zh"] = self.name_zh.get(
             e["name"].strip().lower(), e["name"])
+        # 装配期预计算归一名：search_zh 每次查询不必对全库现算（去空格+小写）
+        record["norm_name_zh"] = norm_zh(record["name_zh"])
         # 肌肉归一化：把原始术语映射成本体 id
         record["muscles_canonical"] = {
             "target": self.muscle_by_alias.get(e["target"].strip().lower()),
@@ -102,6 +164,27 @@ class ExerciseRepo:
         if limit:
             hits = hits[:limit]
         return hits
+
+    def search_zh(self, query: str, limit: int = 5) -> list[dict]:
+        """中文动作检索统一入口（qa/teach 共用，防双写漂移）：
+        复合查询切分 → 修饰词剥离 → 口语别名归一 → 双向子串匹配
+        （正向：动作名含核心词；反向：核心词含动作名，动作名 ≥2 字防单字误命中），
+        按难度升序。非中文输入回退 search()。"""
+        if not re.search(r"[一-鿿]", query or ""):
+            return self.search(query, limit=limit)
+        seen, hits = set(), []
+        for q in split_zh_query(query):
+            nq = norm_zh(expand_aliases(q))
+            for r in self.by_id.values():
+                nz = r.get("norm_name_zh") or ""
+                if not nz:
+                    continue
+                hit = (nq and nq in nz) or (len(nz) >= 2 and nz in nq)
+                if hit and r["id"] not in seen:
+                    seen.add(r["id"])
+                    hits.append(r)
+        hits.sort(key=lambda e: e.get("difficulty") or 9)
+        return hits[:limit]
 
     def _norm_muscle(self, muscle: str) -> Optional[str]:
         """把用户输入的肌肉（规范 id / 原始术语 / 中文名）归一成本体 id。"""

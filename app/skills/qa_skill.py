@@ -1,21 +1,13 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """知识问答：动作/食物检索，结果带来源标注（不发 LLM，纯规则；科学语境补 RAG 块）。"""
 from __future__ import annotations
-import re
 from app.skills.base import Skill, SkillResult
-from exercise_repo import ExerciseRepo
-from foods_repo import FoodsRepo
-
-_EX = None
-_FR = None
 
 
 def repos():
-    global _EX, _FR
-    if _EX is None:
-        _EX = ExerciseRepo()
-        _FR = FoodsRepo()
-    return _EX, _FR
+    """共享单例（app.runtime.repos）：避免与 pipeline/teach 各自装配大表。"""
+    from app.runtime.repos import exercise_repo, foods_repo
+    return exercise_repo(), foods_repo()
 
 
 class QaSkill(Skill):
@@ -45,8 +37,12 @@ class QaSkill(Skill):
         # 整句无命中时，回退到抽取具体食物词（"鸡胸肉蛋白质多少"→"鸡胸"），
         # 优于泛化的营养素词"蛋白质"
         search = query
-        if not fr.search(query, limit=1):
-            kw = sorted((k for k in self._FOOD_CONCRETE if k in query),
+        for _k, _v in self._FOOD_ALIASES.items():   # 口语词归一（子串替换）
+            if _k in search:
+                search = search.replace(_k, _v)
+                break
+        if not fr.search(search, limit=1):
+            kw = sorted((k for k in self._FOOD_CONCRETE if k in search),
                         key=len, reverse=True)
             if kw:
                 search = kw[0]
@@ -69,15 +65,9 @@ class QaSkill(Skill):
                            provenance=src[:3])
 
     def _exercises(self, ex, query: str) -> SkillResult:
-        # 优先精确的中文动作名匹配（exercise_repo.search 仅搜英文名），
-        # 用 query 在 name_zh 上做子串检索，否则回退英文搜索
-        if re.search(r"[\u4e00-\u9fff]", query):
-            names = [(i, r) for i, r in ex.by_id.items()
-                     if query.strip().lower() in (r.get("name_zh") or "").lower()]
-            names.sort(key=lambda kv: kv[1].get("difficulty", 9))
-            matched = [r for _, r in names[:5]]
-        else:
-            matched = ex.search(query, limit=5)
+        # 中文检索已下沉 exercise_repo.search_zh（qa/teach 单源）：
+        # 复合切分+修饰剥离+别名归一+双向匹配，装配期预计算归一名。
+        matched = ex.search_zh(query, limit=5)
         items = []
         for e in matched:
             sug = e.get("suggested") or {}
@@ -122,4 +112,9 @@ class QaSkill(Skill):
     # 用于无命中时的搜索回退（优于"蛋白质"这类泛化营养素词）
     _FOOD_KW = ("鸡胸", "鸡蛋", "牛奶", "牛肉", "鱼", "米饭", "蛋白质",
                 "碳水", "脂肪", "卡路里", "热量", "食物")
-    _FOOD_CONCRETE = ("鸡胸", "鸡蛋", "牛奶", "牛肉", "鱼", "米饭")
+    _FOOD_CONCRETE = ("鸡胸", "鸡蛋", "牛奶", "牛肉", "鱼", "米饭",
+                      "虾仁", "虾", "豆腐", "红薯", "燕麦", "香蕉", "苹果",
+                      "牛油果", "三文鱼", "豆浆", "面条", "鸡腿", "酸奶",
+                      "蛋白粉",
+                      "乳清")
+    _FOOD_ALIASES = {"蛋白质粉": "蛋白粉"}   # 口语词↔库内词

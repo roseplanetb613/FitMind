@@ -64,6 +64,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         opts = {"teach": "动作怎么做", "plan": "制定训练/饮食计划",
                 "progress": "根据记录给下一组建议", "qa": "查询食物或动作",
                 "smalltalk": "随便聊聊"}.get(tt, "查询食物或动作")
+        # 数据飞轮：澄清输入落 intent_miss 表（try/except 静默，失败不影响反问）
+        _log_intent_miss(state.get("message") or "", tt, it.get("confidence", 0.0))
         return {"reply": (f"我有点不确定你想做哪件事——你是想{opts}，"
                           "还是有别的问题？直接告诉我，我马上帮你。"),
                 "mode_used": "clarify"}
@@ -182,17 +184,9 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         return {"outcome": validator.check(outcome, intent)}
 
     def render(state: dict) -> dict:
-        intent = state.get("intent") or {}
-        outcome = state.get("outcome") or {}
-        structured = {"title": intent.get("task_type", "fallback"), "items": [],
-                      "sources": outcome.get("provenance", [])}
-        if outcome.get("ok"):
-            structured["data"] = outcome.get("data", {})
-        else:
-            # 失败原因透传渲染（如 plan 缺档案），禁止 LLM 臆造"没找到"
-            err = outcome.get("_error") or outcome.get("error")
-            if err:
-                structured["error"] = err
+        from app.core.graph import build_structured
+        # structured 单源组装（标题中文映射+失败原因透传+无 items 死键）
+        structured = build_structured(state.get("intent"), state.get("outcome"))
         try:
             reply = llm.render(structured)
         except Exception:
@@ -212,9 +206,20 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
     return nodes
 
 
+def _log_intent_miss(message: str, task_type: str, confidence: float) -> None:
+    """澄清/低置信输入落 intent_miss 表（数据飞轮）。任何异常静默，绝不影响反问。"""
+    try:
+        from app.storage.db import LogStore
+        LogStore().log_miss(message, guessed=task_type, confidence=confidence)
+    except Exception:
+        pass
+
+
 def _render_fallback(structured: dict) -> str:
     d = structured.get("data") or {}
-    lines = [str(structured.get("title", "回答")).replace("qa", "检索结果")]
+    lines = [str(structured.get("title", "回答"))]
+    if structured.get("error"):
+        lines.append("提示: " + str(structured["error"]))   # 失败原因如实透出
     for it in d.get("items", []):
         nm = it.get("name") or it.get("name_zh")
         if nm:

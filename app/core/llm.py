@@ -1,10 +1,13 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """LLM 抽象层：供应商可插拔；S1–S5 用 StubProvider（确定可复现）。"""
 from __future__ import annotations
+import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from app.core.intent import Intent, PlannedCall
+from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS
 
 
 @dataclass
@@ -18,20 +21,29 @@ class Classification:
 
 # 规则意图词典（stub 分类用；真实 provider 接管后可删）
 _RULES = [
-    (("计划", "练什么", "怎么安排", "一周"), "plan",
+    # plan：收窄强信号词（去掉单独的"怎么安排"/"一周"，避免吞编排模式问法）
+    (("计划", "练什么", "帮我安排", "帮我规划", "帮我排",
+      "制定方案", "制定计划", "给我计划", "安排课表", "安排训练", "制定", "方案"), "plan",
      lambda t, kw: {"days": 1}),
     (("怎么做", "要领", "动作教学", "怎么练"), "teach",
      lambda t, kw: {"query": t}),
+    # 训练编排模式问法（询问"如何分化"而非"生成完整计划"）→ teach
+    # 压测补全：五分化/双分化/单分化/三分化/全身训练/怎么分/如何分/几天练
+    (("练三休一", "练二休一", "练四休一", "练一休一", "推拉腿",
+      "上下肢", "上下分化", "全身分化", "分化训练", "分化方案",
+      "怎么分化", "如何分化", "五分化", "双分化", "单分化", "三分化",
+      "推拉", "推拉腿蹲", "全身训练", "怎么分", "如何分",
+      "几天练", "练几天", "一周练"), "teach",
+     lambda t, kw: {"query": t}),
     (("下一组", "加重量", "减重量", "加几公斤", "减载"), "progress",
      lambda t, kw: {"query": t}),
-    (("腰", "膝", "伤", "痛", "疼", "晕", "闷", "烧", "断", "扭", "麻",
-      "禁忌", "能不能练", "咋办", "怎么办"), "guard",
+    # guard：症状词单源（app.core.vocab.GUARD_SYMPTOMS，与 guard_skill 共享）
+    # + 意图层补充信号（"能不能练"类问法）。tfcc/半月板等已含于症状表。
+    (GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA, "guard",
      lambda t, kw: {"signal": t}),
     (("你好", "您好", "hi", "hello", "嗨", "你是谁", "你叫什么",
       "谢谢", "再见", "拜拜"), "smalltalk",
      lambda t, kw: {"topic": t}),
-    (("tfcc", "acl", "mcl", "半月板", "十字韧带", "韧带"), "guard",
-     lambda t, kw: {"signal": t}),
 ]
 
 
@@ -100,6 +112,8 @@ class StubProvider(LLMProvider):
     def render(self, structured, tone="coach") -> str:
         self.calls.append("render")
         parts = [str(structured.get("title", "回答"))]
+        if structured.get("error"):
+            parts.append("提示: " + str(structured["error"]))   # 失败原因如实透出
         data = structured.get("data") or {}
         if data:
             for k in ("macros", "training", "meals"):
@@ -114,10 +128,12 @@ class StubProvider(LLMProvider):
 
 # ---------------------------------------------------------------- DeepSeek
 # 意图白名单（LLM 分类输出受限集合，外部不可越界）
+# unknown：LLM 拿不准的真正退路（消解"被迫硬选"），arbitrate 定向 clarify。
 INTENT_WHITELIST = frozenset(
-    {"qa", "teach", "plan", "progress", "guard", "smalltalk", "fallback"})
+    {"qa", "teach", "plan", "progress", "guard", "smalltalk", "fallback",
+     "unknown"})
 
-# function-calling schema：强制 LLM 按受限选择题+置信度返回
+# function-calling schema：强制 LLM 按受限选择题+置信度+evidence 返回
 CLASSIFY_TOOL = {
     "type": "function",
     "function": {
@@ -139,33 +155,15 @@ CLASSIFY_TOOL = {
                     "type": "number", "minimum": 0, "maximum": 1,
                     "description": "本分类的确信度",
                 },
+                "evidence": {
+                    "type": "string",
+                    "description": "触发该分类的原句片段，必须从用户原句中逐字截取（禁止编造）",
+                },
             },
-            "required": ["task_type", "params", "confidence"],
+            "required": ["task_type", "params", "confidence", "evidence"],
         },
     },
 }
-
-
-def arbitrate(task_type, confidence: float, params: dict,
-              fallback: Classification) -> Classification:
-    """置信仲裁（纯函数，独立单测）：白名单校验 + 三级置信决策。"""
-    if task_type not in INTENT_WHITELIST:
-        return fallback
-    try:
-        conf = float(confidence)
-    except (TypeError, ValueError):
-        conf = 0.0
-    if conf >= 0.7:
-        return Classification(task_type, params or {}, confidence=conf)
-    if conf >= 0.4:
-        # 不确定但不至于否定：不硬猜，标记澄清（图走 clarify_node 反问）
-        base = fallback if fallback.task_type == task_type else Classification(
-            task_type, params or {})
-        base.complexity = "simple"
-        base.confidence = conf
-        base.needs_clarify = True
-        return base
-    return fallback
 
 
 def load_dotenv(path: str | None = None) -> bool:
@@ -198,22 +196,30 @@ class DeepSeekProvider(LLMProvider):
     BASE_URL = "https://api.deepseek.com"
 
     def __init__(self, key: str | None = None, model: str = "deepseek-chat",
-                 temperature: float = 0.2):
+                 temperature: float = 0.2, models: dict | None = None):
         load_dotenv()                            # .env 兜底（幂等）
         self.key = key or os.environ.get("DEEPSEEK_API_KEY") or ""
         if not self.key:
             raise ValueError("DEEPSEEK_API_KEY 未设置：无法构造 DeepSeekProvider")
         from langchain_openai import ChatOpenAI
         self.model_name = model
-        self._llm = ChatOpenAI(model=model, api_key=self.key,
-                               base_url=self.BASE_URL, temperature=temperature)
+        # llm_config.models 分角色指定模型（classify/plan/render），缺省统一回退 model。
+        # 显式收紧 timeout/重试：分类/渲染任何失败本就有规则兜底，不吃 SDK 默认长重试。
+        role_models = {"classify": model, "plan": model, "render": model}
+        role_models.update({k: v for k, v in (models or {}).items() if v})
+        self._models = {
+            role: ChatOpenAI(model=name, api_key=self.key, base_url=self.BASE_URL,
+                             temperature=temperature,
+                             request_timeout=30, max_retries=1)
+            for role, name in role_models.items()}
+        self._llm = self._models["render"]       # 兼容既有引用
         self._fallback = StubProvider()          # 规则回落（分类兜底）
         self.calls: list[str] = []
 
     # ---- 工具：单次带 JSON 约束的调用 ----
-    def _invoke_json(self, system: str, user: str, reply_key: str):
-        llm = self._llm.bind(response_format={"type": "json_object"})
-        resp = llm.invoke([("system", system), ("user", user)])
+    def _invoke_json(self, system: str, user: str, reply_key: str, llm=None):
+        client = (llm or self._llm).bind(response_format={"type": "json_object"})
+        resp = client.invoke([("system", system), ("user", user)])
         text = (resp.content or "") if hasattr(resp, "content") else str(resp)
         data = self._parse_json(text)
         if reply_key not in data:
@@ -222,36 +228,59 @@ class DeepSeekProvider(LLMProvider):
 
     @staticmethod
     def _parse_json(text: str) -> dict:
-        import json
         s = text.strip()
         s = s[s.find("{"):s.rfind("}") + 1] if "{" in s else s
         return json.loads(s)
 
     # ---- LLMProvider 接口 ----
     def classify(self, text, profile=None) -> Classification:
-        """三层意图分类：①规则强信号（命中即返回，不碰 LLM）→ ②function-calling
-        schema（受限选择题+置信度）→ ③arbitrate 仲裁（白名单+置信，中低不回硬猜）。"""
-        self.calls.append("classify")
+        """兼容包装：L0 规则强信号 → classify_llm（L2 纯 LLM）→ arbitrate（单点）。
+        行为与改造前一致（供既有调用方/测试使用）。"""
         rule = self._fallback.classify(text, profile)      # Stub 规则（强命中=1.0）
         if rule.confidence >= 0.7:                          # ① 强信号直接采用
             return rule
+        try:
+            out = self.classify_llm(text)                   # ② 纯 LLM 层
+        except Exception:
+            return rule                                     # 幻觉/失败 → 规则兜底
+        return arbitrate(out.task_type, out.confidence, out.params, rule)
+
+    def classify_llm(self, text, profile=None) -> Classification:
+        """纯 LLM 层（跳过规则）：function-calling 受限选择题+置信度+evidence。
+        evidence 必须逐字截取自原句（否则视为幻觉抛 ValueError）；unknown →
+        体面退路（fallback+clarify）。返回**未仲裁**结果；调用方再套 arbitrate。"""
+        self.calls.append("classify")
         sys_p = ("你是 FitMind 健身助手的意图路由器。只能从给定 task_type 枚举中选一个，"
                  "并给出确信度。规则参考：疾病/疼痛/伤/晕/骨折/断/扭伤/TFCC/ACL/半月板/"
                  "韧带等健康信号→guard；问候/寒暄/语气词→smalltalk；怎么做/要领→teach；"
                  "计划/安排/一周→plan；下一组/加重量/减载→progress；食物/动作知识检索→qa。"
-                 "若实在无法判断，confidence 给低值，不要乱猜。")
+                 "特别注意：'练三休一/练二休一/推拉腿/上下肢/分化/怎么分化'等训练编排模式"
+                 "问法属于 teach（询问如何安排训练），不要误判为 plan（生成完整计划）。"
+                 "plan 仅在用户明确要'生成/制定/给我一份训练计划'时采用。"
+                 "few-shot 锚点：'练三休一怎么分'→teach；'帮我制定一周计划'→plan；"
+                 "'胸口有点闷'→guard；'下一组加几公斤'→progress；'你是谁'→smalltalk；"
+                 "'鸡胸肉蛋白质多少'→qa。"
+                 "若实在无法判断，选 unknown 并给低 confidence，不要乱猜。"
+                 "evidence 必须是你从用户原句中看到并逐字截取的片段，禁止编造。")
         try:
-            bound = self._llm.bind_tools([CLASSIFY_TOOL])
+            bound = self._models["classify"].bind_tools([CLASSIFY_TOOL])
             resp = bound.invoke([("system", sys_p), ("user", text)])
             calls = getattr(resp, "tool_calls", None) or []
             if not calls:
                 raise ValueError("LLM 未返回工具调用")
             args = dict(calls[0].get("args", {}))
-            return arbitrate(str(args.get("task_type") or "fallback"),
-                             args.get("confidence"),
-                             dict(args.get("params") or {}), rule)
         except Exception:
-            return rule      # ②/③ 任何失败 → 规则兜底（无 key 环境等价 Stub 原行为）
+            return self._fallback.classify(text)   # 网络/解析失败 → 规则兜底
+        tt = str(args.get("task_type") or "fallback")
+        params = dict(args.get("params") or {})
+        conf = float(args.get("confidence") or 0.0)
+        ev = args.get("evidence")
+        if ev and str(ev) not in text:
+            raise ValueError(f"evidence 不在原句（幻觉）: {ev!r}")
+        if tt == "unknown":                        # 体面退路 → 反问
+            return Classification("fallback", {}, confidence=0.3,
+                                  needs_clarify=True)
+        return Classification(tt, params, confidence=conf)
 
     def plan(self, task, available) -> list[PlannedCall]:
         self.calls.append("plan")
@@ -259,7 +288,8 @@ class DeepSeekProvider(LLMProvider):
                  '{"step_id":"1","skill":"<技能名>","params":{},"depends_on":[]}。'
                  f"可用技能: {available}。一次规划全部调用（≤3 步）。仅 JSON。")
         try:
-            data = self._invoke_json(sys_p, task, "steps")
+            data = self._invoke_json(sys_p, task, "steps",
+                                     llm=self._models["plan"])
             steps = data.get("steps") or data.get("plan") or []
             return [PlannedCall(step_id=str(s.get("step_id", str(i))),
                                 skill=str(s.get("skill", "qa")),
@@ -275,7 +305,8 @@ class DeepSeekProvider(LLMProvider):
                  "输出 JSON：{\"skill\":\"<技能名|_done>\",\"params\":{}}。"
                  "已完成或无需再调用→ skill 为 _done。仅 JSON。")
         try:
-            data = self._invoke_json(sys_p, str(context[-1:] or context), "skill")
+            data = self._invoke_json(sys_p, str(context[-1:] or context), "skill",
+                                     llm=self._models["classify"])
             skill = str(data.get("skill") or "_done")
             if skill == "_done":
                 return PlannedCall("end", "_done", {})
@@ -292,27 +323,52 @@ class DeepSeekProvider(LLMProvider):
                  "'没有找到相关内容'并给出换关键词建议，绝不虚构数据或健康结论；"
                  "2) 绝不输出'绿灯/健康无风险/一切正常'这类健康评估结论，除非该结论明确来自"
                  "结构化结果中的 screening 字段；"
-                 "3) 若 data 含 message 字段（闲聊/固定应答），直接以同样友好的口气回应它。")
+                 "3) 若 data 含 message 字段（闲聊/固定应答），直接以同样友好的口气回应它；"
+                 "4) 若结构化结果含 error 字段（如计划缺少档案字段），如实转述失败原因并给出"
+                 "下一步指引（如'请先在设置中完善身体信息后再试'），不要臆造成'没找到相关内容'；"
+                 "5) structured.title 是任务类别标签（如'动作教学''知识问答''训练计划'），"
+                 "不是用户查询的关键词；严禁在回答里出现'与XXX相关'这类把 title 当查询词"
+                 "的措辞，回答应围绕 data.items 的实际内容或 empty/reason 字段组织。")
         try:
-            import json as _json
-            return str(self._llm.invoke(
+            return str(self._models["render"].invoke(
                 [("system", sys_p),
-                 ("user", _json.dumps(structured, ensure_ascii=False))]).content)
+                 ("user", json.dumps(structured, ensure_ascii=False))]).content)
         except Exception:
             return self._fallback.render(structured, tone)
 
 
 # ---------------------------------------------------------------- 工厂
+LLM_CONFIG = Path(__file__).resolve().parent.parent / "config" / "llm_config.json"
+
+
+def load_llm_config(path: str | None = None) -> dict:
+    """读取 llm_config.json（缺文件/解析失败 → {}，等价 provider=auto）。"""
+    p = Path(path) if path else LLM_CONFIG
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def build_provider(config: dict | None = None) -> LLMProvider:
-    """按 llm_config.json 选择 provider：auto=有 key 则 DeepSeek 否则 Stub；
-    显式 "deepseek" 无 key 也回落 Stub；"stub" 强制 Stub。"""
-    cfg = config or {}
+    """选择 provider：config=None 时读 llm_config.json（此前文件从未被接线，
+    是死配置）。auto=有 key 则 DeepSeek 否则 Stub；显式 "deepseek" 无 key
+    也回落 Stub；"stub" 强制 Stub。models 字段分角色指定模型。"""
+    cfg = load_llm_config() if config is None else (config or {})
     mode = str(cfg.get("provider") or "auto").lower()
+    models = dict(cfg.get("models") or {})
     if mode == "stub":
         return StubProvider()
     if mode in ("auto", "deepseek"):
         try:
-            return DeepSeekProvider()
+            return DeepSeekProvider(models=models or None)
         except ValueError:
             return StubProvider()
     return StubProvider()
+
+
+# arbitrate 单点化：本体移入 app/core/arbitrate.py，此处保留同名导出兼容
+# 既有 `from app.core.llm import arbitrate`（test_intent_router 等）。
+from app.core.arbitrate import arbitrate  # noqa: E402,F401

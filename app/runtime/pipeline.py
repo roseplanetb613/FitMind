@@ -5,12 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import screening
-from exercise_repo import ExerciseRepo
-from foods_repo import FoodsRepo
+from app.runtime.repos import exercise_repo, foods_repo
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-_EX = ExerciseRepo()
-_FR = FoodsRepo()
 FITT = json.load(open(ROOT / "data" / "sports-medicine" / "data"
                       / "fitt_prescription.json", encoding="utf-8"))
 # 参考 planner_demo 的卫生过滤（干货/珍稀排除）
@@ -25,6 +22,7 @@ def _bp(p: dict, sex: str) -> float:
 
 
 def build_plan(profile: dict) -> dict:
+    ex, fr = exercise_repo(), foods_repo()   # 共享单例（原模块级 _EX/_FR 副本）
     conds = profile.get("conditions") or []
     pats = profile.get("patterns") or []
     sc = screening.plan_check(conds, pats)
@@ -50,8 +48,8 @@ def build_plan(profile: dict) -> dict:
     for day, pat in plans.items():
         if pat in blocked:
             continue
-        recs = _EX.filter(pattern=pat, difficulty=2, limit=4,
-                          sort_by_difficulty=True)
+        recs = ex.filter(pattern=pat, difficulty=2, limit=4,
+                         sort_by_difficulty=True)
         training_items.append({"day": day, "pattern": pat,
                                "exercises": [{
                                    "name": e.get("name_zh"),
@@ -62,8 +60,8 @@ def build_plan(profile: dict) -> dict:
                                    "equipment": e.get("normalized_equipment"),
                                } for e in recs[:3]]})
     meals = []
-    for f in _FR.filter(category="meat", protein_min=18, kcal_max=300,
-                        limit=8, sort_by="protein_desc"):
+    for f in fr.filter(category="meat", protein_min=18, kcal_max=300,
+                       limit=8, sort_by="protein_desc"):
         nm = f.get("name_zh") or f.get("name")
         if any(u in nm for u in UNEDIBLE):
             continue

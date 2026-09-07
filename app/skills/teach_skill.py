@@ -1,45 +1,24 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """动作教学：检索动作+处方组次+器械要求（要领文本 RAG 补强，全静默降级）。"""
 from __future__ import annotations
-import re
 from app.skills.base import Skill, SkillResult
-from exercise_repo import ExerciseRepo
-
-_EX = None
 
 
 def _repo():
-    global _EX
-    if _EX is None:
-        _EX = ExerciseRepo()
-    return _EX
+    """共享单例（app.runtime.repos）：避免与 pipeline/qa 各自装配。"""
+    from app.runtime.repos import exercise_repo
+    return exercise_repo()
 
 
 class TeachSkill(Skill):
     name = "teach"
     description = "动作要领：目标肌群/组次/休息/器械（RAG 扩展位）"
     task_types = ("teach", "fallback")
-    _QUES = ("应该怎么做", "应该怎么练", "怎么做", "怎么练", "如何做",
-             "如何练", "的做法", "怎么", "如何", "动作")
 
     def _search(self, query: str, limit: int = 3) -> list:
-        repo = _repo()
-        if re.search(r"[\u4e00-\u9fff]", query):
-            def _norm(s: str) -> str:
-                return "".join(s.split())     # 名称带空格（"杠铃 卧推"），归一后子串匹配
-            q = query.strip()
-            for suff in TeachSkill._QUES:
-                if q.endswith(suff) and len(q) > len(suff):
-                    q = q[: -len(suff)]
-                    break
-            if not q:
-                q = query.strip()
-            nq = _norm(q)
-            hits = [e for e in repo.by_id.values()
-                    if nq and nq in _norm(e.get("name_zh") or "")]
-            hits.sort(key=lambda e: e.get("difficulty") or 9)
-            return hits[:limit]
-        return repo.search(query, limit=limit)
+        # 中文检索统一走 exercise_repo.search_zh（qa/teach 单源，防双写漂移）：
+        # 复合切分+修饰剥离+别名归一（"箭步蹲"→"弓步"）+双向匹配+难度排序
+        return _repo().search_zh(query, limit=limit)
 
     def execute(self, ctx, params) -> SkillResult:
         query = str(params.get("query", ""))

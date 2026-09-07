@@ -3,7 +3,7 @@
 领域层（skills/runtime/storage）框架中立；本模块仅为图的门面。"""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from app.core.graph import build_graph
+from app.core.graph import build_graph, build_structured
 from app.core.llm import LLMProvider
 from app.core.registry import SkillRegistry
 from app.core.router import RouteClassifier
@@ -29,6 +29,7 @@ class Agent:
         self.llm = llm
         self.sessions = sessions or SessionManager()
         self.classifier = classifier or RouteClassifier(llm)
+        self._checkpointer = checkpointer   # 仅显式注入时才挂 thread 配置
         self.graph = build_graph(registry=registry, llm=llm,
                                  classifier=self.classifier,
                                  checkpointer=checkpointer)
@@ -37,22 +38,21 @@ class Agent:
         sess = self.sessions.get(session_id) if session_id else None
         if sess is None:
             sess = self.sessions.create(session_id)
-        thread = f"{sess.id}-{len(sess.history)}"   # 每轮独立 thread，避免跨轮 state 累计
-        result = self.graph.invoke({
-            "session_id": sess.id, "message": message,
-            "profile": dict(sess.profile)},
-            config={"configurable": {"thread_id": thread}})
-
-        intent = result.get("intent") or {}
-        outcome = result.get("outcome") or {}
-        structured = {"title": intent.get("task_type", "fallback"),
-                      "items": [], "sources": result.get("provenance", [])}
-        if outcome.get("ok"):
-            structured["data"] = outcome.get("data", {})
+        # 无 checkpointer（默认）：每轮独立 invoke，不传 thread 配置——
+        # 挂了检查点才会按 thread 累积 state（内存随轮次只增不减）。
+        state_in = {"session_id": sess.id, "message": message,
+                    "profile": dict(sess.profile)}
+        if self._checkpointer is not None:
+            thread = f"{sess.id}-{len(sess.history)}"   # 每轮独立 thread
+            result = self.graph.invoke(
+                state_in, config={"configurable": {"thread_id": thread}})
         else:
-            err = outcome.get("_error") or outcome.get("error")
-            if err:
-                structured["error"] = err
+            result = self.graph.invoke(state_in)
+
+        # structured 单源组装（与 render 节点同一份逻辑，防双写漂移）；
+        # 顶层 provenance 传入，guard 短路时仍保留守卫来源标注
+        structured = build_structured(result.get("intent"), result.get("outcome"),
+                                      sources=result.get("provenance", []))
         reply = result.get("reply", "")
         sess.history.append({"role": "user", "text": message})
         sess.history.append({"role": "assistant", "text": reply})

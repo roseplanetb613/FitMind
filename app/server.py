@@ -39,15 +39,10 @@ def create_app() -> FastAPI:
     @app.post("/v1/chat")
     def chat(req: ChatRequest):
         resp = agent.run(req.message, req.session_id)
-        structured = dict(resp.structured)
-        # 失败原因透传（审计一致性：与渲染侧同一来源）
-        if (not resp.structured.get("data")) and (not resp.structured.get("error")):
-            e = resp.structured.get("_error")
-            if e:
-                structured["error"] = e
+        # structured 由 build_structured 单源组装：失败原因已透传 error 字段
         return {"session_id": resp.session_id, "reply": resp.reply,
                 "mode_used": resp.mode_used, "provenance": resp.provenance,
-                "structured": structured}
+                "structured": dict(resp.structured)}
 
     @app.post("/v1/profile")
     def set_profile(req: ProfileRequest):

@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""私有用户记录（训练/饮食）——仅本地 SQLite，不入 git。"""
+"""私有用户记录（训练/饮食/意图缺口）——仅本地 SQLite，不入 git。"""
 from __future__ import annotations
 import sqlite3
 import threading
+from datetime import datetime
 from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent.parent / "storage_output" / "user_log.db"
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class LogStore:
@@ -34,6 +39,12 @@ class LogStore:
             CREATE TABLE IF NOT EXISTS diet_log(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 food_id TEXT, food_name TEXT, grams REAL, date TEXT)
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS intent_miss(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT, guessed TEXT, confidence REAL,
+                created_at TEXT)
         """)
         self._conn.commit()
 
@@ -67,6 +78,23 @@ class LogStore:
             "ORDER BY id DESC LIMIT ?", (limit,))
         return [{"food_id": r[0], "food_name": r[1], "grams": r[2], "date": r[3]}
                 for r in cur.fetchall()]
+
+    def log_miss(self, text, guessed, confidence=0.0):
+        """落库澄清/低置信输入（数据飞轮）：本地 SQLite，不入 git。"""
+        self._ensure_thread()
+        self._conn.execute(
+            "INSERT INTO intent_miss(text,guessed,confidence,created_at) "
+            "VALUES(?,?,?,?)",
+            (str(text), str(guessed), float(confidence), _now()))
+        self._conn.commit()
+
+    def misses(self, limit=50) -> list[dict]:
+        self._ensure_thread()
+        cur = self._conn.execute(
+            "SELECT id,text,guessed,confidence,created_at FROM intent_miss "
+            "ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"id": r[0], "text": r[1], "guessed": r[2],
+                 "confidence": r[3], "created_at": r[4]} for r in cur.fetchall()]
 
     def close(self):
         self._conn.close()

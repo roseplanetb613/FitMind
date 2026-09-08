@@ -31,6 +31,19 @@ _PLAN_SIGNAL = ("计划", "方案", "安排", "课表", "规划", "帮我排", "
 _CNF_DONE = ("不疼", "不痛", "好了", "没感觉", "没事了", "不难受", "康复", "恢复了")
 _CNF_KEEP = ("还疼", "还在疼", "没好", "还是疼", "更疼", "没缓", "没好转", "一直疼")
 
+# 请求文本 → 动作模式映射（GD-04 pattern 级放行用）：
+# "帮我安排卧推训练" → push；injury(膝) 危险模式不含 push → 放行
+_REQ_PATTERN = (
+    (("深蹲", "蹲腿", "保加利亚", "半蹲"), ("squat",)),
+    (("箭步", "弓步", "分腿"), ("lunge",)),
+    (("硬拉", "弯腰"), ("hinge",)),
+    (("卧推", "推举", "俯卧撑", "推胸", "臂屈伸"), ("push",)),
+    (("划船", "引体", "下拉", "练背"), ("pull",)),
+    (("核心", "腹肌", "平板", "卷腹"), ("core",)),
+    (("跑", "走", "跳", "深蹲跳"), ("carry",)),
+    (("拉伸", "柔韧"), ("stretch",)),
+)
+
 
 class GuardSkill(Skill):
     name = "guard"
@@ -176,7 +189,8 @@ class GuardSkill(Skill):
 
     def _memory_intercept(self, signal: str, m) -> dict | None:
         """主动禁忌交叉：未自报但记忆有 active injury + 计划/安排语境 →
-        screening.plan_check(部位) 命中 → 拦截并引用记忆来源（spec §5）。
+        按请求动作模式 × 禁忌危险模式交叉（GD-04：膝不阻 push 卧推）；
+        泛计划请求（未指明动作）→ 有禁忌部位即保守拦截。
         记忆部位词（膝/腰/肩…）经 contraindication 子串命中禁忌表疾病。"""
         try:
             if not any(k in signal for k in _PLAN_SIGNAL):
@@ -184,17 +198,37 @@ class GuardSkill(Skill):
             inj = m.current_about(self._uid(), "injury")      # 未过期 active
             if not inj:
                 return None
-            out = screening.plan_check(inj, ["push", "pull", "squat", "hinge",
-                                             "lunge", "core", "carry", "stretch"])
-            if out["level"] == "green":
+            req_pats = set()
+            for kws, pats in _REQ_PATTERN:
+                if any(k in signal for k in kws):
+                    req_pats.update(pats)
+            hits = []                                          # (condition_zh, risk, danger∩req)
+            generic = not req_pats
+            for part in inj:
+                entry = screening.contraindication(part)
+                if entry is None:
+                    continue
+                danger = set(entry["danger_patterns"])
+                if generic:
+                    hits.append((entry["condition_zh"],
+                                 entry["risk_level"], None))   # 泛请求保守拦
+                elif danger & req_pats:
+                    hits.append((entry["condition_zh"],
+                                 entry["risk_level"],
+                                 sorted(danger & req_pats)))
+            if not hits:
                 return None
-            parts = "、".join(inj)
-            warns = "；".join(out["warnings"]) or "训练安排中的部分动作模式存在风险"
-            return {"blocked": True, "level_label": out["level_label"],
-                    "advice": (f"根据你的历史记录，之前曾提到{parts}不适（记忆来源），"
-                               f"本次训练安排有这个风险：{warns}。"
+            conds = "、".join(part for part in inj)
+            detail = "；".join(
+                f"{c}（危险模式 {','.join(p)}）" if p is not None else c
+                for c, _r, p in hits)
+            return {"blocked": True, "level_label": "黄色",
+                    "advice": (f"根据你的历史记录，之前曾提到{conds}不适（记忆来源），"
+                               f"本次训练安排命中禁忌：{detail}。"
                                "建议先咨询医生或专业康复师评估，再决定训练安排。"),
-                    "blocks": out["blocks"]}
+                    "blocks": [
+                        {"condition": c, "risk_level": r, "hit_patterns": p or []}
+                        for c, r, p in hits]}
         except Exception:
             return None
 

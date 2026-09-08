@@ -41,6 +41,13 @@ class Agent:
         # 记忆图谱单向投影：图谱 current 态为真相源（v1 单用户），
         # 新会话建档/记忆变更后投影回会话缓存（写只写图谱，读投影重建）
         self._project_memory_profile(sess)
+        # 记忆规则抽取（偏好/事件补录；静默，宁缺毋滥——失败绝不影响主链路）
+        try:
+            from app.graph.memory import MEMORY_USER_ID
+            from app.graph.memory_extract import apply_memory_extract
+            apply_memory_extract(message, MEMORY_USER_ID)
+        except Exception:
+            pass
         # 无 checkpointer（默认）：每轮独立 invoke，不传 thread 配置——
         # 挂了检查点才会按 thread 累积 state（内存随轮次只增不减）。
         state_in = {"session_id": sess.id, "message": message,

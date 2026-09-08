@@ -1,7 +1,25 @@
 # -*- coding: utf-8 -*-
 """知识问答：动作/食物检索，结果带来源标注（不发 LLM，纯规则；科学语境补 RAG 块）。"""
 from __future__ import annotations
+import json
+import re
+from datetime import datetime, timedelta, timezone
 from app.skills.base import Skill, SkillResult
+
+
+def _as_of_hint(query: str) -> str | None:
+    """档案时间问法 → as-of 时刻（ISO；E2E-01：上个月/昨天/N天前）。"""
+    now = datetime.now(timezone.utc)
+    if "上个月" in query or "上月" in query:
+        return (now - timedelta(days=30)).isoformat()
+    if "上周" in query:
+        return (now - timedelta(days=7)).isoformat()
+    m = re.search(r"(\d+)\s*天前", query)
+    if m:
+        return (now - timedelta(days=int(m.group(1)))).isoformat()
+    if "昨天" in query:
+        return (now - timedelta(days=1)).isoformat()
+    return None
 
 
 def _detect_profile_field(query: str) -> str | None:
@@ -142,7 +160,14 @@ class QaSkill(Skill):
 
     def _profile(self, ctx, query: str = "") -> SkillResult:
         """档案查询（"我的身体数据/肌肉量多少"）：直接回答会话档案，未建档如实提示；
-        W1 增强：问到档案未记录的身体指标 → 如实说明未记录 + 列出已记录项，绝不硬编。"""
+        W1 增强：问到档案未记录的身体指标 → 如实说明未记录 + 列出已记录项，绝不硬编。
+        E2E-01 增强：时间问法（"上个月体重多少"）→ 记忆图谱 as_of 历史（静默回落）。"""
+        when = _as_of_hint(query)
+        if when:
+            hist = self._profile_as_of(when)
+            if hist:
+                return SkillResult(ok=True, data={"items": hist},
+                                   provenance=["qa#memory.as_of"])
         p = dict(getattr(ctx, "profile", None) or {})
         if not p:
             return SkillResult(ok=True, data={"items": [], "empty": True,
@@ -157,6 +182,29 @@ class QaSkill(Skill):
             items.append({"name": "档案未记录", "value": missing})
         return SkillResult(ok=True, data={"items": items, "profile": p},
                            provenance=["qa#session.profile"])
+
+    @staticmethod
+    def _profile_as_of(when: str) -> list:
+        """记忆图谱 as-of 档案历史（profile.*）；无图谱/异常 → []（回落现状）。"""
+        try:
+            from app.graph.memory import MEMORY_USER_ID, MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                return []
+            out = []
+            for r in m.as_of(MEMORY_USER_ID, when):
+                t = str(r["type"])
+                if not t.startswith("profile."):
+                    continue
+                key = t.split(".", 1)[1]
+                try:
+                    v = json.loads(r["value"])
+                except Exception:
+                    v = r["value"]
+                out.append({"name": key, "value": v})
+            return out
+        except Exception:
+            return []
 
     def _foods(self, ctx, fr, query: str) -> SkillResult:
         items = []

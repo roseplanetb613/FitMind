@@ -1,0 +1,19 @@
+# FitMind Neo4j 图数据库（LLM 归一化 + 知识图谱，见 docs/superpowers/plans/2026-09-07-llm-normalization-graph.md）
+# 数据/日志落 D 盘（符合 D:\ 软件分类标准 §5 容器区）：D:\vm\docker\neo4j\
+# 密码来自 .env 的 NEO4J_PASSWORD（不入库，gitignored）。
+# 启动： docker compose up -d
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: fitmind-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # HTTP Browser 控制台
+      - "7687:7687"   # Bolt 驱动连接
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_initial_dbms_default__database=fitmind   # 默认库名（对齐 graph_config.database）
+    volumes:
+      - D:/vm/docker/neo4j/data:/data
+      - D:/vm/docker/neo4j/logs:/logs
+      - D:/vm/docker/neo4j/plugins:/plugins   # 如需 APOC 等插件放此处

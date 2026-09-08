@@ -1,4 +1,4 @@
--- FitMind RAG schema（v1，PG+pgvector 单库）
+-- FitMind RAG schema（v2，PG 只做向量库；图已统一迁移 Neo4j）
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE SCHEMA IF NOT EXISTS fitness;
@@ -16,15 +16,5 @@ CREATE INDEX IF NOT EXISTS embeddings_hnsw ON fitness.embeddings
 CREATE INDEX IF NOT EXISTS embeddings_trgm ON fitness.embeddings
   USING gin (content gin_trgm_ops);
 
-CREATE TABLE IF NOT EXISTS fitness.graph_nodes(
-  id BIGSERIAL PRIMARY KEY,
-  kind TEXT NOT NULL,
-  name TEXT NOT NULL UNIQUE,
-  meta JSONB DEFAULT '{}'::jsonb);
-CREATE TABLE IF NOT EXISTS fitness.graph_edges(
-  src_id BIGINT NOT NULL REFERENCES fitness.graph_nodes(id),
-  dst_id BIGINT NOT NULL REFERENCES fitness.graph_nodes(id),
-  rel TEXT NOT NULL,
-  PRIMARY KEY (src_id, dst_id, rel));
-CREATE INDEX IF NOT EXISTS graph_edges_src ON fitness.graph_edges(src_id);
-CREATE INDEX IF NOT EXISTS graph_edges_dst ON fitness.graph_edges(dst_id);
+-- 图存储（graph_nodes/graph_edges）已删除：见 2026-09-07-graph-consolidation-neo4j.md
+-- 数据由 app/rag/ingest.build() 幂等重建到 Neo4j（app/graph/store.py）

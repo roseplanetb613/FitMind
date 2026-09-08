@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "uri": "bolt://localhost:7687",
+  "database": "fitmind",
+  "auto_adopt_conf": 0.8,
+  "review_floor_conf": 0.5,
+  "lookup_timeout_ms": 200,
+  "ingest_batch": 500
+}

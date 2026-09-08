@@ -16,6 +16,7 @@ for p in ("lib",):                       # ingest 内自足（脚本/import 两�
 
 from app.rag.store import PgStore          # noqa: E402
 from app.rag.embedder import OllamaEmbedder  # noqa: E402
+from app.graph.store import GraphStore     # noqa: E402
 from exercise_repo import ExerciseRepo      # noqa: E402
 from screening import CONDITIONS            # noqa: E402
 
@@ -149,69 +150,22 @@ def _write_embeddings(store: PgStore, ex: ExerciseRepo,
     return True
 
 
-def build(store: PgStore | None = None, fill_embeddings: bool = True) -> dict:
+def build(store: PgStore | None = None, fill_embeddings: bool = True,
+          graph: "GraphStore | None" = None) -> dict:
+    """幂等重建：向量 → PG（store）；图 → Neo4j（graph，默认 GraphStore.get()）。
+    Neo4j 不可用 → 跳过图（nodes/edges=0），向量照常（双降级）。"""
     store = store or PgStore()
     store.apply_schema()
     store.clear_all()
     ex = ExerciseRepo()
 
-    # 单一连接 + 单事务：1324 动作 × 多条边一次灌入（提交前不落盘）
-    with psycopg.connect(store.dsn, autocommit=False) as conn, conn.cursor() as cur:
-        node_ids = {}
-        def node(kind, name, meta=None):
-            cur.execute(
-                "INSERT INTO fitness.graph_nodes(kind,name,meta) VALUES(%s,%s,%s) "
-                "ON CONFLICT (name) DO UPDATE SET kind=EXCLUDED.kind, "
-                "meta=EXCLUDED.meta RETURNING id",
-                (kind, name, psycopg.types.json.Jsonb(meta or {})))
-            nid = int(cur.fetchone()[0])
-            node_ids.setdefault(kind, {})[name] = nid
-            return nid
-
-        def edge(src_id, dst_id, rel):
-            cur.execute(
-                "INSERT INTO fitness.graph_edges(src_id,dst_id,rel) "
-                "VALUES(%s,%s,%s) ON CONFLICT DO NOTHING", (src_id, dst_id, rel))
-
-        # 动作（name=动作 id，meta 存中英文名）
-        for e in ex.by_id.values():
-            nid = node("exercise", e["id"],
-                       {"name_zh": e.get("name_zh"), "name_en": e.get("name")})
-            mus = e.get("muscles_canonical") or {}
-            for m in ({mus.get("target"), mus.get("muscle_group")} |
-                      set(mus.get("secondary") or [])):
-                if m:
-                    node("muscle", m)                                  # 规范 id 即 name
-                    edge(nid, node_ids["muscle"][m], "targets")
-            eq = e.get("normalized_equipment")
-            if eq:
-                node("equipment", eq)
-                edge(nid, node_ids["equipment"][eq], "uses")
-            pat = e.get("movement_pattern")
-            if pat:
-                node("pattern", pat)
-                edge(nid, node_ids["pattern"][pat], "pattern_of")
-
-        # 禁忌（疾病名 → 危险动作模式）
-        for ci in CONDITIONS:
-            head = ci["condition_zh"].split("（")[0].split("/")[0]
-            cid = node("condition", head, {"condition_zh": ci["condition_zh"],
-                                           "risk_level": ci["risk_level"],
-                                           "source": ci.get("source")})
-            for dp in ci.get("danger_patterns", []):
-                node("pattern", dp)
-                edge(cid, node_ids["pattern"][dp], "contraindicates")
-
-        # 同族（family）：节点 + 动作→member_of→family 边（同族可替代变体）
-        for family_id, meta in ex.families.items():
-            node("family", family_id, meta)
-        for e in ex.by_id.values():
-            fid = e.get("family")
-            if fid and fid in node_ids["family"]:
-                edge(node_ids["exercise"][e["id"]], node_ids["family"][fid],
-                     "member_of")
-
-        conn.commit()
+    graph = graph if graph is not None else GraphStore.get()
+    graph_counts = {"nodes": 0, "edges": 0}
+    if graph is not None:
+        graph.clear_subgraph()
+        _build_graph(graph, ex)
+        graph_counts = graph.counts()
+        graph_counts["graph_store"] = "neo4j"
 
     embedder = OllamaEmbedder()
     embedding_skipped = False
@@ -220,9 +174,57 @@ def build(store: PgStore | None = None, fill_embeddings: bool = True) -> dict:
             embedding_skipped = True
 
     counts = store.counts()
+    counts.update(graph_counts)
     if embedding_skipped:
         counts["embedding_skipped"] = True
     return counts
+
+
+def _build_graph(graph: "GraphStore", ex: ExerciseRepo) -> None:
+    """图写入（Neo4j）：动作/肌群/器械/模式/禁忌/同族 + 5 类边。"""
+    # 动作节点：id 唯一，meta 存中英文名
+    for e in ex.by_id.values():
+        graph.merge_entity("Exercise", "id", {
+            "id": e["id"],
+            "name_zh": e.get("name_zh"),
+            "name_en": e.get("name")})
+        mus = e.get("muscles_canonical") or {}
+        for m in ({mus.get("target"), mus.get("muscle_group")} |
+                  set(mus.get("secondary") or [])):
+            if m:
+                graph.merge_entity("Muscle", "name", {"name": m})
+                graph.merge_rel("Exercise", "id", e["id"], "targets",
+                                "Muscle", "name", m)
+        eq = e.get("normalized_equipment")
+        if eq:
+            graph.merge_entity("Equipment", "name", {"name": eq})
+            graph.merge_rel("Exercise", "id", e["id"], "uses",
+                            "Equipment", "name", eq)
+        pat = e.get("movement_pattern")
+        if pat:
+            graph.merge_entity("Pattern", "name", {"name": pat})
+            graph.merge_rel("Exercise", "id", e["id"], "pattern_of",
+                            "Pattern", "name", pat)
+
+    # 禁忌（疾病名 → 危险动作模式）
+    for ci in CONDITIONS:
+        head = ci["condition_zh"].split("（")[0].split("/")[0]
+        graph.merge_entity("Condition", "name", {
+            "name": head, "condition_zh": ci["condition_zh"],
+            "risk_level": ci["risk_level"], "source": ci.get("source")})
+        for dp in ci.get("danger_patterns", []):
+            graph.merge_entity("Pattern", "name", {"name": dp})
+            graph.merge_rel("Condition", "name", head, "contraindicates",
+                            "Pattern", "name", dp)
+
+    # 同族（family）：节点 + 动作→member_of→family 边（同族可替代变体）
+    for family_id, meta in ex.families.items():
+        graph.merge_entity("Family", "id", {"id": family_id, **(meta or {})})
+    for e in ex.by_id.values():
+        fid = e.get("family")
+        if fid:
+            graph.merge_rel("Exercise", "id", e["id"], "member_of",
+                            "Family", "id", fid)
 
 
 if __name__ == "__main__":

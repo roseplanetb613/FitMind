@@ -39,6 +39,9 @@ NAME_ALIASES = {
     "臀推": "臀冲",
     "双杠臂屈伸": "臂屈伸",
     "后蹲": "完全深蹲",
+    # W1：口语"肩推举"库内无整词（有"肩推"/"推举"拆分），归一为"肩推"
+    #（压测 #76 '练肩推举和飞鸟哪个先' 空结果根因）
+    "肩推举": "肩推",
 }
 
 
@@ -56,19 +59,38 @@ def norm_zh(s: str) -> str:
 
 
 # 中文问句修饰词表：剥离后提取核心动作名（qa/teach 统一，单源）
+# W1 扩展：复合句尾"怎么做才X/怎么做比较X"（#61）、"哪个先/哪个后"（#76）、
+# "标准动作/标准/正确/规范"（#157）；"练习"先于"练"命中避免"练习X"被拆残。
 _ZH_PREFIX = ("你知道", "我想查", "我想问", "请问", "查一下", "帮我查",
-              "帮我找", "我想了解", "了解一下", "能不能", "可以吗", "你能告诉我")
+              "帮我找", "我想了解", "了解一下", "能不能", "可以吗", "你能告诉我",
+              "练习", "练")
 # 长的在前，保证 '应该怎么做' 先于 '怎么做' 命中；'的区别/哪个好' 等比较问法也剥
-_ZH_SUFFIX = ("应该怎么做", "应该怎么练", "是什么意思", "怎么做", "怎么练",
-              "如何做", "如何练", "的做法", "的区别", "是什么", "怎么样",
+_ZH_SUFFIX = ("应该怎么做", "应该怎么练", "是什么意思",
+              "怎么做才标准", "怎么做才正确", "怎么做才规范", "怎么做才到位",
+              "怎么做比较标准", "怎么做比较正确", "怎么做比较规范",
+              "怎么练才标准", "怎么练比较标准",
+              "怎么做才", "怎么做比较", "怎么练才", "怎么练比较",
+              "怎么做", "怎么练", "如何做", "如何练", "的做法", "的区别",
+              "是什么", "怎么样",
+              "标准动作", "正确动作", "做几组", "做几次", "做多少组",
               "哪个练腿", "哪个练臀", "哪个练胸", "哪个练背", "哪个练肩",
-              "哪个好", "哪个多", "哪个难", "怎么选", "怎么", "如何",
+              "哪个先", "哪个后", "先做", "后做",
+              "哪个好", "哪个多", "哪个难", "怎么选", "怎么用", "怎么", "如何",
+              "标准", "正确", "规范",
               "动作", "哪个", "吗", "呢", "啊", "呀", "嘛", "吧")
+
+# W1 逐级回退的尾部实词表（非问句修饰，而是动作名的尾词部分）：
+# 整词无命中时依次砍掉尾词再试（至多 2 轮），如 '壶铃摇摆' → '壶铃'。
+_TAIL_MOD = ("标准动作", "正确动作", "摇摆", "标准", "正确", "规范", "到位",
+             "练习", "训练", "姿势", "技巧", "视频", "教程", "要领", "要点",
+             "方法", "入门", "动作")
 
 
 def split_zh_query(query: str) -> list[str]:
     """复合查询切分 + 修饰词剥离 → 核心词列表。
-    例：'深蹲和硬拉的区别' → ['深蹲', '硬拉']；'你知道深蹲吗' → ['深蹲']。"""
+    例：'深蹲和硬拉的区别' → ['深蹲', '硬拉']；'你知道深蹲吗' → ['深蹲']。
+    W1：后缀轮循剥（至多 2 轮）——'壶铃摇摆标准动作' 经 '标准动作'→'壶铃摇摆'；
+     '深蹲怎么做才标准' 经 '怎么做才标准'→'深蹲'，一次到位。"""
     q = (query or "").strip().lower()
     parts = re.split(r"[和与、/]|还是|对比|vs|跟|以及", q)
     out: list[str] = []
@@ -80,14 +102,32 @@ def split_zh_query(query: str) -> list[str]:
             if p.startswith(pre) and len(p) > len(pre):
                 p = p[len(pre):]
                 break
-        for suf in _ZH_SUFFIX:
-            if p.endswith(suf) and len(p) > len(suf):
-                p = p[:-len(suf)]
+        for _ in range(2):                   # 后缀剥至多 2 轮（长的在前先命中）
+            hit = None
+            for suf in _ZH_SUFFIX:
+                if p.endswith(suf) and len(p) > len(suf):
+                    hit = suf
+                    break
+            if hit is None:
+                break
+            p = p[: -len(hit)].strip()
+            if not p:
                 break
         p = p.strip()
         if p:
             out.append(p)
     return out or ([q] if q else [])
+
+
+def _tail_cut(s: str) -> str:
+    """W1：逐级回退砍尾——优先砍 _TAIL_MOD 实词（'壶铃摇摆'→'壶铃'），
+    未命中修饰表则砍 1 字；len<=2 不再砍（防破坏 2 字动作名）。"""
+    if len(s) <= 2:
+        return s
+    for k in _TAIL_MOD:
+        if s.endswith(k) and len(s) > len(k):
+            return s[: -len(k)]
+    return s[:-1]
 
 
 class ExerciseRepo:
@@ -169,22 +209,70 @@ class ExerciseRepo:
         """中文动作检索统一入口（qa/teach 共用，防双写漂移）：
         复合查询切分 → 修饰词剥离 → 口语别名归一 → 双向子串匹配
         （正向：动作名含核心词；反向：核心词含动作名，动作名 ≥2 字防单字误命中），
-        按难度升序。非中文输入回退 search()。"""
+        按难度升序；整词无命中时逐级回退（W1），仍空再乱序 AND（W1）。
+        非中文输入回退 search()。"""
         if not re.search(r"[一-鿿]", query or ""):
             return self.search(query, limit=limit)
-        seen, hits = set(), []
-        for q in split_zh_query(query):
+        core = split_zh_query(query)
+        hits = self._match_zh(core)
+        if not hits:
+            hits = self._fallback_search(core)   # 整词无命中 → 砍尾词重试（≤2 轮）
+        if not hits:
+            hits = self._and_search(core)        # 仍空 → token 集合 AND（词序无关）
+        hits.sort(key=lambda e: e.get("difficulty") or 9)
+        return hits[:limit]
+
+    def _match_zh(self, words: list[str]) -> list[dict]:
+        """逐核心词双向子串匹配（去重，难度排序由调用方做）。"""
+        seen: set = set()
+        hits: list[dict] = []
+        for q in words:
             nq = norm_zh(expand_aliases(q))
+            if not nq:
+                continue
             for r in self.by_id.values():
                 nz = r.get("norm_name_zh") or ""
                 if not nz:
                     continue
-                hit = (nq and nq in nz) or (len(nz) >= 2 and nz in nq)
-                if hit and r["id"] not in seen:
-                    seen.add(r["id"])
-                    hits.append(r)
-        hits.sort(key=lambda e: e.get("difficulty") or 9)
-        return hits[:limit]
+                if (nq in nz) or (len(nz) >= 2 and nz in nq):
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        hits.append(r)
+        return hits
+
+    def _fallback_search(self, words: list[str]) -> list[dict]:
+        """W1 逐级回退：核心词整词无命中 → 砍尾部修饰实词重试（至多 2 轮）。
+        回退命中浅拷贝注入 `uncovered_query`（原核心词），供渲染侧注明"未收录"。"""
+        for q in words:
+            if not q:
+                continue
+            cur = norm_zh(expand_aliases(q))
+            cuts = 0
+            while cuts < 2:
+                nxt = _tail_cut(cur)
+                if nxt == cur:
+                    break
+                cur, cuts = nxt, cuts + 1
+                found = [r for r in self.by_id.values()
+                         if (cur in (r.get("norm_name_zh") or "")
+                             or (len(r.get("norm_name_zh") or "") >= 2
+                                 and (r.get("norm_name_zh") or "") in cur))]
+                if found:
+                    return [dict(r, uncovered_query=q) for r in found]
+        return []
+
+    def _and_search(self, words: list[str]) -> list[dict]:
+        """W1 乱序容忍：所有核心 token 须同时出现于同一动作名（词序无关）。
+        仅多核心词场景生效（单核心词直接返回空，避免全库 O(n) 白跑）。"""
+        toks = [norm_zh(expand_aliases(q)) for q in words if q]
+        if len(toks) < 2:
+            return []
+        out = []
+        for r in self.by_id.values():
+            nz = r.get("norm_name_zh") or ""
+            if nz and all(t in nz for t in toks):
+                out.append(r)
+        return out
 
     def _norm_muscle(self, muscle: str) -> Optional[str]:
         """把用户输入的肌肉（规范 id / 原始术语 / 中文名）归一成本体 id。"""

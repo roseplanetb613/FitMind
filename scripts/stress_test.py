@@ -185,6 +185,28 @@ def main() -> None:
         print(f"\n=== 空结果（含'没有找到'类）=== {len(empties)} 题")
         print(f"\n=== JSON 结果已写入 ===\n  {out}")
 
+        # ---- W6 图谱/归一化验收指标 ----
+        _w6_metrics(results)
+
+
+def _w6_metrics(results):
+    """W6：图谱覆盖指标（缺省/失败静默，不影响压测本体结论）。"""
+    try:
+        from app.graph.store import GraphStore
+        g = GraphStore.get()
+        if g is None:
+            print("\n[W6] 图谱不可用（降级路径）：GraphStore.get()=None，"
+                  "别名层由静态词表兜底（符合设计）")
+            return
+        c = g.counts()
+        with g._driver.session(database=g._database) as s:
+            aliases = s.run("MATCH (a:Alias) RETURN count(a) AS n").single()["n"]
+            terms = s.run("MATCH (t:StandardTerm) RETURN count(t) AS n").single()["n"]
+        print(f"\n[W6] 图谱指标：实体 {c['nodes']} 节点 / {c['edges']} 边；"
+              f"别名 {aliases} 条；标准词 {terms} 个")
+    except Exception as e:
+        print(f"\n[W6] 图谱指标统计失败（静默）: {str(e)[:80]}")
+
 
 if __name__ == "__main__":
     main()

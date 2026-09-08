@@ -1,7 +1,38 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """知识问答：动作/食物检索，结果带来源标注（不发 LLM，纯规则；科学语境补 RAG 块）。"""
 from __future__ import annotations
 from app.skills.base import Skill, SkillResult
+
+
+def _detect_profile_field(query: str) -> str | None:
+    """从档案类问句中识别用户想问但档案可能缺的指标名（W1 反幻觉）。"""
+    for key, hints in _PROFILE_FIELD_HINTS.items():
+        if any(h in query for h in hints):
+            return key
+    return None
+
+
+# 档案未记录指标 → 如实引导话术（绝不硬编数值）
+_PROFILE_MISSING_HINT = {
+    "bodyfat": "档案未记录体脂数据，需体脂秤/体测仪数据才能估算",
+    "ffmi": "档案未记录肌肉与骨骼数据，FFMI 需体测仪比对",
+    "training_capacity": "档案未记录训练容量/记录，需在会话中保持训练打卡",
+    "heart": "档案未记录心率数据，建议先测量静息心率再评估",
+    "strength": "档案未记录各动作参考标准，可查动作库对应力量标准",
+    "flexibility": "档案未记录柔韧性评估，常规体测可补",
+    "sleep": "档案未记录睡眠数据，可自行记录一周观察",
+    "body_shape": "档案未记录腰臀比/围度数据，需皮尺测量",
+}
+_PROFILE_FIELD_HINTS = {
+    "bodyfat": ("体脂", "内脏脂肪"),
+    "ffmi": ("FFMI", "ffmi", "肌肉量", "骨量", "BMI"),
+    "training_capacity": ("训练容量", "训练年限", "练了什么", "昨天练", "上周练"),
+    "heart": ("心肺", "心率", "握力", "一英里"),
+    "strength": ("硬拉多少算达标", "算达标", "算什么水平"),
+    "flexibility": ("柔韧性", "肌肉分布"),
+    "sleep": ("睡眠", "蛋白质需求", "水分需求"),
+    "body_shape": ("腰臀比", "理想体重", "该吃多少卡"),
+}
 
 
 def repos():
@@ -20,19 +51,114 @@ class QaSkill(Skill):
                    "营养", "增肌", "减脂", "代谢", "激素", "运动科学",
                    "科学", "原理", "机制", "恢复")
 
+    # W3 辟谣知识块（业务规则知识，不进数据包）：结论 + 原理一句话，禁医疗建议口吻。
+    # 与 guard 分工：谣言→qa 知识；症状→guard 安全。具体条目在前，泛化兜底在后。
+    _MYTH_KB = (
+        {"keys": ("暴汗服",), "name_zh": "暴汗服不是瘦得快",
+         "summary": "暴汗服只是多出汗（水分流失），不减脂；脂肪靠热量缺口消耗，"
+                    "穿它运动反而易脱水，注意补水。"},
+        {"keys": ("束腰带", "束腰"), "name_zh": "束腰带不瘦腰",
+         "summary": "束腰只是物理收紧外观，不改变皮下脂肪；长期勒紧还可能影响呼吸与核心发力。"},
+        {"keys": ("左旋肉碱", "左旋"), "name_zh": "左旋肉碱不是减肥神器",
+         "summary": "左旋肉碱帮脂肪转运，但运动中能否提质增量证据不足；不运动时吃它不会瘦。"},
+        {"keys": ("局部减脂", "瘦肚子", "瘦哪"), "name_zh": "局部减脂不存在",
+         "summary": "脂肪消耗是全身性的，卷腹练不瘦肚子；要靠总热量缺口+全身训练降低体脂。"},
+        {"keys": ("排毒", "出汗"), "name_zh": "出汗不等于排毒",
+         "summary": "汗液中绝大部分是水，代谢废物主要由肝肾处理；出汗多少和训练效果没有直接关系。"},
+        {"keys": ("脂肪变肌肉", "肌肉变脂肪", "练成肌肉", "脂肪变", "变成脂肪", "掉肌肉"),
+         "name_zh": "脂肪与肌肉不可互变",
+         "summary": "这是两种不同组织，不存在转化；停训掉的是肌肉，胖是额外热量堆积。"},
+        {"keys": ("emo", "一周没练", "一周不想", "情绪化"),
+         "name_zh": "emo/短暂情绪低谷不会掉肌肉",
+         "summary": "几天心情不好停练消耗的是训练状态，不是肌肉本身；恢复规律训练"
+                    "后会很快找回。情绪自我照顾优先，别用'掉肌肉'吓自己。"},
+        {"keys": ("摆烂", "半个月", "停练", "很久没练", "一个月没练"),
+         "name_zh": "停练/摆烂不会让肌肉变脂肪",
+         "summary": "停练掉的肌肉是缺刺激，不会'变成脂肪'；恢复时别急着追重量，"
+                    "按原强度的 60-70% 起步、逐周加量（肌肉记忆会帮你较快恢复）。"},
+        {"keys": ("斜方", "溜肩"),
+         "name_zh": "正常训练不会把斜方练得过大",
+         "summary": "斜方参与推举/划船等复合动作，但只有大重量孤立刺激叠加增肌"
+                    "负荷才会明显变大；'越练越大'多为耸肩/体态错觉，先检查发力姿势。"},
+        {"keys": ("晚上", "八点", "夜宵"), "name_zh": "晚上吃不是直接长膘",
+         "summary": "总摄入＞消耗才会胖，和几点吃关系不大；睡前进食主要影响睡眠和消化。"},
+        {"keys": ("30分钟", "黄金窗口"), "name_zh": "不存在苛刻的30分钟黄金窗口",
+         "summary": "练后及时吃够蛋白质有益恢复，但并非超过30分钟就白练；全天总蛋白更关键。"},
+        {"keys": ("空腹有氧",), "name_zh": "空腹有氧并不减脂翻倍",
+         "summary": "空腹运动时脂肪供能比例略升，但全天总热量消耗相近；易低血糖者不建议空腹大强度。"},
+        {"keys": ("女生练胸", "越练越小"), "name_zh": "女生练胸不会越练越小",
+         "summary": "胸部主要是脂肪组织，练胸强化的是下方胸肌，视觉更挺；掉胸通常是因为减脂。"},
+        {"keys": ("膝盖", "脚尖"), "name_zh": "膝盖可超过脚尖",
+         "summary": "深蹲膝盖过不过脚尖取决于躯干与腿长比例，不是铁律；关键是重心稳定、无痛。"},
+        {"keys": ("筋膜枪"), "name_zh": "筋膜枪不瘦双下巴",
+         "summary": "筋膜枪放松肌肉，脂肪堆积不会因震动减少；颈部使用务必避开气管与动脉。"},
+        {"keys": ("激素鸡", "激素"), "name_zh": "正规渠道鸡肉没有激素问题",
+         "summary": "国家明令禁止养殖添加激素，正规超市/检疫过的鸡肉可正常吃。"},
+        {"keys": ("蛋白粉", "肾"), "name_zh": "正常摄入蛋白粉不伤肾",
+         "summary": "健康成年人按体重适量补蛋白（约1.6-2.2g/kg）无需担心伤肾；"
+                    "已有肾脏疾病者请遵循医嘱。"},
+        {"keys": ("拉伸", "长高"), "name_zh": "拉伸不改变骨骼长度",
+         "summary": "成年后骨骼定型，拉伸改善的是柔韧与体态，长高基本无望（22岁更无）。"},
+        {"keys": ("姨妈期", "例假", "月经"), "name_zh": "经期不必完全停练",
+         "summary": "多数人经期可做中低强度训练（如散步/瑜伽），尽量避开腹部大强度与冰冷大重量；"
+                    "有明显不适则休息，听身体。"},
+    )
+
     def execute(self, ctx, params) -> SkillResult:
-        ex, fr = repos()
         query = str(params.get("query", "")).strip()
         kind = params.get("kind")
+        if kind == "profile":
+            return self._profile(ctx, query)          # 档案查询：读会话档案，不检索
+        # W3 辟谣知识块：谣言/智商税类问法优先命中，直接给结论（不落空检索）
+        myth = self._myth_hit(query)
+        if myth:
+            return SkillResult(ok=True, data={"items": [myth], "myth": True},
+                               provenance=["qa#myth_kb"])
+        # W3 R6 兜底：复合目标句（"倒三角+腹肌+半马"）意图可能落 qa（无强信号）→
+        # 委托 teach 的复合目标拆解块，避免空检索
+        from app.skills.teach_skill import TeachSkill
+        goal = TeachSkill._goal_hit(query)
+        if goal:
+            return SkillResult(ok=True,
+                               data={"items": [{"kind": "复合目标编排", **goal}]},
+                               provenance=["qa#goal_kb"])
+        ex, fr = repos()
         if kind == "food" or (kind != "exercise" and self._sounds_food(query)):
-            res = self._foods(fr, query)
+            res = self._foods(ctx, fr, query)
         else:
-            res = self._exercises(ex, query)
+            res = self._exercises(ctx, ex, query)
         if res.ok and res.data.get("items"):
             self._rag_science(res.data["items"], query)
         return res
 
-    def _foods(self, fr, query: str) -> SkillResult:
+    @classmethod
+    def _myth_hit(cls, query: str) -> dict | None:
+        """谣言/智商税知识块命中（具体条目在前，泛化兜底判断在后）。"""
+        for kb in cls._MYTH_KB:
+            if any(k in query for k in kb["keys"]):
+                return {"name": "健身辟谣", "name_zh": kb["name_zh"],
+                        "summary": kb["summary"]}
+        return None
+
+    def _profile(self, ctx, query: str = "") -> SkillResult:
+        """档案查询（"我的身体数据/肌肉量多少"）：直接回答会话档案，未建档如实提示；
+        W1 增强：问到档案未记录的身体指标 → 如实说明未记录 + 列出已记录项，绝不硬编。"""
+        p = dict(getattr(ctx, "profile", None) or {})
+        if not p:
+            return SkillResult(ok=True, data={"items": [], "empty": True,
+                                              "reason": "尚未建立身体档案，请先建档"},
+                               provenance=["qa#session.profile"])
+        label = {"sex": "性别", "age": "年龄", "height_cm": "身高cm",
+                 "weight_kg": "体重kg", "goal": "目标", "activity": "活动系数"}
+        items = [{"name": zh, "value": p[k]} for k, zh in label.items() if k in p]
+        # W1：档案未记录指标 → 如实说明（如 FFMI/体脂/训练年限需体测仪数据）
+        missing = _PROFILE_MISSING_HINT.get(_detect_profile_field(query))
+        if missing:
+            items.append({"name": "档案未记录", "value": missing})
+        return SkillResult(ok=True, data={"items": items, "profile": p},
+                           provenance=["qa#session.profile"])
+
+    def _foods(self, ctx, fr, query: str) -> SkillResult:
         items = []
         # 整句无命中时，回退到抽取具体食物词（"鸡胸肉蛋白质多少"→"鸡胸"），
         # 优于泛化的营养素词"蛋白质"
@@ -46,6 +172,9 @@ class QaSkill(Skill):
                         key=len, reverse=True)
             if kw:
                 search = kw[0]
+        # W5：图谱 approved 别名优先（"蛋白质粉"→"蛋白粉"）
+        from app.core.graphalias import graph_alias_for
+        search = graph_alias_for(search, "food") or search
         for f in fr.search(search, limit=5):
             p = f.get("per_100g") or {}
             items.append({
@@ -57,6 +186,21 @@ class QaSkill(Skill):
                 "source": f.get("source"),
             })
         if not items:
+            # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱
+            adopted, hits = self._normalize_fallback(ctx, query, "food",
+                                                     lambda q: fr.search(q, limit=5))
+            if adopted:
+                for f in hits:
+                    p = f.get("per_100g") or {}
+                    items.append({
+                        "name": f.get("name_zh") or f.get("name"),
+                        "per_100g": {"calories_kcal": p.get("calories_kcal"),
+                                     "protein_g": p.get("protein_g"),
+                                     "fat_g": p.get("fat_g"),
+                                     "carbs_g": p.get("carbs_g")},
+                        "source": f.get("source"),
+                    })
+        if not items:
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "reason": "未检索到食物"},
                                provenance=["qa#foods_repo.search"])
@@ -64,10 +208,26 @@ class QaSkill(Skill):
         return SkillResult(ok=True, data={"items": items},
                            provenance=src[:3])
 
-    def _exercises(self, ex, query: str) -> SkillResult:
+    @staticmethod
+    def _normalize_fallback(ctx, query: str, purpose: str, retry):
+        """空结果兜底：LLM 归一化 → 重检索 → 写回图谱 + audit 留痕。
+        无 LLM/校验失败 → (False, [])，调用方走原 empty 分支（行为不变）。"""
+        try:
+            from app.core.llm import build_provider
+            from app.core.normalize import Normalizer
+            adopted, hits = Normalizer(build_provider()).attempt(
+                ctx, query, purpose, retry)
+            return adopted, hits
+        except Exception:
+            return False, []
+
+    def _exercises(self, ctx, ex, query: str) -> SkillResult:
         # 中文检索已下沉 exercise_repo.search_zh（qa/teach 单源）：
         # 复合切分+修饰剥离+别名归一+双向匹配，装配期预计算归一名。
-        matched = ex.search_zh(query, limit=5)
+        # W5：图谱 approved 别名优先（静态 NAME_ALIASES 退居降级位）
+        from app.core.graphalias import graph_alias_for
+        q = graph_alias_for(query, "exercise") or query
+        matched = ex.search_zh(q, limit=5)
         items = []
         for e in matched:
             sug = e.get("suggested") or {}
@@ -77,6 +237,20 @@ class QaSkill(Skill):
                           "equipment": e.get("normalized_equipment"),
                           "sets": sug.get("sets"), "reps": sug.get("reps"),
                           "rest_sec": sug.get("rest_sec")})
+        if not items:
+            # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱
+            adopted, hits = self._normalize_fallback(
+                ctx, query, "exercise",
+                lambda q: ex.search_zh(q, limit=5))
+            if adopted:
+                for e in hits:
+                    sug = e.get("suggested") or {}
+                    items.append({"id": e["id"], "name_zh": e.get("name_zh"),
+                                  "difficulty": e.get("difficulty"),
+                                  "pattern": e.get("movement_pattern"),
+                                  "equipment": e.get("normalized_equipment"),
+                                  "sets": sug.get("sets"), "reps": sug.get("reps"),
+                                  "rest_sec": sug.get("rest_sec")})
         if not items:
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "reason": "未检索到动作"},

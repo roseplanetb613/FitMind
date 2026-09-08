@@ -33,7 +33,13 @@ _RULES = [
       "上下肢", "上下分化", "全身分化", "分化训练", "分化方案",
       "怎么分化", "如何分化", "五分化", "双分化", "单分化", "三分化",
       "推拉", "推拉腿蹲", "全身训练", "怎么分", "如何分",
-      "几天练", "练几天", "一周练"), "teach",
+      "几天练", "练几天", "一周练",
+      # W3 R6：复合目标问法（倒三角+腹肌+半马 怎么排/冲突吗）→ teach 编排知识
+      "怎么排", "怎么兼顾", "冲突吗", "冲突"), "teach",
+     lambda t, kw: {"query": t}),
+    # W4：#64 '出来多久腹肌练能' 被 LLM 误投 plan → "多久" qa 强信号 L0 短路。
+    # 放 progress 行之前（reversed 时 progress 先查），不抢"下一组休息多久"。
+    (("多久",), "qa",
      lambda t, kw: {"query": t}),
     (("下一组", "加重量", "减重量", "加几公斤", "减载"), "progress",
      lambda t, kw: {"query": t}),
@@ -44,7 +50,53 @@ _RULES = [
     (("你好", "您好", "hi", "hello", "嗨", "你是谁", "你叫什么",
       "谢谢", "再见", "拜拜"), "smalltalk",
      lambda t, kw: {"topic": t}),
+    # 档案查询（CLI 实证："我的身体数据"被 LLM 误投 plan）：走 qa 的 profile 分支，
+    # 直接读会话档案，不检索动作/食物库
+    (("身体数据", "我的身体", "我的档案", "个人档案", "身体信息", "我的数据",
+      "身体情况"), "qa",
+     lambda t, kw: {"query": t, "kind": "profile"}),
+    # W1·档案查询模式（v2#161-180 误投 plan 根治）：档案名词 + 评价问法 → qa(profile)。
+    # 因 appended 在列表末尾，reversed(_RULES) 时最先命中，先于 plan 截胡。
+    (("我的肌肉量", "肌肉量多少", "体脂多少", "体脂百分", "内脏脂肪", "训练容量",
+      "练了什么", "昨天练", "上周练", "恢复能力", "柔韧性", "训练年限",
+      "基础代谢", "骨量", "握力", "心肺功能", "肌肉分布", "腰臀比", "一英里",
+      "FFMI", "ffmi", "bmr", "理想体重", "蛋白质需求", "水分需求",
+      "训练强度该", "该吃多少卡", "吃够了吗", "我的身高体重", "硬拉多少算达标",
+      "算达标", "算正常", "算快吗", "算什么水平", "健康吗"), "qa",
+     lambda t, kw: {"query": t, "kind": "profile"}),
+    # W1·跨域请求 → smalltalk 引导（v2#52 写周报被当 plan）
+    (("写周报", "周报", "讲笑话", "冷笑话", "打游戏", "买房子", "买房", "哪套房值得买",
+      "会下棋", "股票", "写代码"), "smalltalk",
+     lambda t, kw: {"topic": t}),
+    # W1·辟谣/评价类问法 → qa（禁 plan；"是不是/有用吗/对吧"类常被 LLM 误判 plan）
+    (("是不是", "真的吗", "有用吗", "靠谱吗", "好吗", "对不对", "对吧",
+      "智商税", "能瘦吗", "有效吗", "会不会", "可以吗", "瘦肚子", "掉秤"), "qa",
+     lambda t, kw: {"query": t}),
 ]
+
+# W2 指代消解：领域实体词（动作/食物/肌群/编排）命中说明有明确指代，不触发澄清
+_ENTITY_HINT = ("深蹲", "硬拉", "卧推", "推举", "划船", "引体", "俯卧撑", "弯举",
+                "箭步", "蹲", "拉", "推", "举", "卷腹", "平板", "臀", "胸", "背",
+                "肩", "腿", "腹", "肱", "三角", "蛋白", "鸡胸", "鸡蛋", "牛奶",
+                "牛肉", "鱼", "米饭", "碳水", "脂肪", "卡路里", "热量", "食物",
+                "训练计划", "课表", "分化", "一周", "公里", "分钟",
+                # W2 补充：具体器械实体（防"壶铃那个"被当指代；"器械/动作"等类别
+                # 词不加——"那个器械叫什么名字"应触发指代澄清）
+                "杠铃", "哑铃", "壶铃", "绳索", "弹力带")
+
+# W2 指代消解词表（_is_vague_reference 用）：句含任一且无领域实体 → 规则级 clarify。
+# R4 实证：#99 还要继续吗 / #92 能不能换一种 / #83 一天做几个 / #98 帮我看看对不对。
+# 与 _ENTITY_HINT 配合：含实体（"继续深蹲""做几个卧推"）→ 放行。
+_REFERENCE_WORDS = ("这个", "那个", "它", "这样", "上次", "随便",
+                    "继续", "换一种", "换一个", "几个", "几组", "多少组", "对不对")
+
+
+def _is_vague_reference(t: str) -> bool:
+    """句首/句中含指代词（这个/那个/它/这样/上次/继续/换一种/几个…）且无领域实体词
+    → 纯指代、缺上下文，应规则级 clarify（不硬答、不经 LLM）。"""
+    if not any(k in t for k in _REFERENCE_WORDS):
+        return False
+    return not any(k in t for k in _ENTITY_HINT)
 
 
 class LLMProvider(ABC):
@@ -66,6 +118,12 @@ class LLMProvider(ABC):
     def render(self, structured: dict, tone: str = "coach") -> str:
         """把结构化结果渲染成自然语言。"""
 
+    def normalize(self, text: str, purpose: str) -> dict | None:
+        """LLM 归一化（兜底路径用）：长尾原句 → 高频标准说法。
+        返回 {"standard_text","confidence","evidence","dropped"} 或 None（无法改写）。
+        抽象基类默认降级：子类未实现 = 不可用（上层按 None 静默走原逻辑）。"""
+        return None
+
 
 class StubProvider(LLMProvider):
     """规则实现：分类/计划/渲染全确定，供测试与无 LLM 环境。"""
@@ -83,6 +141,15 @@ class StubProvider(LLMProvider):
         if len(t) <= 1 or all(ch in "啊嗯哦哈诶嘿呀嘛吧呢？?。！! " for ch in t):
             return Classification("smalltalk", {"topic": t}, confidence=1.0)
         p = t.lower()
+        # 安全红线：guard 症状词绝对优先于一切规则（防 W1 评价类规则误吞症状问法）。
+        # 注意 reversed(_RULES) 中新规则（放末尾者优先）含"可以吗/会不会"等宽词，
+        # 必须先于此检查症状信号。
+        if any(k in p or k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA):
+            return Classification("guard", {"signal": t}, confidence=1.0)
+        # W2 指代消解：无领域实体的纯指代问法 → 规则级 clarify（不经 LLM，不硬答）
+        if _is_vague_reference(t):
+            return Classification("fallback", {}, confidence=0.3,
+                                  needs_clarify=True)
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
                 # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
@@ -205,7 +272,8 @@ class DeepSeekProvider(LLMProvider):
         self.model_name = model
         # llm_config.models 分角色指定模型（classify/plan/render），缺省统一回退 model。
         # 显式收紧 timeout/重试：分类/渲染任何失败本就有规则兜底，不吃 SDK 默认长重试。
-        role_models = {"classify": model, "plan": model, "render": model}
+        role_models = {"classify": model, "plan": model, "render": model,
+                       "normalize": model}
         role_models.update({k: v for k, v in (models or {}).items() if v})
         self._models = {
             role: ChatOpenAI(model=name, api_key=self.key, base_url=self.BASE_URL,
@@ -260,6 +328,8 @@ class DeepSeekProvider(LLMProvider):
                  "few-shot 锚点：'练三休一怎么分'→teach；'帮我制定一周计划'→plan；"
                  "'胸口有点闷'→guard；'下一组加几公斤'→progress；'你是谁'→smalltalk；"
                  "'鸡胸肉蛋白质多少'→qa。"
+                 "若语句不通顺/语序明显混乱/看不出意图（例如'出来多久腹肌练能'），"
+                 "必须选 unknown 并给低 confidence，不要硬猜成 plan 或其它意图。"
                  "若实在无法判断，选 unknown 并给低 confidence，不要乱猜。"
                  "evidence 必须是你从用户原句中看到并逐字截取的片段，禁止编造。")
         try:
@@ -328,13 +398,54 @@ class DeepSeekProvider(LLMProvider):
                  "下一步指引（如'请先在设置中完善身体信息后再试'），不要臆造成'没找到相关内容'；"
                  "5) structured.title 是任务类别标签（如'动作教学''知识问答''训练计划'），"
                  "不是用户查询的关键词；严禁在回答里出现'与XXX相关'这类把 title 当查询词"
-                 "的措辞，回答应围绕 data.items 的实际内容或 empty/reason 字段组织。")
+                 "的措辞，回答应围绕 data.items 的实际内容或 empty/reason 字段组织。"
+                 "6) 禁止提及实现细节：严禁出现'结构化''字段''data''items''JSON''数组'"
+                 "'为空'这类措辞——你是在跟用户说话，不是在描述数据；检索为空就自然地说"
+                 "'没有找到相关内容'并给换词建议。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),
                  ("user", json.dumps(structured, ensure_ascii=False))]).content)
         except Exception:
             return self._fallback.render(structured, tone)
+
+    # ---- 归一化（W3：检索链兜底；W4：意图链兜底） ----
+
+    def normalize(self, text: str, purpose: str) -> dict | None:
+        """长尾原句 → 高频标准说法（仅同义替换/提炼，禁止扩写）。
+        purpose: intent|exercise|food。返回 JSON 规范化产物或 None（任何失败）。"""
+        self.calls.append("normalize")
+        sys_p = ("你是 FitMind 的中文健身术语归一化器。把口语长尾说法改写为"
+                 "健身库里的高频标准说法或规范化中文词（如'蛋白质粉'→'蛋白粉'）。"
+                 "硬性约束："
+                 "1) 只允许同义替换与提炼，禁止扩写、禁止补充原句没有的信息；"
+                 "2) 禁止删除或软化症状/否定语义：原句含'疼''痛''晕''麻''酸''胀'等"
+                 "症状字或'不''别''不敢'等否定，改写后必须原样保留；"
+                 "3) 输出 JSON：{\"standard_text\":\"改写结果\",\"confidence\":0~1,"
+                 "\"evidence\":\"逐字抄取自原句的核心片段\",\"dropped\":[\"被剥离的修饰词\"]}；"
+                 "4) 改不出高频说法就返回 {\"standard_text\":null, \"confidence\":0,"
+                 "\"evidence\":\"\",\"dropped\":[]}，绝不许硬编；"
+                 "5) evidence 必须逐字摘自原句，禁止编造。")
+        purpose_guide = {"intent": "本任务是意图归类用，保持原句语义中心词",
+                         "exercise": "本任务是动作库检索用，改写成动作名（如'练胸'→'卧推'）",
+                         "food": "本任务是食物检索用，改写成食材名（如'蛋白质粉'→'蛋白粉'）"}.get(
+                             purpose, "")
+        user = f"purpose={purpose}。{purpose_guide} 原句：{text}"
+        try:
+            data = self._invoke_json(sys_p, user, "standard_text",
+                                     llm=self._models["normalize"])
+            std = data.get("standard_text")
+            if not std:
+                return None                        # 改不出来 → 上层走原逻辑
+            ev = data.get("evidence") or ""
+            if ev and str(ev) not in text:
+                raise ValueError(f"evidence 不在原句（幻觉）: {ev!r}")
+            return {"standard_text": str(std),
+                    "confidence": float(data.get("confidence") or 0.0),
+                    "evidence": ev,
+                    "dropped": list(data.get("dropped") or [])}
+        except Exception:
+            return None
 
 
 # ---------------------------------------------------------------- 工厂

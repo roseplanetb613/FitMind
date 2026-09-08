@@ -1,4 +1,4 @@
 {
   "provider": "auto",
-  "models": { "classify": "deepseek-chat", "plan": "deepseek-chat", "render": "deepseek-chat" }
+  "models": { "classify": "deepseek-chat", "plan": "deepseek-chat", "render": "deepseek-chat", "normalize": "deepseek-chat" }
 }

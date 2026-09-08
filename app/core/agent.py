@@ -38,6 +38,9 @@ class Agent:
         sess = self.sessions.get(session_id) if session_id else None
         if sess is None:
             sess = self.sessions.create(session_id)
+        # 记忆图谱单向投影：图谱 current 态为真相源（v1 单用户），
+        # 新会话建档/记忆变更后投影回会话缓存（写只写图谱，读投影重建）
+        self._project_memory_profile(sess)
         # 无 checkpointer（默认）：每轮独立 invoke，不传 thread 配置——
         # 挂了检查点才会按 thread 累积 state（内存随轮次只增不减）。
         state_in = {"session_id": sess.id, "message": message,
@@ -63,13 +66,36 @@ class Agent:
                             guard=result.get("guard_data"))
 
     # ------------------------------------------------------------ 建档
+    @staticmethod
+    def _project_memory_profile(sess: Session) -> None:
+        """记忆图谱 current 态 → 会话 profile 单向投影（写只写图谱，读投影重建）。
+        图谱不可用/无记忆 → 保持会话现状（降级链不变）。"""
+        try:
+            from app.graph.memory import MEMORY_USER_ID, MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                return
+            p = m.current_profile(MEMORY_USER_ID)
+            if p:
+                sess.profile.update(p)
+        except Exception:
+            pass
+
     def update_profile(self, session_id: str, profile: dict) -> dict:
-        """合并更新会话档案（未传字段保留）；非法字段抛 ValueError（details 列表）。"""
+        """合并更新会话档案（未传字段保留）；非法字段抛 ValueError（details 列表）。
+        记忆图谱为真相源：写路径写图谱（v1 单用户），会话缓存为投影。"""
         errors = validate_profile(profile)
         if errors:
             raise ValueError("; ".join(errors))
         sess = self.sessions.get(session_id) or self.sessions.create(session_id)
         sess.profile.update(profile)
+        try:
+            from app.graph.memory import MEMORY_USER_ID, MemoryStore
+            m = MemoryStore.get()
+            if m is not None:
+                m.upsert_profile(MEMORY_USER_ID, dict(sess.profile))
+        except Exception:
+            pass                                   # 图谱不可用 → 会话独立建档（现状）
         return dict(sess.profile)
 
     def get_profile(self, session_id: str) -> dict | None:

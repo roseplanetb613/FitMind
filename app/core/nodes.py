@@ -114,7 +114,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
                 r = _call_skill(state, c["skill"], c["params"], "plan_exec")
                 observations.append({"step": c["step_id"], "skill": c["skill"],
                                      "ok": r.ok, "data": r.data,
-                                     "error": r.error})
+                                     "error": r.error,
+                                     "provenance": r.provenance})
             out["observations"] = observations
         return out
 
@@ -130,7 +131,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             r = _call_skill(state, c["skill"], c["params"], "rewoo")
             return {"observations": [{"step": c["step_id"], "skill": c["skill"],
                                       "ok": r.ok, "data": r.data,
-                                      "error": r.error}]}
+                                      "error": r.error,
+                                      "provenance": r.provenance}]}
         return step
 
     # ---------------- aggregate（PlanExec/ReWOO 汇合 + ReAct 结算） ----------------
@@ -156,6 +158,9 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         # 失败：透传首个失败观测的具体原因（如 plan 缺档案字段），不泛化
         err = next((o["error"] for o in obs if not o["ok"]), None)
         prov = [f"{o['skill']}:{o['step']}" for o in obs]
+        # 技能级 provenance 透传合并（如 memory#preference），不丢留痕
+        for o in obs:
+            prov.extend(p for p in (o.get("provenance") or []) if p not in prov)
         return {"outcome": {"ok": ok, "data": last, "provenance": prov,
                             "error": err, "_observations": obs},
                 "provenance": prov}

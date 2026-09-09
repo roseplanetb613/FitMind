@@ -200,6 +200,9 @@ def _goal(text: str) -> dict | None:
 
 def _diet_preference(text: str) -> dict | None:
     """'我喜欢清淡/不吃辣' → preference(about=None)，多命中 '、' 合并（同槽替换）。"""
+    # 否定/厌恶语境整句否决（"我不想吃辣/我讨厌吃辣"不抽正向偏好，宁缺毋滥）
+    if any(k in text for k in ("不想", "讨厌", "不喜欢", "别给我", "不要")):
+        return None
     hits = [k for k in _DIET_PREF_KW if k in text]
     if "不吃辣" in hits and "吃辣" in hits:
         hits.remove("吃辣")                     # 否定优先，防"不吃辣"抽成"吃辣"

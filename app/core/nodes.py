@@ -2,6 +2,8 @@
 """LangGraph 节点（闭包工厂）：guard/classify/execute/plan/aggregate/think/act/
 validate/render。全部复用现有领域层：skills、runtime.validator、router。"""
 from __future__ import annotations
+import json
+import re
 from app.core.router import Mode, RouteClassifier, route
 from app.skills.base import ExecutionContext, SkillResult
 from app.runtime.validator import RuleValidator
@@ -202,6 +204,17 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             reply = llm.render(structured)
         except Exception:
             reply = _render_fallback(structured)
+        # N-11：LLM 幻觉身体数字（与档案/structured 矛盾）→ 降级确定性渲染。
+        # 无条件校验（不按 is_stub 门控）：stub 渲染输出逐字来自 structured，
+        # 同量纲数字必在授权集内，校验为空操作；而固定文本测试替身继承
+        # is_stub=True 却在模拟真实 LLM 幻觉，门控会放行幻觉。
+        if _reply_fake_numbers(
+                reply, _auth_numbers(structured, state.get("profile"))):
+            reply = _render_fallback(structured)
+        # O-4：ack 必达——LLM 吞掉时代码级补前缀（不依赖提示词自觉）
+        acks = structured.get("memory_ack") or []
+        if acks and "已记下" not in reply:
+            reply = "已记下：" + "、".join(acks) + "\n\n" + reply
         return {"reply": reply}
 
     nodes = {"guard": guard, "guard_route": guard_route,
@@ -224,6 +237,44 @@ def _log_intent_miss(message: str, task_type: str, confidence: float) -> None:
         LogStore().log_miss(message, guessed=task_type, confidence=confidence)
     except Exception:
         pass
+
+
+# ---- N-11 身体数字幻觉校验：reply 中带身体量纲的数字必须有出处（profile/structured） ----
+_UNIT_CLASS = {"公斤": "kg", "千克": "kg", "kg": "kg", "斤": "kg",
+               "厘米": "cm", "cm": "cm", "岁": "yr"}
+_NUM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(公斤|千克|kg|斤|厘米|cm|岁)", re.I)
+
+
+def _auth_numbers(structured: dict, profile: dict) -> set[tuple[str, float]]:
+    """授权数字集（单位类, 值）：profile 三围 + structured 文本内同量纲数字。"""
+    out: set[tuple[str, float]] = set()
+
+    def add(cls, v):
+        try:
+            out.add((cls, round(float(v), 1)))
+        except (TypeError, ValueError):
+            pass
+
+    p = profile or {}
+    add("kg", p.get("weight_kg"))
+    add("cm", p.get("height_cm"))
+    add("yr", p.get("age"))
+    for m in _NUM_RE.finditer(json.dumps(structured, ensure_ascii=False)):
+        cls = _UNIT_CLASS[m.group(2).lower()]
+        v = float(m.group(1)) / (2 if m.group(2) == "斤" else 1)
+        out.add((cls, round(v, 1)))
+    return out
+
+
+def _reply_fake_numbers(reply: str, auth: set[tuple[str, float]]) -> list[str]:
+    """reply 中带身体量纲且无出处的数字（幻觉证据）；空=干净。"""
+    fake = []
+    for m in _NUM_RE.finditer(reply or ""):
+        cls = _UNIT_CLASS[m.group(2).lower()]
+        v = round(float(m.group(1)) / (2 if m.group(2) == "斤" else 1), 1)
+        if (cls, v) not in auth:
+            fake.append(m.group(0))
+    return fake
 
 
 def _render_fallback(structured: dict) -> str:

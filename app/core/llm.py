@@ -509,7 +509,8 @@ class DeepSeekProvider(LLMProvider):
                  "的措辞，回答应围绕 data.items 的实际内容或 empty/reason 字段组织。"
                  "6) 禁止提及实现细节：严禁出现'结构化''字段''data''items''JSON''数组'"
                  "'为空'这类措辞——你是在跟用户说话，不是在描述数据；检索为空就自然地说"
-                 "'没有找到相关内容'并给换词建议。")
+                 "'没有找到相关内容'并给换词建议。"
+                 "7) 仅当结构化结果含非空 memory_ack 数组时，才在回答开头逐字输出\'已记下：\'加各元素（中文顿号连接）；若 memory_ack 为缺省/空数组，禁止出现\'已记下\'字样，也不要从 data.items 中的\'训练记录\'/\'偏好\'等条目名称推断出\'已记下\'——查询/读取不是写入。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),

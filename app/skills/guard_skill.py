@@ -2,7 +2,8 @@
 """风险守卫：规则拦截最优先，任何模式不得绕过。非诊断提示。"""
 from __future__ import annotations
 from app.skills.base import Skill, SkillResult
-from app.core.vocab import GUARD_SYMPTOMS, GUARD_SIGNAL_EXTRA
+from app.core.vocab import (GUARD_SYMPTOMS, GUARD_SIGNAL_EXTRA,
+                               is_pure_soreness)
 from app.core.llm import _is_minor_context, _is_intensity_context
 import screening
 
@@ -209,6 +210,14 @@ class GuardSkill(Skill):
                                data={"blocked": False, "level_label": "green",
                                      "advice": "", "blocks": []},
                                provenance=["guard#proxy.other"])
+        # N-4 纯酸痛(DOMS)放行（T7 2026B）：guard 节点无条件前置，classify 的
+        # is_pure_soreness 来不及生效——这里同源判定，纯酸（无其他症状/EXTRA 词）
+        # 交 direct/qa 科普；"酸+疼/腰酸/酸+能不能练/酸痛药膏" 仍走下方硬拦。
+        if is_pure_soreness(signal):
+            return SkillResult(ok=True,
+                               data={"blocked": False, "level_label": "yellow",
+                                     "advice": "", "blocks": []},
+                               provenance=["guard#doms.pure"])
         # D6 2026B 症状疑问句（"我膝盖疼吗/我之前膝盖不是疼吗"）：是查询/回忆
         # 不是症状自报 → 不硬拦，交 direct/qa（T9-10/12；本户无 active injury 前提）
         if (_re.search(r"(?:疼|痛|酸|胀|麻|晕|难受|紧)\s*吗", signal)

@@ -312,17 +312,44 @@ class MemoryStore:
 
     # ------------------------------------------------------- 事件与计划
     def register_plan(self, user_id: str, plan_id: str,
-                      content_hash: str) -> bool:
+                      content_hash: str,
+                      content: dict | None = None) -> bool:
         _validate_user_id(user_id)
         try:
             with self._g._driver.session(database=self._g._database) as s:
                 s.run(
                     "MERGE (pv:PlanVersion {plan_id: $pid, user_id: $uid}) "
-                    "ON CREATE SET pv.content_hash = $ch, pv.created_at = $now",
-                    pid=plan_id, uid=user_id, ch=content_hash, now=self._now())
+                    "ON CREATE SET pv.content_hash = $ch, pv.created_at = $now, "
+                    "pv.content = $content",
+                    pid=plan_id, uid=user_id, ch=content_hash, now=self._now(),
+                    content=(json.dumps(content, ensure_ascii=False)
+                             if content is not None else None))
             return True
         except Exception:
             return False
+
+    def latest_plan(self, user_id: str) -> dict | None:
+        """最新计划版本（只读）：content JSON 还原；无 → None。"""
+        _validate_user_id(user_id)
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                r = s.run(
+                    "MATCH (pv:PlanVersion {user_id: $uid}) "
+                    "RETURN pv.plan_id AS pid, pv.content AS content, "
+                    "pv.created_at AS created "
+                    "ORDER BY pv.created_at DESC LIMIT 1",
+                    uid=user_id).single()
+                if r is None:
+                    return None
+                content = r["content"]
+                try:
+                    content = json.loads(content) if content else None
+                except Exception:
+                    pass
+                return {"plan_id": r["pid"], "content": content,
+                        "created_at": r["created"]}
+        except Exception:
+            return None
 
     def log_event(self, user_id: str, type_: str, payload: dict,
                   occurred_at: str | None = None,

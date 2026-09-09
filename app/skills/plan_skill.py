@@ -20,7 +20,7 @@ def _register_plan(plan: dict, user_id: str) -> None:
             json.dumps(plan, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()[:16]
         m.register_plan(user_id, f"plan-{uuid.uuid4().hex[:8]}",
-                        content_hash)
+                        content_hash, content=plan)
     except Exception:
         pass
 

@@ -22,6 +22,10 @@ _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六
                ("今天", 0))
 _EVENT_VERB = ("练了", "练", "做了", "跑了", "练过")
 
+_EVENT_SPLIT = re.compile(r"[+，、和,\s]+")
+_SETS_RE = re.compile(r"(\d{1,2})\s*[xX×*]\s*(\d{1,3})")
+
+
 _QUESTION = ("怎么", "吗", "?", "？", "啥", "为什么", "能不能", "可以吗",
              "行不行", "应该", "要不要")
 
@@ -152,20 +156,42 @@ def _preference(text: str) -> dict | None:
 
 
 def _event(text: str) -> dict | None:
-    """'昨天我练了腿' → Event 补录（occurred<recorded）。"""
+    """'昨天我练了腿'/'前天练的腿+悬垂举腿4x8 弯举4*10' -> checkin 补录。
+    混合存储：归一命中（无空格干净名）存 name，否则存 raw=用户原词保底（宁丢结构不丢信息）；组次可解析即带。
+    注：search_zh 对绝大多数输入返回带空格复合名（如 '腿'→'摆臂 悬垂 屈膝 腿'），
+    存 raw 更保真；仅当归一为无空格单一名时才存 name。"""
     verb_hit = next((v for v in _EVENT_VERB if v in text), None)
     if verb_hit is None:
         return None
     time_hit = next(((n, d) for n, d in _EVENT_HINT if n in text), None)
     if time_hit is None:
         return None
-    # 归一动作（否则宁缺毋滥）
-    seg = text.split(verb_hit)[-1] if verb_hit in text else text
-    name = _norm_exercise(seg.strip(" ，。的"))
+    seg = text.split(verb_hit)[-1]
+    items: list[dict] = []
+    for part in _EVENT_SPLIT.split(seg):
+        part = part.strip(" 的了。，")
+        if not part:
+            continue
+        m = _SETS_RE.search(part)
+        namepart = _SETS_RE.sub("", part).strip(" 的了。")
+        if not namepart:
+            continue
+        it: dict = {}
+        norm = _norm_exercise(namepart)
+        if norm and " " not in norm:
+            it["name"] = norm              # 无空格干净归一名
+        else:
+            it["raw"] = namepart           # 保底：宁丢结构不丢信息
+        if m:
+            it["sets"], it["reps"] = int(m.group(1)), int(m.group(2))
+        items.append(it)
+    if not items:
+        return None
+    about = next((i["name"] for i in items if i.get("name")), None)
     today = datetime.now(timezone.utc).date()
     occurred = (today - timedelta(days=time_hit[1])).isoformat()
     return {"op": "checkin", "occurred": occurred,
-            "about": name, "verb": verb_hit}
+            "about": about, "verb": verb_hit, "items": items}
 
 
 def _name(text: str) -> dict | None:

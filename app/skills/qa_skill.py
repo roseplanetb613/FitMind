@@ -140,6 +140,8 @@ class QaSkill(Skill):
             return SkillResult(ok=True,
                                data={"items": [{"kind": "复合目标编排", **goal}]},
                                provenance=["qa#goal_kb"])
+        if any(k in query for k in self._MEAL_KW):
+            return self._meal_boundary(ctx, query)
         ex, fr = repos()
         if kind == "food" or (kind != "exercise" and self._sounds_food(query)):
             res = self._foods(ctx, fr, query)
@@ -174,8 +176,9 @@ class QaSkill(Skill):
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "reason": "尚未建立身体档案，请先建档"},
                                provenance=["qa#session.profile"])
-        label = {"sex": "性别", "age": "年龄", "height_cm": "身高cm",
-                 "weight_kg": "体重kg", "goal": "目标", "activity": "活动系数"}
+        label = {"name": "称呼", "sex": "性别", "age": "年龄",
+                 "height_cm": "身高cm", "weight_kg": "体重kg",
+                 "goal": "目标", "activity": "活动系数"}
         items = [{"name": zh, "value": p[k]} for k, zh in label.items() if k in p]
         # W1：档案未记录指标 → 如实说明（如 FFMI/体脂/训练年限需体测仪数据）
         missing = _PROFILE_MISSING_HINT.get(_detect_profile_field(query))
@@ -183,6 +186,35 @@ class QaSkill(Skill):
             items.append({"name": "档案未记录", "value": missing})
         return SkillResult(ok=True, data={"items": items, "profile": p},
                            provenance=["qa#session.profile"])
+
+    @staticmethod
+    def _diet_prefs(ctx) -> str:
+        """记忆图谱通用/饮食偏好（about 为空）→ '、'拼接；无图/无偏好/异常 → ''。"""
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                return ""
+            uid = getattr(getattr(ctx, "session", None), "user_id", "local")
+            vals = [str(r["value"]) for r in m.current(uid, "preference")
+                    if not r.get("about")]
+            return "、".join(vals)
+        except Exception:
+            return ""
+
+    def _meal_boundary(self, ctx, query: str) -> SkillResult:
+        """配餐/食谱组合请求：诚实能力边界 + 偏好引用 + 替代引导（不检索）。"""
+        items = []
+        pref = self._diet_prefs(ctx)
+        if pref:
+            items.append({"name": "你的饮食偏好", "value": pref})
+        items.append({"name": "能力边界",
+                      "value": "我暂时没有按天配餐/出食谱的能力"})
+        items.append({"name": "替代",
+                      "value": "可查单个食材每100g营养（如'鸡胸肉蛋白质多少'），"
+                               "或说'帮我制定一日减脂计划'出训练方案"})
+        return SkillResult(ok=True, data={"items": items, "boundary": True},
+                           provenance=["qa#meal_boundary"])
 
     @staticmethod
     def _profile_as_of(when: str, user_id: str = "local") -> list:
@@ -253,6 +285,9 @@ class QaSkill(Skill):
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "reason": "未检索到食物"},
                                provenance=["qa#foods_repo.search"])
+        pref = self._diet_prefs(ctx)
+        if pref:
+            items.insert(0, {"name": "你的饮食偏好", "value": pref})
         src = [f"{it['source']}:{i}{it['name']}" for i, it in enumerate(items)]
         return SkillResult(ok=True, data={"items": items},
                            provenance=src[:3])
@@ -334,7 +369,10 @@ class QaSkill(Skill):
     # 可识别为"食物提问"的全部触发词；其中 _FOOD_CONCRETE 为具体食材词，
     # 用于无命中时的搜索回退（优于"蛋白质"这类泛化营养素词）
     _FOOD_KW = ("鸡胸", "鸡蛋", "牛奶", "牛肉", "鱼", "米饭", "蛋白质",
-                "碳水", "脂肪", "卡路里", "热量", "食物")
+                "碳水", "脂肪", "卡路里", "热量", "食物",
+                # 2026-09-08 个性化：饮食组合/餐次词落 foods 分支（不再误落动作）
+                "饮食", "早餐", "午餐", "晚餐", "加餐", "吃什么", "吃啥", "吃点")
+    _MEAL_KW = ("食谱", "餐单", "配餐", "三餐")   # 组合配餐请求 → 能力边界
     _FOOD_CONCRETE = ("鸡胸", "鸡蛋", "牛奶", "牛肉", "鱼", "米饭",
                       "虾仁", "虾", "豆腐", "红薯", "燕麦", "香蕉", "苹果",
                       "牛油果", "三文鱼", "豆浆", "面条", "鸡腿", "酸奶",

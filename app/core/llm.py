@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from app.core.intent import Intent, PlannedCall
-from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS
+from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness
 
 
 @dataclass
@@ -222,6 +222,10 @@ class StubProvider(LLMProvider):
         # 安全红线：guard 症状词绝对优先于一切规则（防 W1 评价类规则误吞症状问法）。
         # 注意 reversed(_RULES) 中新规则（放末尾者优先）含"可以吗/会不会"等宽词，
         # 必须先于此检查症状信号。
+        # N-4：纯酸痛(DOMS)放行 qa 科普——置于 guard 绝对优先检查之前；
+        # conf=1.0 使路由层直接采纳，L1 语义层无机会转判 guard
+        elif is_pure_soreness(t):
+            return Classification("qa", {"query": t}, confidence=1.0)
         elif any(k in p or k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA):
             return Classification("guard", {"signal": t}, confidence=1.0)
         # F2-B 未成年×强度语境复合规则（v3 triage R2）：年龄词 ∧ 冲强度/备战语境 →

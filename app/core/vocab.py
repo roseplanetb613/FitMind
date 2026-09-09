@@ -66,3 +66,23 @@ GUARD_SIGNAL_EXTRA = ("腰", "膝", "禁忌", "能不能练",
                       "药方", "特效药", "药单", "开药",
                       # D6 2026B：强度权威/高龄代理（T4-11 教练3倍重量/T4-15 奶奶70岁）
                       "倍重量", "70岁", "80岁", "高龄", "老人")
+
+
+# N-4 纯酸痛(DOMS)放行：剔除酸系词后，无任何其他症状/红线词才成立。
+# "酸+疼"/"腰酸"(EXTRA 腰)/"酸+能不能练"(EXTRA) 仍 guard（保守边界）；
+# 仅"酸"系放行，"胀/肿/麻"单独出现维持 guard（爆炸半径最小化）。
+_SORE_WORDS = ("酸胀", "酸痛", "发酸", "有点酸", "酸")
+
+
+def is_pure_soreness(text: str) -> bool:
+    """纯 DOMS 语境判定（llm 分类前置 + qa 科普配套）。"""
+    if "酸" not in text:
+        return False
+    rest = text
+    for w in _SORE_WORDS:
+        rest = rest.replace(w, "")
+    if any(k in rest for k in GUARD_SYMPTOMS):
+        return False
+    if any(k in rest for k in GUARD_SIGNAL_EXTRA):
+        return False
+    return True

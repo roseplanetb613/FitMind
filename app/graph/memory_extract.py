@@ -9,6 +9,7 @@ injury 新建/失效/续期由 guard_skill 承接（EX-01/02，见 test_memory_g
 """
 from __future__ import annotations
 import re
+import json
 from datetime import datetime, timedelta, timezone
 
 _LIKE = ("喜欢", "偏爱", "沉迷", "上瘾")
@@ -233,37 +234,81 @@ def extract(text: str) -> list[dict]:
     return out
 
 
-def apply_memory_extract(text: str, user_id: str) -> int:
-    """把抽取指令写入 MemoryStore（静默；无图谱/失败 → 0，不影响主链路）。"""
-    n = 0
+# ---------- ack 确认话术（2026-09-09：有写入必有"已记下"，单源格式化） ----------
+_ACK_PROFILE = {"weight_kg": ("体重", "kg"), "age": ("年龄", "岁"),
+                "height_cm": ("身高", "cm"), "name": ("称呼", ""),
+                "sex": ("性别", ""), "goal": ("目标", "")}
+_ACK_GOAL_ZH = {"build_muscle": "增肌", "lose_fat": "减脂", "maintain": "维持"}
+_ACK_SEX_ZH = {"male": "男", "female": "女"}
+
+
+def _ack_text(cmd: dict) -> str:
+    """抽取指令 → 用户可见确认话术（单源；render/clarify 共用）。"""
+    op = cmd["op"]
+    if op == "profile":
+        key = cmd["key"]
+        label, unit = _ACK_PROFILE.get(key, (key, ""))
+        v = cmd["value"]
+        if key == "goal":
+            v = _ACK_GOAL_ZH.get(v, v)
+        elif key == "sex":
+            v = _ACK_SEX_ZH.get(v, v)
+        return f"{label} {v}{unit}".strip()
+    if op == "preference":
+        return f"训练偏好 {cmd['value']}{cmd.get('about') or ''}"
+    if op == "preference_diet":
+        return f"饮食偏好 {cmd['value']}"
+    if op == "preference_part":
+        return f"训练偏好 {cmd['value']}{cmd.get('about', '').replace('部位:', '练')}"
+    if op == "checkin":
+        seg = []
+        for it in cmd.get("items", []):
+            nm = it.get("name") or it.get("raw") or ""
+            if it.get("sets") and it.get("reps"):
+                nm += f"{it['sets']}x{it['reps']}"
+            if nm:
+                seg.append(nm)
+        body = f"（{'、'.join(seg)}）" if seg else ""
+        return f"训练记录 {cmd['occurred']}{body}"
+    if op == "forget_all":
+        return "已清除全部记忆数据"
+    return op
+
+
+def apply_memory_extract(text: str, user_id: str) -> list[str]:
+    """把抽取指令写入 MemoryStore，返回 ack 确认话术列表（空=无写入）。
+    静默；无图谱/失败 → 已收集的 acks 原样返回（绝不抛异常影响主链路）。"""
+    acks: list[str] = []
     try:
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
         if m is None:
-            return 0
+            return acks
         for cmd in extract(text):
+            ok = False
             if cmd["op"] == "preference":
-                if m.upsert_state(user_id, "preference", cmd["value"],
-                                  about=cmd["about"]) is not None:
-                    n += 1
+                ok = m.upsert_state(user_id, "preference", cmd["value"],
+                                    about=cmd["about"]) is not None
             elif cmd["op"] == "preference_diet":
-                if m.upsert_state(user_id, "preference", cmd["value"],
-                                  about=None) is not None:
-                    n += 1
+                ok = m.upsert_state(user_id, "preference", cmd["value"],
+                                    about=None) is not None
+            elif cmd["op"] == "preference_part":
+                ok = m.upsert_state(user_id, "preference", cmd["value"],
+                                    about=cmd["about"]) is not None
             elif cmd["op"] == "checkin":
-                if m.log_event(user_id, "checkin",
-                               {"about": cmd["about"] or "",
-                                "verb": cmd["verb"]},
-                               occurred_at=f"{cmd['occurred']}T00:00:00+00:00"):
-                    n += 1
+                ok = bool(m.log_event(
+                    user_id, "checkin",
+                    {"about": cmd["about"] or "", "verb": cmd["verb"],
+                     "items": cmd.get("items", [])},
+                    occurred_at=f"{cmd['occurred']}T00:00:00+00:00"))
             elif cmd["op"] == "profile":
-                if m.upsert_state(
-                        user_id, f"profile.{cmd['key']}",
-                        __import__("json").dumps(cmd["value"])) is not None:
-                    n += 1
+                ok = m.upsert_state(user_id, f"profile.{cmd['key']}",
+                                    json.dumps(cmd["value"])) is not None
             elif cmd["op"] == "forget_all":
                 m.forget(user_id)            # 删除权最高（E2E-01/IS-02）
-                n += 1
+                ok = True
+            if ok:
+                acks.append(_ack_text(cmd))
     except Exception:
-        return n
-    return n
+        return acks
+    return acks

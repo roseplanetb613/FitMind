@@ -32,6 +32,7 @@ _WEIGHT_STMT_RE = re.compile(
     r"(?:我(?:现在)?(?:只有|是)?|现在|改成|改为)\s*(\d+(?:\.\d+)?)"
     r"\s*(公斤|千克|斤|kg|KG)")
 _WEIGHT_EXCLUDE = ("每公斤", "每千克", "每kg", "每KG")   # 营养剂量语境绝不抽
+# 全文粒度：句含剂量语境（“每公斤摄入…”）即整句不抽，宁缺毋滥
 _AGE_RE = re.compile(r"(?:我今年|今年|我)\s*(\d{1,3})\s*岁")
 _HEIGHT_ANCHOR_RE = re.compile(r"身高\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)?")
 _HEIGHT_UNIT_RE = re.compile(r"我\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)")
@@ -86,7 +87,7 @@ def _weight(text: str) -> dict | None:
 
 
 def _age(text: str) -> dict | None:
-    """'我18岁/今年18' → profile.age（区间 5-120；'我3岁'不抽）。"""
+    """'我18岁/今年18岁' → profile.age（区间 5-120；'我3岁'不抽）。"""
     m = _AGE_RE.search(text)
     if m is None:
         return None

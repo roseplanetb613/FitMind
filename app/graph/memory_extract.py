@@ -376,11 +376,15 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=cmd["about"]) is not None
             elif cmd["op"] == "checkin":
+                # name（归一）与 raw（用户原词）都试：CONTAINS 解析，宁多挂不漏挂
+                names = [i[k] for i in cmd.get("items", [])
+                         for k in ("name", "raw") if i.get(k)]
                 ok = bool(m.log_event(
                     user_id, "checkin",
                     {"about": cmd["about"] or "", "verb": cmd["verb"],
                      "items": cmd.get("items", [])},
-                    occurred_at=f"{cmd['occurred']}T00:00:00+00:00"))
+                    occurred_at=f"{cmd['occurred']}T00:00:00+00:00",
+                    muscles=m.muscles_of_exercises(names) if names else None))
             elif cmd["op"] == "profile_delta":
                 cur = (m.current_profile(user_id) or {}).get(cmd["key"])
                 if cur is None:

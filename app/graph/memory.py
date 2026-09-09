@@ -353,8 +353,12 @@ class MemoryStore:
 
     def log_event(self, user_id: str, type_: str, payload: dict,
                   occurred_at: str | None = None,
-                  plan_id: str | None = None) -> str | None:
-        """事件（checkin/pr/…）：occurred_at 缺省=now；补录时 occurred<recorded 保留。"""
+                  plan_id: str | None = None,
+                  muscles: list[str] | None = None,
+                  foods: list[str] | None = None) -> str | None:
+        """事件（checkin/pr/…）：occurred_at 缺省=now；补录时 occurred<recorded 保留。
+        muscles/foods：枢纽挂边（Event-TARGETS→Muscle / Event-ATE→Food，MATCH
+        不中静默跳过；Food 为个人域 MERGE）。"""
         _validate_user_id(user_id)
         now = self._now()
         occ = occurred_at or now
@@ -369,6 +373,14 @@ class MemoryStore:
                            "payload": json.dumps(payload, ensure_ascii=False),
                            "occurred_at": occ, "occurred_end": None,
                            "recorded_at": now, "invalidated_at": None}))
+                for mn in (muscles or []):       # 挂 Muscle（MATCH 不中静默跳过）
+                    s.run("MATCH (e:Event {event_id: $eid}), "
+                          "(mm:Muscle {name: $mn}) "
+                          "MERGE (e)-[:TARGETS]->(mm)", eid=eid, mn=mn)
+                for fn in (foods or []):         # Food 个人域 MERGE
+                    s.run("MATCH (e:Event {event_id: $eid}) "
+                          "MERGE (f:Food {name: $fn}) "
+                          "MERGE (e)-[:ATE]->(f)", eid=eid, fn=fn)
                 if plan_id:
                     s.run(
                         "MATCH (e:Event {event_id: $eid}), "
@@ -378,6 +390,22 @@ class MemoryStore:
             return eid
         except Exception:
             return None
+
+    def muscles_of_exercises(self, names: list[str]) -> list[str]:
+        """动作名 → 图谱 Exercise-[:targets]->Muscle 肌肉名集（只读；异常→[]）。
+        Exercise 属性为 name_zh/name_en 且多为复合名（'杠铃 深蹲'）→ CONTAINS 匹配。"""
+        out: set[str] = set()
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                for n in names:
+                    for r in s.run(
+                            "MATCH (e:Exercise)-[:targets]->(mm:Muscle) "
+                            "WHERE e.name_zh CONTAINS $n OR e.name_en CONTAINS $n "
+                            "RETURN DISTINCT mm.name AS name", n=n):
+                        out.add(str(r["name"]))
+        except Exception:
+            pass
+        return sorted(out)
 
     def log_checkin(self, user_id: str, plan_id: str,
                     occurred_at: str | None = None) -> str | None:

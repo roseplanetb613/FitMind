@@ -15,6 +15,10 @@ from datetime import datetime, timedelta, timezone
 _LIKE = ("喜欢", "偏爱", "沉迷", "上瘾")
 _DISLIKE = ("讨厌", "不喜欢", "不想", "排斥")
 
+# N-3 部位偏好（spec §6）：单字部位 + 常见双字部位
+_PART_CHARS = "腿肩背胸臂腹臀"
+_PART_WORDS = ("核心",)
+
 # 训练动作时态词 →（occurred 偏移天数，名称）
 _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六", 6),
                ("上周日", 5), ("上周一", 4), ("上周二", 3),
@@ -154,6 +158,25 @@ def _preference(text: str) -> dict | None:
                 "about": name}
     return None
 
+def _part_preference(tail: str, like: bool) -> list[dict]:
+    """'练腿练肩背' → 每部位一条 preference(about='部位:X') 分槽共存。
+    护栏：tail 须含'练'（防'我喜欢胸闷的感觉'误抽'胸'）。"""
+    if "练" not in tail:
+        return []
+    seg = re.sub(r"[练，、和+\s的不]", "", tail)
+    parts = [ch for ch in seg if ch in _PART_CHARS]
+    for w in _PART_WORDS:
+        if w in seg:
+            parts.append(w)
+    parts = list(dict.fromkeys(parts))
+    if not parts:
+        return []
+    return [{"op": "preference_part",
+             "value": "喜欢" if like else "不喜欢",
+             "about": f"部位:{p}"} for p in parts]
+
+
+
 
 def _event(text: str) -> dict | None:
     """'昨天我练了腿'/'前天练的腿+悬垂举腿4x8 弯举4*10' -> checkin 补录。
@@ -253,6 +276,14 @@ def extract(text: str) -> list[dict]:
             out.append(cmd)
     if p := _preference(text):
         out.append(p)
+    else:
+        # 部位/多目标偏好（N-3）：归一失败的"练腿练肩背"类
+        for kw in _LIKE + _DISLIKE:
+            idx = text.find(kw)
+            if idx >= 0:
+                out.extend(_part_preference(text[idx + len(kw):],
+                                            kw in _LIKE))
+                break
     if dp := _diet_preference(text):
         out.append(dp)
     if e := _event(text):

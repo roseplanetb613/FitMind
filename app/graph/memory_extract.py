@@ -49,6 +49,13 @@ _W_RANGE = (30.0, 300.0)
 _A_RANGE = (5, 120)
 _H_RANGE = (100.0, 250.0)
 
+# 相对体重（N-9："又瘦了一斤"）：中文数字一二两…十 + 阿拉伯数字；apply 侧锚定现值
+_CN_NUM = {"一": 1.0, "二": 2.0, "两": 2.0, "三": 3.0, "四": 4.0, "五": 5.0,
+           "六": 6.0, "七": 7.0, "八": 8.0, "九": 9.0, "十": 10.0}
+_WEIGHT_DELTA_RE = re.compile(
+    r"(瘦|轻|胖|重|涨)了\s*(\d+(?:\.\d+)?|[一二两三四五六七八九十])"
+    r"\s*(公斤|千克|斤|kg|KG)")
+
 # 数据删除权（E2E-01/IS-02："忘掉我的数据" → forget 全清）
 _FORGET_RE = re.compile(r"(忘掉|删除|清除|抹掉|清空).*(数据|记忆|档案|记录)")
 
@@ -112,6 +119,22 @@ def _weight(text: str) -> dict | None:
         return {"op": "profile", "key": "weight_kg", "value": v}
     except (TypeError, ValueError):
         return None
+
+
+def _weight_delta(text: str) -> dict | None:
+    """'又瘦了一斤/胖了2公斤' → profile_delta 相对调整（apply 侧锚定现值写回）。"""
+    m = _WEIGHT_DELTA_RE.search(text)
+    if m is None:
+        return None
+    num = m.group(2)
+    try:
+        v = float(num) if num[0].isdigit() else _CN_NUM[num]
+    except (KeyError, ValueError):
+        return None
+    if m.group(3) == "斤":
+        v /= 2.0
+    delta = -v if m.group(1) in ("瘦", "轻") else v
+    return {"op": "profile_delta", "key": "weight_kg", "delta": delta}
 
 
 def _age(text: str) -> dict | None:
@@ -271,7 +294,7 @@ def extract(text: str) -> list[dict]:
     if _FORGET_RE.search(text):
         out.append({"op": "forget_all"})
         return out                           # 删除权最高优先，不再抽取其它
-    for fn in (_weight, _age, _height, _name, _sex, _goal):
+    for fn in (_weight, _weight_delta, _age, _height, _name, _sex, _goal):
         if cmd := fn(text):
             out.append(cmd)
     if p := _preference(text):
@@ -358,6 +381,21 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                     {"about": cmd["about"] or "", "verb": cmd["verb"],
                      "items": cmd.get("items", [])},
                     occurred_at=f"{cmd['occurred']}T00:00:00+00:00"))
+            elif cmd["op"] == "profile_delta":
+                cur = (m.current_profile(user_id) or {}).get(cmd["key"])
+                if cur is None:
+                    continue                     # 无现值锚定 → 不抽（宁缺毋滥）
+                try:
+                    new = round(float(cur) + float(cmd["delta"]), 1)
+                except (TypeError, ValueError):
+                    continue
+                if not (30.0 <= new <= 300.0):
+                    continue
+                ok = m.upsert_state(user_id, f"profile.{cmd['key']}",
+                                    json.dumps(new)) is not None
+                if ok:
+                    acks.append(f"体重 {new}kg（{cmd['delta']:+g}kg）")
+                    continue
             elif cmd["op"] == "profile":
                 ok = m.upsert_state(user_id, f"profile.{cmd['key']}",
                                     json.dumps(cmd["value"])) is not None

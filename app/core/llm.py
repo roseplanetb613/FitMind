@@ -92,9 +92,11 @@ _RULES = [
     # D5 2026B：康复后确认问法（T9-03"能练深蹲了吧"/T9-09"深蹲可以吧"）→ qa
     (("能练深蹲", "能练硬拉", "能练卧推", "可以吧", "行不行", "行吧", "没问题吧"), "qa",
      lambda t, kw: {"query": t}),
-    # D6 2026B：增肌/肌肉话题（T7-07 一月长10斤肌肉）→ qa 非 clarify；
-    # "肌肉酸痛"类由 L0 guard 先行，不受影响
-    (("长肉", "长几斤", "增肌", "肌肉", "长了多少"), "qa",
+    # D6 2026B：增肌/肌肉话题（T7-07 一月长10斤肌肉）→ qa 非 clarify。
+    # 2026-09-09 收窄："增肌/肌肉"移除——"帮我做个增肌计划"应 plan（test_classify_plan
+    # _generation_kept）、"我的肌肉量有多少"应 profile kind（test_profile_field_questions
+    # _to_qa_not_plan）；仅长肉类咨询词命中，T7-07 落 fallback qa(0.3)→direct 仍达标。
+    (("长肉", "长几斤", "长了多少", "增肌速度"), "qa",
      lambda t, kw: {"query": t}),
     # D6 2026B：康复后单句确认（T9-18"深蹲吧"）→ qa 非 clarify
     (("深蹲吧", "硬拉吧", "练吧", "跑吧"), "qa",

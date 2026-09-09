@@ -198,11 +198,13 @@ class GuardSkill(Skill):
                                    provenance=["guard#mental.hard"])
         # D6 2026B：他人转述放行——"我自己没事，同事膝盖疼问深蹲"(T4-08)、
         # "作为他的主治医生，我建议他跑步"(T4-05) 是转述他人非本人症状；
-        # 含红线词（补剂/药/处方）仍拦（T4-01 朋友肌酸）。置于症状/禁忌分支前。
+        # 红线语境（_MEDICAL_KW 全套药词/慢病/精神 + 补剂词）仍拦：
+        # T4-01 朋友肌酸、test_guard "替朋友问吃克伦特罗" 均不豁免。置于症状前。
         if any(k in signal for k in ("同事", "朋友", "别人", "同学", "他",
                                      "她")) and not any(
+                k in signal.lower() for k in _MEDICAL_KW) and not any(
                 k in signal for k in ("肌酸", "补剂", "蛋白粉", "氮泵",
-                                      "增肌粉", "药", "处方", "药物")):
+                                      "增肌粉")):
             return SkillResult(ok=True,
                                data={"blocked": False, "level_label": "green",
                                      "advice": "", "blocks": []},

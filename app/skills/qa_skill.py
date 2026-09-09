@@ -127,6 +127,8 @@ class QaSkill(Skill):
         kind = params.get("kind")
         if kind == "profile":
             return self._profile(ctx, query)          # 档案查询：读会话档案，不检索
+        if kind == "memory":
+            return self._memory(ctx, query)           # 记忆查询：伤/训练/偏好（只读）
         # W3 辟谣知识块：谣言/智商税类问法优先命中，直接给结论（不落空检索）
         myth = self._myth_hit(query)
         if myth:
@@ -186,6 +188,62 @@ class QaSkill(Skill):
             items.append({"name": "档案未记录", "value": missing})
         return SkillResult(ok=True, data={"items": items, "profile": p},
                            provenance=["qa#session.profile"])
+
+    def _memory(self, ctx, query: str) -> SkillResult:
+        """记忆查询（伤/训练/偏好）：读图谱如实列示；空态/离线诚实声明。"""
+        uid = getattr(getattr(ctx, "session", None), "user_id", "local")
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+        except Exception:
+            m = None
+        if m is None:
+            return SkillResult(
+                ok=True, data={"items": [{"name": "记忆",
+                                          "value": "记忆功能暂不可用（图谱离线）"}],
+                               "empty": True},
+                provenance=["qa#memory.offline"])
+        items = []
+        try:
+            if any(k in query for k in ("伤", "病")):
+                rows = m.current(uid, "injury")
+                if rows:
+                    items += [{"name": "受伤记录",
+                               "value": f"{r.get('about') or r['value']}"
+                                        f"（{str(r.get('valid_from', ''))[:10]}起）"}
+                              for r in rows]
+                else:
+                    items.append({"name": "受伤记录", "value": "暂无"})
+            if any(k in query for k in ("训练", "练", "打卡", "日志")):
+                evs = m.events(uid, "checkin")
+                if evs:
+                    for e in evs[:5]:
+                        its = e.get("payload", {}).get("items", [])
+                        seg = "、".join(
+                            (i.get("name") or i.get("raw") or "")
+                            + (f"{i['sets']}x{i['reps']}"
+                               if i.get("sets") and i.get("reps") else "")
+                            for i in its) or e.get("payload", {}).get("about", "")
+                        items.append({"name": "训练记录",
+                                      "value": f"{str(e.get('occurred_at', ''))[:10]}"
+                                               f" {seg}"})
+                else:
+                    items.append({"name": "训练记录", "value": "暂无"})
+            if any(k in query for k in ("偏好", "喜欢", "喜好")):
+                prefs = m.current(uid, "preference")
+                if prefs:
+                    items += [{"name": "偏好",
+                               "value": f"{r['value']}{r.get('about') or ''}"}
+                              for r in prefs]
+                else:
+                    items.append({"name": "偏好", "value": "暂无"})
+            if not items:
+                items = [{"name": "记忆",
+                          "value": "可问我：受伤记录 / 训练记录 / 我的偏好"}]
+        except Exception:
+            items = [{"name": "记忆", "value": "记忆读取异常，请稍后再试"}]
+        return SkillResult(ok=True, data={"items": items},
+                           provenance=["qa#memory"])
 
     @staticmethod
     def _diet_prefs(ctx) -> str:

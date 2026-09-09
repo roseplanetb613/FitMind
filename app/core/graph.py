@@ -94,7 +94,8 @@ def state_to_intent(intent_dict: dict):
 # task_type 英文枚举 → 中文语义标题（render 节点与 API 响应共用，防双写漂移；
 # 避免 LLM 把 "teach" 当 query 脑补"与teach相关"）
 TITLE_ZH = {"qa": "知识问答", "teach": "动作教学", "plan": "训练计划",
-            "progress": "进度建议", "guard": "安全提示",
+            "plan_edit": "计划调整", "progress": "进度建议",
+            "guard": "安全提示",
             "smalltalk": "闲聊", "fallback": "回答"}
 
 

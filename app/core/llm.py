@@ -255,6 +255,13 @@ class StubProvider(LLMProvider):
         if _is_vague_reference(t):
             return Classification("fallback", {}, confidence=0.3,
                                   needs_clarify=True)
+        # T5 计划指令控制：换/删计划内动作 → plan_edit（直达 PlanSkill._edit）。
+        # 删/去类须排除记忆域句（"把我的训练记录删掉"是删除权请求非计划编辑）。
+        if any(k in t for k in ("换成", "换掉", "改成做")):
+            return Classification("plan_edit", {"query": t}, confidence=1.0)
+        if any(k in t for k in ("去掉", "删掉", "不要练")) and not any(
+                k in t for k in ("记忆", "数据", "档案", "记录")):
+            return Classification("plan_edit", {"query": t}, confidence=1.0)
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
                 # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
@@ -305,8 +312,8 @@ class StubProvider(LLMProvider):
 # 意图白名单（LLM 分类输出受限集合，外部不可越界）
 # unknown：LLM 拿不准的真正退路（消解"被迫硬选"），arbitrate 定向 clarify。
 INTENT_WHITELIST = frozenset(
-    {"qa", "teach", "plan", "progress", "guard", "smalltalk", "fallback",
-     "unknown"})
+    {"qa", "teach", "plan", "plan_edit", "progress", "guard", "smalltalk",
+     "fallback", "unknown"})
 
 # function-calling schema：强制 LLM 按受限选择题+置信度+evidence 返回
 CLASSIFY_TOOL = {

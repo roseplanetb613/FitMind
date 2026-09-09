@@ -30,5 +30,9 @@ class SmallTalkSkill(Skill):
             msg = _GREET
         else:
             msg = _FALLBACK
+        # 2026-09-08 个性化：记忆档案投影的称呼前缀（无 name 逐字不变）
+        name = str(getattr(ctx, "profile", {}).get("name", "") or "").strip()
+        if name:
+            msg = f"{name}，{msg}"
         return SkillResult(ok=True, data={"message": msg, "topic": topic},
                            provenance=["smalltalk#default"])

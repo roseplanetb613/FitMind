@@ -259,10 +259,13 @@ def _auth_numbers(structured: dict, profile: dict) -> set[tuple[str, float]]:
     add("kg", p.get("weight_kg"))
     add("cm", p.get("height_cm"))
     add("yr", p.get("age"))
-    for m in _NUM_RE.finditer(json.dumps(structured, ensure_ascii=False)):
-        cls = _UNIT_CLASS[m.group(2).lower()]
-        v = float(m.group(1)) / (2 if m.group(2) == "斤" else 1)
-        out.add((cls, round(v, 1)))
+    try:
+        for m in _NUM_RE.finditer(json.dumps(structured, ensure_ascii=False)):
+            cls = _UNIT_CLASS[m.group(2).lower()]
+            v = float(m.group(1)) / (2 if m.group(2) == "斤" else 1)
+            out.add((cls, round(v, 1)))
+    except TypeError:
+        pass    # 非 JSON structured（set/datetime 等）→ 静默回落仅 profile 授权
     return out
 
 

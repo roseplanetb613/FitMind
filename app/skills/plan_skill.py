@@ -155,6 +155,9 @@ class PlanSkill(Skill):
                 "value": "可以说'把某动作换成某动作'或'去掉某动作'"}]},
                 provenance=["plan#edit.parse_fail"])
         x_raw = (mrep.group(1) if mrep else mdel.group(1)).strip(" ，。我")
+        # 剥离训练日前缀（"把拉日引体向上换成X"→"引体向上"），防包含匹配 miss
+        x_raw = re.sub(r"(?:推|拉|腿|核心|胸|背|肩|臀|腹|臂)日", "",
+                       x_raw).strip(" ，。的")
         y_raw = mrep.group(2).strip(" ，。") if mrep else None
         hit_day = hit_ex = None
         for d in items:

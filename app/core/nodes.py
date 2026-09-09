@@ -64,6 +64,10 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     # ---------------- clarify（低置信反问；直接 END，不耗 render） ----------------
     def clarify(state: dict) -> dict:
+        # O-3：有记忆写入时确认优先于反问（"我喜欢清淡"不再被问"想做哪件事"）
+        ack = state.get("memory_ack") or []
+        if ack:
+            return {"reply": "已记下：" + "、".join(ack), "mode_used": "clarify"}
         it = state.get("intent") or {}
         tt = it.get("task_type", "fallback")
         opts = {"teach": "动作怎么做", "plan": "制定训练/饮食计划",
@@ -192,6 +196,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         from app.core.graph import build_structured
         # structured 单源组装（标题中文映射+失败原因透传+无 items 死键）
         structured = build_structured(state.get("intent"), state.get("outcome"))
+        if state.get("memory_ack"):                     # W1：记忆确认话术透传
+            structured["memory_ack"] = list(state["memory_ack"])
         try:
             reply = llm.render(structured)
         except Exception:
@@ -223,6 +229,9 @@ def _log_intent_miss(message: str, task_type: str, confidence: float) -> None:
 def _render_fallback(structured: dict) -> str:
     d = structured.get("data") or {}
     lines = [str(structured.get("title", "回答"))]
+    acks = structured.get("memory_ack") or []
+    if acks:
+        lines.append("已记下：" + "、".join(acks))
     if structured.get("error"):
         lines.append("提示: " + str(structured["error"]))   # 失败原因如实透出
     for it in d.get("items", []):

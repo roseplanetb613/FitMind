@@ -275,6 +275,9 @@ class StubProvider(LLMProvider):
     def render(self, structured, tone="coach") -> str:
         self.calls.append("render")
         parts = [str(structured.get("title", "回答"))]
+        acks = structured.get("memory_ack") or []
+        if acks:
+            parts.append("已记下：" + "、".join(acks))
         if structured.get("error"):
             parts.append("提示: " + str(structured["error"]))   # 失败原因如实透出
         data = structured.get("data") or {}

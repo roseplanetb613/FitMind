@@ -43,9 +43,10 @@ class Agent:
             sess.user_id = user_id               # 显式注入覆盖归属（F4）
         # 记忆规则抽取（偏好/档案陈述句；静默，宁缺毋滥——失败绝不影响主链路）。
         # 先于投影：抽取落图谱后当轮即可投影回会话（"我只有60kg"同轮生效）。
+        acks: list[str] = []
         try:
             from app.graph.memory_extract import apply_memory_extract
-            apply_memory_extract(message, sess.user_id)
+            acks = apply_memory_extract(message, sess.user_id) or []
         except Exception:
             pass
         # 记忆图谱单向投影：图谱 current 态为真相源（v1 单用户 local 或注入 uid），
@@ -54,7 +55,8 @@ class Agent:
         # 无 checkpointer（默认）：每轮独立 invoke，不传 thread 配置——
         # 挂了检查点才会按 thread 累积 state（内存随轮次只增不减）。
         state_in = {"session_id": sess.id, "message": message,
-                    "profile": dict(sess.profile), "user_id": sess.user_id}
+                    "profile": dict(sess.profile), "user_id": sess.user_id,
+                    "memory_ack": acks}
         if self._checkpointer is not None:
             thread = f"{sess.id}-{len(sess.history)}"   # 每轮独立 thread
             result = self.graph.invoke(
@@ -66,6 +68,8 @@ class Agent:
         # 顶层 provenance 传入，guard 短路时仍保留守卫来源标注
         structured = build_structured(result.get("intent"), result.get("outcome"),
                                       sources=result.get("provenance", []))
+        if result.get("memory_ack"):      # API structured 与 render 节点同源透出
+            structured["memory_ack"] = list(result["memory_ack"])
         reply = result.get("reply", "")
         sess.history.append({"role": "user", "text": message})
         sess.history.append({"role": "assistant", "text": reply})

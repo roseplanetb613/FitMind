@@ -23,6 +23,7 @@ class FitMindState(TypedDict, total=False):
     react_next: dict                  # think 决策的下一步 {"skill","params"}
     outcome: dict                     # {"ok","data","provenance","error",...}
     reply: str
+    memory_ack: list[str]             # 记忆写入确认话术（agent.run 注入，render/clarify 消费）
     provenance: Annotated[list, operator.add]   # 顶层来源标注（guard/execute/aggregate 写入）
 
 

@@ -397,6 +397,10 @@ class GuardSkill(Skill):
                 return
             zh, _key = site
             m.upsert_state(uid, "injury", "不适", about=zh)
+            try:
+                m.link_injury_muscle(uid, zh)   # 伤痛挂肌肉（不中静默，T4）
+            except Exception:
+                pass
         except Exception:
             pass
 

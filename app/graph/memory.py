@@ -415,6 +415,26 @@ class MemoryStore:
             pass
         return sorted(out)
 
+    def link_injury_muscle(self, user_id: str, site: str) -> bool:
+        """active injury StateFact(about=部位) → ABOUT_MUSCLE 边；不中/异常 → False。"""
+        _validate_user_id(user_id)
+        muscle = _PART2MUSCLE.get(site)
+        if not muscle:
+            return False
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                r = s.run(
+                    "MATCH (u:User {user_id: $uid})-[:HAS_STATE]->"
+                    "(f:StateFact {type: 'injury'}), (mm:Muscle {name: $m}) "
+                    "WHERE f.invalidated_at IS NULL AND f.valid_to IS NULL "
+                    "AND (f.about = $site OR f.value = $site) "
+                    "MERGE (f)-[:ABOUT_MUSCLE]->(mm) "
+                    "RETURN count(f) AS c",
+                    uid=user_id, m=muscle, site=site).single()
+                return bool(r and r["c"] >= 1)
+        except Exception:
+            return False
+
     def log_checkin(self, user_id: str, plan_id: str,
                     occurred_at: str | None = None) -> str | None:
         """打卡 → Event(checkin) + UNDER(PlanVersion)。采纳闭环（口头声明不产生）。"""
@@ -506,6 +526,13 @@ _INJURY_SITE_ZH = {
     "脚踝": "脚踝", "脚": "脚踝", "脖子": "颈", "颈椎": "颈", "背": "背",
     "髋": "髋", "大腿": "大腿", "腿": "腿", "跟腱": "跟腱",
 }
+
+# 部位→Muscle 名（宁缺毋滥：以图谱实际 Muscle.name 校准——英文 snake_case，
+# 不中不挂；膝/肘/手腕/颈/髋/跟腱无精确肌肉节点故不入表）
+_PART2MUSCLE = {"背": "latissimus_dorsi", "胸": "pectoralis", "肩": "deltoids",
+                "腿": "quadriceps", "大腿": "quadriceps", "臂": "biceps",
+                "腹": "rectus_abdominis", "臀": "glutes", "核心": "core",
+                "腰": "lower_back", "脚踝": "ankle_stabilizers"}
 
 
 def extract_injury_site(text: str) -> tuple[str, str] | None:

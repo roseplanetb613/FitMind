@@ -21,7 +21,9 @@ def _bp(p: dict, sex: str) -> float:
     return 10 * w + 6.25 * h - 5 * a + (5 if sex == "male" else -161)
 
 
-def build_plan(profile: dict, prefs: dict | None = None) -> dict:
+def build_plan(profile: dict, prefs: dict | None = None,
+               fatigue: set | None = None,
+               extra_blocked: set | None = None) -> dict:
     ex, fr = exercise_repo(), foods_repo()   # 共享单例（原模块级 _EX/_FR 副本）
     conds = profile.get("conditions") or []
     pats = profile.get("patterns") or []
@@ -42,6 +44,8 @@ def build_plan(profile: dict, prefs: dict | None = None) -> dict:
               "carbs_g": round(carbs)}
     blocked_patterns = [b["hit_patterns"] for b in sc["blocks"]]
     blocked = {p for l in blocked_patterns for p in l}
+    if extra_blocked:
+        blocked |= set(extra_blocked)      # 伤痛联动：记忆 injury → 禁忌模式封堵
     training_items = []
     applied = []
     plans = {"推日(胸·肩·三头)": "push", "拉日(背·二头)": "pull",
@@ -58,7 +62,8 @@ def build_plan(profile: dict, prefs: dict | None = None) -> dict:
             if kept:
                 recs = kept
         focused = bool(prefs and pat in prefs.get("pats_like", ()))
-        n = 4 if focused else 3
+        deload = bool(fatigue and pat in fatigue)
+        n = 4 if focused else (2 if deload else 3)
         item = {"day": day, "pattern": pat,
                 "exercises": [{
                     "name": e.get("name_zh"),
@@ -71,6 +76,8 @@ def build_plan(profile: dict, prefs: dict | None = None) -> dict:
         if focused:
             item["focused"] = True
             applied.append(f"{day}加量（偏好）")
+        if deload:
+            item["deload"] = True
         training_items.append(item)
     meals = []
     for f in fr.filter(category="meat", protein_min=18, kcal_max=300,
@@ -81,6 +88,16 @@ def build_plan(profile: dict, prefs: dict | None = None) -> dict:
         p = f.get("per_100g") or {}
         meals.append({"name": nm, "kcal": p.get("calories_kcal"),
                       "protein_g": p.get("protein_g"), "source": f.get("source")})
+    if prefs:
+        # 食物联动：不喜欢剔除（剔空保留原候选）；喜欢置顶（稳定排序）
+        dl = prefs.get("dislike_foods", ())
+        if dl:
+            kept_meals = [f for f in meals if f["name"] not in dl]
+            if kept_meals:
+                meals = kept_meals
+        lf = prefs.get("like_foods", ())
+        if lf:
+            meals.sort(key=lambda f: f["name"] not in lf)
     plan = {
         "profile": {"goal": goal, "sex": sex},
         "screening": {"level": sc["level"], "level_label": sc["level_label"],
@@ -92,6 +109,10 @@ def build_plan(profile: dict, prefs: dict | None = None) -> dict:
     }
     if applied:
         plan["preferences_applied"] = applied   # 偏好应用痕迹（render 可念出）
+    hit_days = [i["day"] for i in training_items if i.get("deload")]
+    if hit_days:
+        plan["fatigue_note"] = (f"近48小时练过{'、'.join(hit_days)}对应部位，"
+                                "已自动减量")
     return {"ok": True, "plan": plan,
             "provenance": ["pipeline#screening.plan_check",
                            "pipeline#exercise_repo.filter",

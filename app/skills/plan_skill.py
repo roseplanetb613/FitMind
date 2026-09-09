@@ -36,7 +36,8 @@ _PART2PAT = {"胸": "push", "肩": "push", "背": "pull", "臂": "pull",
 
 
 def _load_prefs(ctx) -> dict | None:
-    """读记忆偏好 → {'pats_like': set, 'dislike_ex': set}；无图/无偏好/异常 → None。"""
+    """读记忆偏好 → {pats_like, dislike_ex, like_foods, dislike_foods}；
+    无图/无偏好/异常 → None。"""
     try:
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
@@ -44,6 +45,7 @@ def _load_prefs(ctx) -> dict | None:
             return None
         uid = getattr(getattr(ctx, "session", None), "user_id", "local")
         pats_like, dislike_ex = set(), set()
+        like_foods, dislike_foods = set(), set()
         for r in m.current(uid, "preference"):
             about = str(r.get("about") or "")
             val = str(r.get("value") or "")
@@ -52,14 +54,51 @@ def _load_prefs(ctx) -> dict | None:
                     pat = _PART2PAT.get(about[3:])
                     if pat:
                         pats_like.add(pat)
+            elif about.startswith("食物:"):
+                fname = about[3:]
+                if val == "喜欢":
+                    like_foods.add(fname)
+                elif val == "不喜欢":
+                    dislike_foods.add(fname)
             elif about:
                 if val == "不喜欢":
                     dislike_ex.add(about)
-        if not pats_like and not dislike_ex:
+        if not (pats_like or dislike_ex or like_foods or dislike_foods):
             return None
-        return {"pats_like": pats_like, "dislike_ex": dislike_ex}
+        return {"pats_like": pats_like, "dislike_ex": dislike_ex,
+                "like_foods": like_foods, "dislike_foods": dislike_foods}
     except Exception:
         return None
+
+
+def _load_linkage(ctx) -> tuple[set, set]:
+    """联动信号：疲劳（48h 内练过的 pattern）+ 伤痛禁忌模式集。异常/无图 → 空集。"""
+    fatigue: set = set()
+    blocked: set = set()
+    try:
+        from app.graph.memory import MemoryStore
+        m = MemoryStore.get()
+        if m is None:
+            return fatigue, blocked
+        uid = getattr(getattr(ctx, "session", None), "user_id", "local")
+        import screening                                   # lib 单源
+        for part in m.current_about(uid, "injury"):
+            entry = screening.contraindication(part)
+            if entry:
+                blocked.update(entry.get("danger_patterns") or [])
+        from app.runtime.repos import exercise_repo
+        ex = exercise_repo()
+        for e in m.events(uid, "checkin", days=2):
+            for it in (e.get("payload") or {}).get("items", []):
+                nm = it.get("name") or it.get("raw")     # raw 段也参与（E2E 形态）
+                if not nm:
+                    continue
+                hit = ex.search_zh(nm, limit=1)
+                if hit and hit[0].get("movement_pattern"):
+                    fatigue.add(hit[0]["movement_pattern"])
+    except Exception:
+        pass
+    return fatigue, blocked
 
 
 class PlanSkill(Skill):
@@ -82,7 +121,9 @@ class PlanSkill(Skill):
         profile.setdefault("goal", str(params.get("goal", "maintain")))
         profile.setdefault("activity", 1.55)
         prefs = _load_prefs(ctx)
-        out = build_plan(profile, prefs=prefs)
+        fatigue, extra_blocked = _load_linkage(ctx)
+        out = build_plan(profile, prefs=prefs, fatigue=fatigue,
+                         extra_blocked=extra_blocked)
         if not out.get("ok", True):
             return SkillResult(ok=False, data={},
                                provenance=out.get("provenance", []),

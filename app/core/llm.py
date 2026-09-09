@@ -262,6 +262,12 @@ class StubProvider(LLMProvider):
         if any(k in t for k in ("去掉", "删掉", "不要练")) and not any(
                 k in t for k in ("记忆", "数据", "档案", "记录")):
             return Classification("plan_edit", {"query": t}, confidence=1.0)
+        # T7 肌肉状态面板：部位词 ∧ 评价问法 → qa(kind=muscle)（guard 检查已先行）
+        _part = next((pt for pt in ("腿", "背", "肩", "胸", "臂", "腹", "臀",
+                                    "核心") if pt in t), None)
+        if _part and any(k in t for k in ("怎么样", "状态", "恢复", "练得")):
+            return Classification("qa", {"query": t, "kind": "muscle",
+                                         "part": _part}, confidence=1.0)
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
                 # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）

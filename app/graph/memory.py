@@ -435,6 +435,44 @@ class MemoryStore:
         except Exception:
             return False
 
+    def muscle_summary(self, user_id: str, muscle: str,
+                       part: str | None = None, days: int = 30) -> dict:
+        """肌肉聚合面板（只读）：近N天次数/最近日期/active injury(ABOUT_MUSCLE)/部位偏好。"""
+        _validate_user_id(user_id)
+        since = _add_days(self._now(), -days)
+        out = {"muscle": muscle, "trained_count": 0, "last_trained": None,
+               "active_injury": [], "preference": None}
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                r = s.run(
+                    "MATCH (u:User {user_id: $uid})-[:LOGGED]->(e:Event)"
+                    "-[:TARGETS]->(mm:Muscle {name: $m}) "
+                    "WHERE e.invalidated_at IS NULL AND e.occurred_at >= $since "
+                    "RETURN count(e) AS c, max(e.occurred_at) AS last",
+                    uid=user_id, m=muscle, since=since).single()
+                if r:
+                    out["trained_count"] = r["c"]
+                    out["last_trained"] = r["last"]
+                rows = s.run(
+                    "MATCH (u:User {user_id: $uid})-[:HAS_STATE]->"
+                    "(f:StateFact {type: 'injury'})-[:ABOUT_MUSCLE]->"
+                    "(mm:Muscle {name: $m}) "
+                    "WHERE f.invalidated_at IS NULL AND f.valid_to IS NULL "
+                    "AND (f.expires_at IS NULL OR f.expires_at >= $now) "
+                    "RETURN f.about AS site",
+                    uid=user_id, m=muscle, now=self._now())
+                out["active_injury"] = [str(x["site"]) for x in rows]
+        except Exception:
+            pass
+        if part:
+            try:
+                for r in self.current(user_id, "preference"):
+                    if str(r.get("about") or "") == f"部位:{part}":
+                        out["preference"] = r["value"]
+            except Exception:
+                pass
+        return out
+
     def log_checkin(self, user_id: str, plan_id: str,
                     occurred_at: str | None = None) -> str | None:
         """打卡 → Event(checkin) + UNDER(PlanVersion)。采纳闭环（口头声明不产生）。"""

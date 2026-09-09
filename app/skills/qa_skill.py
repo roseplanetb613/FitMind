@@ -134,6 +134,8 @@ class QaSkill(Skill):
             return self._profile(ctx, query)          # 档案查询：读会话档案，不检索
         if kind == "memory":
             return self._memory(ctx, query)           # 记忆查询：伤/训练/偏好（只读）
+        if kind == "muscle":
+            return self._muscle(ctx, query, str(params.get("part", "")))
         # W3 辟谣知识块：谣言/智商税类问法优先命中，直接给结论（不落空检索）
         myth = self._myth_hit(query)
         if myth:
@@ -193,6 +195,31 @@ class QaSkill(Skill):
             items.append({"name": "档案未记录", "value": missing})
         return SkillResult(ok=True, data={"items": items, "profile": p},
                            provenance=["qa#session.profile"])
+
+    def _muscle(self, ctx, query: str, part: str) -> SkillResult:
+        """肌肉状态面板：训练频率/伤情/偏好 聚合如实列示（只读）。"""
+        uid = getattr(getattr(ctx, "session", None), "user_id", "local")
+        try:
+            from app.graph.memory import MemoryStore, _PART2MUSCLE
+            m = MemoryStore.get()
+        except Exception:
+            m = None
+        if m is None:
+            return SkillResult(ok=True, data={"items": [{
+                "name": "记忆", "value": "记忆功能暂不可用（图谱离线）"}],
+                "empty": True}, provenance=["qa#memory.offline"])
+        muscle = _PART2MUSCLE.get(part, part)
+        s = m.muscle_summary(uid, muscle, part=part)
+        if not s["trained_count"] and not s["active_injury"] and not s["preference"]:
+            val = "这块肌肉还没有记录——打卡训练或聊聊偏好后再问我"
+        else:
+            last = str(s["last_trained"] or "无")[:10]
+            val = (f"近30天训练 {s['trained_count']} 次；最近：{last}；"
+                   f"伤情：{'、'.join(s['active_injury']) or '无'}；"
+                   f"偏好：{s['preference'] or '无'}")
+        return SkillResult(ok=True, data={"items": [
+            {"name": f"{part}（{muscle}）面板", "value": val}]},
+            provenance=["qa#muscle_panel"])
 
     def _memory(self, ctx, query: str) -> SkillResult:
         """记忆查询（伤/训练/偏好）：读图谱如实列示；空态/离线诚实声明。"""

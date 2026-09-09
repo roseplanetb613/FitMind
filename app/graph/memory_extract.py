@@ -61,7 +61,7 @@ _FORGET_RE = re.compile(r"(忘掉|删除|清除|抹掉|清空).*(数据|记忆|�
 
 # 情绪/假设/意向（不抽）
 _SKIP = ("emo", "心情", "低落", "焦虑", "想试试", "想练", "打算", "计划",
-         "想开始", "犹豫")
+         "想开始", "犹豫", "想吃", "想喝")
 
 # W2 个性化（2026-09-09）：名字/性别/目标/饮食偏好陈述句（spec §3.1）
 _NAME_RE = re.compile(
@@ -82,6 +82,14 @@ _DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", 
                  "不吃甜", "戒糖", "无糖", "素食", "吃素", "不吃肉",
                  "吃辣", "重口", "偏咸", "低脂")
 
+# T3 食物事件/偏好（spec §3-T3）：餐次提示 + 进食动词 + 量词
+_MEAL_HINT = (("早餐", "早餐"), ("早饭", "早餐"), ("早上", "早餐"),
+              ("午餐", "午餐"), ("中午", "午餐"), ("午饭", "午餐"),
+              ("晚餐", "晚餐"), ("晚上", "晚餐"), ("晚饭", "晚餐"),
+              ("加餐", "加餐"), ("夜宵", "夜宵"))
+_MEAL_VERB = ("吃了", "吃", "喝了", "喝")
+_AMOUNT_RE = re.compile(r"(\d{1,4})\s*(克|g|毫升|ml|杯|个|碗)")
+
 
 def _is_question(text: str) -> bool:
     return any(k in text for k in _QUESTION)
@@ -97,6 +105,66 @@ def _norm_exercise(text: str):
     except Exception:
         pass
     return None
+
+
+def _norm_food(text: str):
+    """食物归一：FoodsRepo search 命中返回名称；无命中 None（宁缺毋滥）。"""
+    try:
+        from app.runtime.repos import foods_repo
+        hits = foods_repo().search(text, limit=1)
+        if hits:
+            return hits[0].get("name_zh") or hits[0].get("name")
+    except Exception:
+        pass
+    return None
+
+
+def _meal_event(text: str) -> dict | None:
+    """'我中午吃了鸡胸+米饭' → meal 打卡（归一失败 raw 保底；意向句不抽）。
+    护栏：意向/否定/口味语境不抽；全部条目均无归一命中 → 宁缺毋滥不记
+    （防'吃多少没事的'类垃圾句产生伪事件）。"""
+    if any(k in text for k in ("爱吃", "喜欢吃", "想吃", "想喝", "不想",
+                               "讨厌", "不吃", "别吃", "别喝", "要吃", "要喝")):
+        return None                                 # 意向/偏好/否定非事件
+    verb = next((v for v in _MEAL_VERB if v in text), None)
+    if verb is None:
+        return None
+    meal = next((lbl for kw, lbl in _MEAL_HINT if kw in text), None)
+    seg = text.split(verb)[-1]
+    items: list[dict] = []
+    for part in _EVENT_SPLIT.split(seg):
+        part = part.strip(" 的了。，")
+        if not part:
+            continue
+        am = _AMOUNT_RE.search(part)
+        namepart = _AMOUNT_RE.sub("", part).strip()
+        nm = _norm_food(namepart) if namepart else None
+        it: dict = {}
+        if nm:
+            it["name"] = nm
+        elif namepart:
+            it["raw"] = namepart
+        else:
+            continue
+        if am:
+            it["amount"] = f"{am.group(1)}{am.group(2)}"
+        items.append(it)
+    if not items:
+        return None
+    if not any(i.get("name") for i in items):
+        return None                     # 全 raw 无归一命中 → 不记（宁缺毋滥）
+    return {"op": "meal", "meal": meal,
+            "occurred": datetime.now(timezone.utc).date().isoformat(),
+            "items": items}
+
+
+def _food_preference(tail: str, like: bool) -> dict | None:
+    """'吃鸡胸' → preference about='食物:X'（与部位:/动作 分槽）。"""
+    nm = _norm_food(tail.lstrip("吃"))
+    if not nm:
+        return None
+    return {"op": "preference_food",
+            "value": "喜欢" if like else "不喜欢", "about": f"食物:{nm}"}
 
 
 def _weight(text: str) -> dict | None:
@@ -297,20 +365,32 @@ def extract(text: str) -> list[dict]:
     for fn in (_weight, _weight_delta, _age, _height, _name, _sex, _goal):
         if cmd := fn(text):
             out.append(cmd)
+    dp = _diet_preference(text)
     if p := _preference(text):
         out.append(p)
     else:
-        # 部位/多目标偏好（N-3）：归一失败的"练腿练肩背"类
-        for kw in _LIKE + _DISLIKE:
+        # 部位/食物偏好（N-3/T3）：归一失败的"练腿练肩背"→部位；"吃鸡胸"→食物。
+        # 否定形最长优先（"不喜欢"先于"喜欢"），防极性误判
+        for kw in sorted(_LIKE + _DISLIKE, key=len, reverse=True):
             idx = text.find(kw)
             if idx >= 0:
-                out.extend(_part_preference(text[idx + len(kw):],
-                                            kw in _LIKE))
+                rest = text[idx + len(kw):]
+                cmds = _part_preference(rest, kw in _LIKE)
+                if cmds:
+                    out.extend(cmds)
+                elif not dp and not any(k in text for k in _DIET_PREF_KW):
+                    # 口味词语境（吃辣/清淡…）不猜具体食物（宁缺毋滥）
+                    fp = _food_preference(rest.strip(" ，。的、和跟练吃"),
+                                          kw in _LIKE)
+                    if fp:
+                        out.append(fp)
                 break
-    if dp := _diet_preference(text):
+    if dp:
         out.append(dp)
     if e := _event(text):
         out.append(e)
+    if ml := _meal_event(text):
+        out.append(ml)
     return out
 
 
@@ -338,6 +418,17 @@ def _ack_text(cmd: dict) -> str:
         return f"训练偏好 {cmd['value']}{cmd.get('about') or ''}"
     if op == "preference_diet":
         return f"饮食偏好 {cmd['value']}"
+    if op == "preference_food":
+        return f"食物偏好 {cmd['value']}{cmd.get('about', '').replace('食物:', '')}"
+    if op == "meal":
+        seg = []
+        for it in cmd.get("items", []):
+            nm = it.get("name") or it.get("raw") or ""
+            if it.get("amount"):
+                nm += it["amount"]
+            if nm:
+                seg.append(nm)
+        return f"饮食记录 {cmd.get('meal') or cmd['occurred']}（{'、'.join(seg)}）"
     if op == "preference_part":
         return f"训练偏好 {cmd['value']}{cmd.get('about', '').replace('部位:', '练')}"
     if op == "checkin":
@@ -385,6 +476,17 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                      "items": cmd.get("items", [])},
                     occurred_at=f"{cmd['occurred']}T00:00:00+00:00",
                     muscles=m.muscles_of_exercises(names) if names else None))
+            elif cmd["op"] == "preference_food":
+                ok = m.upsert_state(user_id, "preference", cmd["value"],
+                                    about=cmd["about"]) is not None
+            elif cmd["op"] == "meal":
+                fnames = [i["name"] for i in cmd.get("items", [])
+                          if i.get("name")]
+                ok = bool(m.log_event(
+                    user_id, "meal",
+                    {"meal": cmd.get("meal"), "items": cmd.get("items", [])},
+                    occurred_at=f"{cmd['occurred']}T00:00:00+00:00",
+                    foods=fnames or None))
             elif cmd["op"] == "profile_delta":
                 cur = (m.current_profile(user_id) or {}).get(cmd["key"])
                 if cur is None:

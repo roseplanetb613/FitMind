@@ -148,8 +148,16 @@ class MemoryStore:
                            "valid_from": now, "valid_to": None,
                            "recorded_at": now, "invalidated_at": None,
                            "expires_at": expires}))
-                # 3) ABOUT 同库一跳（目标节点存在才连；缺失静默跳过）
-                if lab:               # lab 来自白名单 _ABOUT_LABEL，非用户输入
+                # 3) ABOUT 同库一跳（目标节点存在才连；缺失静默跳过）。
+                #    食物: 前缀 → Food 个人域 MERGE（T3）；其余按白名单 label MATCH
+                if about and about.startswith("食物:"):
+                    ab_food = about.split(":", 1)[1]
+                    if ab_food:
+                        tx.run(
+                            "MATCH (f:StateFact {fact_id: $fid}) "
+                            "MERGE (t:Food {name: $ab}) "
+                            "MERGE (f)-[:ABOUT]->(t)", fid=fid, ab=ab_food)
+                elif lab:          # lab 来自白名单 _ABOUT_LABEL，非用户输入
                     tx.run(
                         f"MATCH (f:StateFact {{fact_id: $fid}}), "
                         f"(t:{lab} {{name: $ab}}) MERGE (f)-[:ABOUT]->(t)",

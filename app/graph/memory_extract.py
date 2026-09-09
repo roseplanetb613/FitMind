@@ -47,6 +47,25 @@ _FORGET_RE = re.compile(r"(忘掉|删除|清除|抹掉|清空).*(数据|记忆|�
 _SKIP = ("emo", "心情", "低落", "焦虑", "想试试", "想练", "打算", "计划",
          "想开始", "犹豫")
 
+# W2 个性化（2026-09-09）：名字/性别/目标/饮食偏好陈述句（spec §3.1）
+_NAME_RE = re.compile(
+    r"(?:我是|我叫|叫我)\s*([一-龥]{2,4}|[A-Za-z][A-Za-z0-9_]{1,19})")
+_NAME_STOP = frozenset({
+    "谁", "谁啊", "谁呀", "男生", "女生", "男的", "女的", "男性", "女性",
+    "男人", "女人", "学生", "新手", "小白", "老师", "教练", "好人", "坏人"})
+_NAME_BAD_PREFIX = "说不很想真也都还就要会能应在把被让跟问听看吃练跑睡爱恨"
+_SEX_RE = re.compile(
+    r"^我是\s*(男生|女生|男人|女人|男孩|女孩|男的|女的|男性|女性)")
+_SEX_MAP = {"男生": "male", "男人": "male", "男孩": "male", "男的": "male",
+            "男性": "male", "女生": "female", "女人": "female",
+            "女孩": "female", "女的": "female", "女性": "female"}
+_GOAL_RE = re.compile(r"(?:我想|我要|目标是|目标)\s*(增肌|减脂|减肥|维持|保持)")
+_GOAL_MAP = {"增肌": "build_muscle", "减脂": "lose_fat", "减肥": "lose_fat",
+             "维持": "maintain", "保持": "maintain"}
+_DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", "低盐",
+                 "不吃甜", "戒糖", "无糖", "素食", "吃素", "不吃肉",
+                 "吃辣", "重口", "偏咸", "低脂")
+
 
 def _is_question(text: str) -> bool:
     return any(k in text for k in _QUESTION)
@@ -148,6 +167,47 @@ def _event(text: str) -> dict | None:
             "about": name, "verb": verb_hit}
 
 
+def _name(text: str) -> dict | None:
+    """'我是星海/叫我Harry' → profile.name；停用词+坏前缀护栏（'我是谁'不抽'谁'）。"""
+    m = _NAME_RE.search(text)
+    if m is None:
+        return None
+    nm = m.group(1)
+    if nm in _NAME_STOP or nm[0] in _NAME_BAD_PREFIX:
+        return None
+    return {"op": "profile", "key": "name", "value": nm}
+
+
+def _sex(text: str) -> dict | None:
+    """'我是男的/我是女生' → profile.sex（^我是 句首锚点，防'我男朋友…'）。"""
+    m = _SEX_RE.match(text.strip())
+    if m is None:
+        return None
+    return {"op": "profile", "key": "sex", "value": _SEX_MAP[m.group(1)]}
+
+
+def _goal(text: str) -> dict | None:
+    """'我想增肌/目标是维持' → profile.goal；'不想'否定与'增肌粉'名词护栏。"""
+    if "不想" in text:
+        return None
+    m = _GOAL_RE.search(text)
+    if m is None:
+        return None
+    if m.end() < len(text) and text[m.end()] in "粉剂":
+        return None                     # "增肌粉/增肌剂"是补剂名词非目标
+    return {"op": "profile", "key": "goal", "value": _GOAL_MAP[m.group(1)]}
+
+
+def _diet_preference(text: str) -> dict | None:
+    """'我喜欢清淡/不吃辣' → preference(about=None)，多命中 '、' 合并（同槽替换）。"""
+    hits = [k for k in _DIET_PREF_KW if k in text]
+    if "不吃辣" in hits and "吃辣" in hits:
+        hits.remove("吃辣")                     # 否定优先，防"不吃辣"抽成"吃辣"
+    if not hits:
+        return None
+    return {"op": "preference_diet", "value": "、".join(hits)}
+
+
 def extract(text: str) -> list[dict]:
     """主入口：返回抽取指令列表（空=不抽）。问句/情绪/假设 一律跳过。"""
     if not text or _is_question(text):
@@ -158,11 +218,13 @@ def extract(text: str) -> list[dict]:
     if _FORGET_RE.search(text):
         out.append({"op": "forget_all"})
         return out                           # 删除权最高优先，不再抽取其它
-    for fn in (_weight, _age, _height):
+    for fn in (_weight, _age, _height, _name, _sex, _goal):
         if cmd := fn(text):
             out.append(cmd)
     if p := _preference(text):
         out.append(p)
+    if dp := _diet_preference(text):
+        out.append(dp)
     if e := _event(text):
         out.append(e)
     return out
@@ -180,6 +242,10 @@ def apply_memory_extract(text: str, user_id: str) -> int:
             if cmd["op"] == "preference":
                 if m.upsert_state(user_id, "preference", cmd["value"],
                                   about=cmd["about"]) is not None:
+                    n += 1
+            elif cmd["op"] == "preference_diet":
+                if m.upsert_state(user_id, "preference", cmd["value"],
+                                  about=None) is not None:
                     n += 1
             elif cmd["op"] == "checkin":
                 if m.log_event(user_id, "checkin",

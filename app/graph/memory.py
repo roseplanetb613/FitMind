@@ -362,6 +362,34 @@ class MemoryStore:
                occurred_at: str | None = None) -> str | None:
         return self.log_event(user_id, "pr", payload, occurred_at=occurred_at)
 
+    def events(self, user_id: str, type_: str | None = None,
+               days: int = 90) -> list[dict]:
+        """事件时间线（只读）：occurred_at 倒序，days 窗口；payload JSON 还原。
+        任何异常 → []（调用方按空态回落，主链路不受影响）。"""
+        _validate_user_id(user_id)
+        since = _add_days(self._now(), -days)
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                rows = s.run(
+                    "MATCH (u:User {user_id: $uid})-[:LOGGED]->(e:Event) "
+                    "WHERE ($t IS NULL OR e.type = $t) "
+                    "AND e.invalidated_at IS NULL AND e.occurred_at >= $since "
+                    "RETURN e.type AS type, e.payload AS payload, "
+                    "e.occurred_at AS occurred_at "
+                    "ORDER BY e.occurred_at DESC",
+                    uid=user_id, t=type_, since=since)
+                out = []
+                for r in rows:
+                    try:
+                        payload = json.loads(r["payload"] or "{}")
+                    except Exception:
+                        payload = {"raw": r["payload"]}
+                    out.append({"type": r["type"], "payload": payload,
+                                "occurred_at": r["occurred_at"]})
+                return out
+        except Exception:
+            return []
+
     # ------------------------------------------------------- 隔离与审计
     def forget(self, user_id: str) -> int:
         """每用户物理删除权（spec §6：优先于 append-only 审计链）。返回删除节点数。"""

@@ -27,6 +27,18 @@ _QUESTION = ("怎么", "吗", "?", "？", "啥", "为什么", "能不能", "可�
 # 体重陈述句（E2E-01："我体重 82" → profile 同型替换；"斤" → 公斤）
 _WEIGHT_RE = re.compile(r"体重\s*(\d+(?:\.\d+)?)\s*(公斤|千克|kg|KG|斤)?")
 
+# 档案陈述句扩展（2026-09-08 个性化）：数值区间+锚点护栏，宁缺毋滥
+_WEIGHT_STMT_RE = re.compile(
+    r"(?:我(?:现在)?(?:只有|是)?|现在|改成|改为)\s*(\d+(?:\.\d+)?)"
+    r"\s*(公斤|千克|斤|kg|KG)")
+_WEIGHT_EXCLUDE = ("每公斤", "每千克", "每kg", "每KG")   # 营养剂量语境绝不抽
+_AGE_RE = re.compile(r"(?:我今年|今年|我)\s*(\d{1,3})\s*岁")
+_HEIGHT_ANCHOR_RE = re.compile(r"身高\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)?")
+_HEIGHT_UNIT_RE = re.compile(r"我\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)")
+_W_RANGE = (30.0, 300.0)
+_A_RANGE = (5, 120)
+_H_RANGE = (100.0, 250.0)
+
 # 数据删除权（E2E-01/IS-02："忘掉我的数据" → forget 全清）
 _FORGET_RE = re.compile(r"(忘掉|删除|清除|抹掉|清空).*(数据|记忆|档案|记录)")
 
@@ -52,17 +64,53 @@ def _norm_exercise(text: str):
 
 
 def _weight(text: str) -> dict | None:
-    """'我体重 82 公斤/82斤' → profile.weight_kg 替换指令（同型唯一）。"""
+    """'我体重82/我只有60kg/现在80斤' → profile.weight_kg（区间+剂量语境护栏）。"""
+    if any(k in text for k in _WEIGHT_EXCLUDE):
+        return None
     m = _WEIGHT_RE.search(text)
+    raw, unit = (m.group(1), m.group(2)) if m else (None, None)
+    if raw is None:
+        m2 = _WEIGHT_STMT_RE.search(text)          # 无"体重"锚点时单位必须显式
+        if m2 is None:
+            return None
+        raw, unit = m2.group(1), m2.group(2)
+    try:
+        v = float(raw)
+        if unit == "斤":
+            v /= 2.0
+        if not (_W_RANGE[0] <= v <= _W_RANGE[1]):
+            return None
+        return {"op": "profile", "key": "weight_kg", "value": v}
+    except (TypeError, ValueError):
+        return None
+
+
+def _age(text: str) -> dict | None:
+    """'我18岁/今年18' → profile.age（区间 5-120；'我3岁'不抽）。"""
+    m = _AGE_RE.search(text)
+    if m is None:
+        return None
+    try:
+        v = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    if not (_A_RANGE[0] <= v <= _A_RANGE[1]):
+        return None
+    return {"op": "profile", "key": "age", "value": v}
+
+
+def _height(text: str) -> dict | None:
+    """'我身高165/我165cm' → profile.height_cm（'我165'无锚点不抽）。"""
+    m = _HEIGHT_ANCHOR_RE.search(text) or _HEIGHT_UNIT_RE.search(text)
     if m is None:
         return None
     try:
         v = float(m.group(1))
-        if m.group(2) in ("斤",):
-            v /= 2.0
-        return {"op": "profile", "key": "weight_kg", "value": v}
     except (TypeError, ValueError):
         return None
+    if not (_H_RANGE[0] <= v <= _H_RANGE[1]):
+        return None
+    return {"op": "profile", "key": "height_cm", "value": v}
 
 
 def _preference(text: str) -> dict | None:
@@ -109,8 +157,9 @@ def extract(text: str) -> list[dict]:
     if _FORGET_RE.search(text):
         out.append({"op": "forget_all"})
         return out                           # 删除权最高优先，不再抽取其它
-    if w := _weight(text):
-        out.append(w)
+    for fn in (_weight, _age, _height):
+        if cmd := fn(text):
+            out.append(cmd)
     if p := _preference(text):
         out.append(p)
     if e := _event(text):

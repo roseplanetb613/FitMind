@@ -6,6 +6,7 @@
 其他输入直接对话（当前 provider 由 llm_config auto 决定：有 key→DeepSeek）
 """
 from __future__ import annotations
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,13 @@ for p in ("", "app", "lib"):          # "" = 项目根（app 包解析需要）
 from fastapi.testclient import TestClient   # noqa: E402
 from app.server import create_app           # noqa: E402
 
-SID = "cli-1"
+# CLI 记忆注入计划 §3.1：uid 解析优先级 /user 命令 > 环境变量 FITMIND_UID > 默认 local
+UID = os.environ.get("FITMIND_UID", "local")
+
+
+def _sid() -> str:
+    """session_id 随 uid 派生（换用户换 session，防旧 profile 缓存串味）。"""
+    return f"cli-{UID}"
 
 # 中文口语输入 → API 英文枚举（仅 CLI 边界归一化，业务层契约不变）
 SEX_MAP = {"男": "male", "男生": "male", "m": "male", "male": "male",
@@ -40,10 +47,11 @@ def _setup(c) -> None:
                        "maintain")
     profile = {"sex": sex, "age": int(age), "height_cm": float(height),
                "weight_kg": float(weight), "goal": goal, "activity": 1.55}
-    r = c.post("/v1/profile", json={"session_id": SID, "profile": profile})
+    r = c.post("/v1/profile", json={"session_id": _sid(), "user_id": UID,
+                                    "profile": profile})
     if r.status_code == 200:
         p = r.json()["profile"]
-        print(f"  [建档 200] {p.get('sex')}/{p.get('age')}岁/"
+        print(f"  [建档 200] uid={UID} {p.get('sex')}/{p.get('age')}岁/"
               f"{p.get('height_cm')}cm/{p.get('weight_kg')}kg goal={p.get('goal')}")
     else:
         print(f"  [建档 {r.status_code}] {r.json().get('error')} "
@@ -51,11 +59,13 @@ def _setup(c) -> None:
 
 
 def main() -> None:
+    global UID
     with TestClient(create_app()) as c:
-        print("FitMind CLI（输入 exit 退出；/setup 建档后试'帮我制定一日减脂计划'）")
+        print(f"FitMind CLI（user={UID}；输入 exit 退出；/setup 建档；"
+              "/user <uid> 切换用户）")
         while True:
             try:
-                msg = input("you> ").strip()
+                msg = input(f"you[{UID}]> ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
@@ -67,7 +77,19 @@ def main() -> None:
             if low == "/setup":
                 _setup(c)
                 continue
-            r = c.post("/v1/chat", json={"message": msg, "session_id": SID})
+            if low.startswith("/user "):
+                new_uid = msg.split(None, 1)[1].strip()
+                if new_uid:
+                    UID = new_uid
+                    print(f"  [switch] uid -> {UID}，session -> {_sid()}")
+                else:
+                    print("  用法：/user <uid>")
+                continue
+            if low == "/whoami":
+                print(f"  [whoami] uid={UID} session={_sid()}")
+                continue
+            r = c.post("/v1/chat", json={"message": msg, "session_id": _sid(),
+                                        "user_id": UID})
             b = r.json()
             print(f"agent[{b['mode_used']}]> {b['reply']}")
             print("-" * 50)

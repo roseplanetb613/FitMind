@@ -16,11 +16,13 @@ for p in ("", "lib"):
 class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
+    user_id: str | None = None                     # F4：记忆图谱归属（缺省 local）
 
 
 class ProfileRequest(BaseModel):
     session_id: str
     profile: dict
+    user_id: str | None = None
 
 
 def create_app() -> FastAPI:
@@ -38,7 +40,7 @@ def create_app() -> FastAPI:
 
     @app.post("/v1/chat")
     def chat(req: ChatRequest):
-        resp = agent.run(req.message, req.session_id)
+        resp = agent.run(req.message, req.session_id, user_id=req.user_id)
         # structured 由 build_structured 单源组装：失败原因已透传 error 字段
         return {"session_id": resp.session_id, "reply": resp.reply,
                 "mode_used": resp.mode_used, "provenance": resp.provenance,
@@ -48,7 +50,8 @@ def create_app() -> FastAPI:
     def set_profile(req: ProfileRequest):
         from fastapi.responses import JSONResponse
         try:
-            profile = agent.update_profile(req.session_id, req.profile)
+            profile = agent.update_profile(req.session_id, req.profile,
+                                           user_id=req.user_id)
         except ValueError as e:
             return JSONResponse(status_code=422,
                                 content={"error": "profile 校验失败",

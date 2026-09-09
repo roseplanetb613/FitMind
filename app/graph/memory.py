@@ -404,14 +404,14 @@ def contains_injury_symptom(text: str) -> bool:
 
 
 _INJURY_SITE = {
-    "膝": "knee", "腰": "lower_back", "肩": "shoulder", "手腕": "wrist",
+    "膝": "knee", "半月板": "knee", "十字韧带": "knee", "交叉韧带": "knee", "腰": "lower_back", "肩": "shoulder", "手腕": "wrist",
     "手肘": "elbow", "肘": "elbow", "脚踝": "ankle", "脚": "ankle",
     "脖子": "neck", "颈椎": "neck", "背": "back", "髋": "hip", "大腿": "thigh",
     "腿": "leg", "跟腱": "achilles",
 }
 
 _INJURY_SITE_ZH = {
-    "膝": "膝", "腰": "腰", "肩": "肩", "手腕": "手腕", "肘": "手肘",
+    "膝": "膝", "半月板": "膝", "十字韧带": "膝", "交叉韧带": "膝", "腰": "腰", "肩": "肩", "手腕": "手腕", "肘": "手肘",
     "脚踝": "脚踝", "脚": "脚踝", "脖子": "颈", "颈椎": "颈", "背": "背",
     "髋": "髋", "大腿": "大腿", "腿": "腿", "跟腱": "跟腱",
 }
@@ -420,7 +420,7 @@ _INJURY_SITE_ZH = {
 def extract_injury_site(text: str) -> tuple[str, str] | None:
     """从症状句中提取部位（原词优先，返回 (canonical_zh, key)）。"""
     for key in ("脚踝", "手腕", "手肘", "脖子", "颈椎", "大腿", "跟腱",
-                "膝", "腰", "肩", "肘", "脚", "背", "髋", "腿"):
+                "膝", "半月板", "十字韧带", "交叉韧带", "腰", "肩", "肘", "脚", "背", "髋", "腿"):
         if key in text:
             return _INJURY_SITE_ZH[key], _INJURY_SITE[key]
     return None

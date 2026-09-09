@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 
 class FitMindState(TypedDict, total=False):
     session_id: str
+    user_id: str                          # F4：记忆归属（agent.run 注入，nodes._ctx 消费）
     message: str
     profile: dict
     intent: dict                      # task_type/params/raw_text/complexity

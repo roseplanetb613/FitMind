@@ -15,8 +15,13 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
     validator = validator or RuleValidator()
 
     def _ctx(state: dict, mode: str) -> ExecutionContext:
-        return ExecutionContext(session=None, profile=state.get("profile") or {},
-                                mode=mode, skill_log=[])
+        # F4：ExecutionContext 需携带会话 user_id（guard/qa 记忆归属消费）；
+        # 此前 session=None 导致 ctx.session.user_id 恒空、记忆回落 local。
+        from app.core.session import Session as _Session
+        return ExecutionContext(
+            session=_Session(id=state.get("session_id", ""),
+                             user_id=state.get("user_id", "local")),
+            profile=state.get("profile") or {}, mode=mode, skill_log=[])
 
     # ---------------- guard（无条件前置） ----------------
     def guard(state: dict) -> dict:

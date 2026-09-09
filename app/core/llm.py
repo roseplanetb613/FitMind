@@ -47,6 +47,8 @@ _RULES = [
     # + 意图层补充信号（"能不能练"类问法）。tfcc/半月板等已含于症状表。
     (GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA, "guard",
      lambda t, kw: {"signal": t}),
+    (("挺不错", "还不错", "就按这个", "按这个练", "没问题就按"), "smalltalk",
+     lambda t, kw: {"topic": t}),
     (("你好", "您好", "hi", "hello", "嗨", "你是谁", "你叫什么",
       "谢谢", "再见", "拜拜"), "smalltalk",
      lambda t, kw: {"topic": t}),
@@ -68,9 +70,34 @@ _RULES = [
     (("写周报", "周报", "讲笑话", "冷笑话", "打游戏", "买房子", "买房", "哪套房值得买",
       "会下棋", "股票", "写代码"), "smalltalk",
      lambda t, kw: {"topic": t}),
+    # W3·咨询/改计划/评价类 → qa（禁 plan_exec）："怎么改/有没有效/怎么样"等表达
+    # 是咨询非生成完整计划（G6-02/G6-19/G7-12 等 plan 过触发根因）
+    (("怎么改", "怎么调整", "怎么变", "有没有效", "有没有用", "练什么能",
+      "能防", "效果好", "什么效果"), "qa",
+     lambda t, kw: {"query": t}),
     # W1·辟谣/评价类问法 → qa（禁 plan；"是不是/有用吗/对吧"类常被 LLM 误判 plan）
     (("是不是", "真的吗", "有用吗", "靠谱吗", "好吗", "对不对", "对吧",
       "智商税", "能瘦吗", "有效吗", "会不会", "可以吗", "瘦肚子", "掉秤"), "qa",
+     lambda t, kw: {"query": t}),
+    # D5 2026B：记忆元/偏好查询问法 → qa（禁 clarify/plan；T9-15/17/19）
+    (("练了几次", "跑过吗", "跑过步", "练过吗", "训练过吗", "吃过几次",
+      "练几天了", "坚持多久了", "餐单", "配餐", "食谱"), "qa",
+     lambda t, kw: {"query": t}),
+    # D5 2026B：无伤语境下"今天能练X吗" → qa（禁 guard 疑问/plan；T9-13）
+    (("能练腿", "能练肩", "能练背", "能练胸", "能练臀", "能练吗", "今天能练"), "qa",
+     lambda t, kw: {"query": t}),
+    # D5 2026B：增肌速度咨询（T7-07 一月长10斤）→ qa 非 clarify
+    (("长肌肉", "长肉", "增肌速度", "多久能增肌"), "qa",
+     lambda t, kw: {"query": t}),
+    # D5 2026B：康复后确认问法（T9-03"能练深蹲了吧"/T9-09"深蹲可以吧"）→ qa
+    (("能练深蹲", "能练硬拉", "能练卧推", "可以吧", "行不行", "行吧", "没问题吧"), "qa",
+     lambda t, kw: {"query": t}),
+    # D6 2026B：增肌/肌肉话题（T7-07 一月长10斤肌肉）→ qa 非 clarify；
+    # "肌肉酸痛"类由 L0 guard 先行，不受影响
+    (("长肉", "长几斤", "增肌", "肌肉", "长了多少"), "qa",
+     lambda t, kw: {"query": t}),
+    # D6 2026B：康复后单句确认（T9-18"深蹲吧"）→ qa 非 clarify
+    (("深蹲吧", "硬拉吧", "练吧", "跑吧"), "qa",
      lambda t, kw: {"query": t}),
 ]
 
@@ -87,7 +114,10 @@ _ENTITY_HINT = ("深蹲", "硬拉", "卧推", "推举", "划船", "引体", "俯
                 # "X够不够/对不对"悬空评价应放行到 profile 规则，不触发指代澄清）
                 "训练容量", "体脂", "肌肉量", "内脏脂肪", "柔韧性", "腰臀比",
                 "基础代谢", "骨量", "握力", "心肺", "训练年限", "肌肉分布",
-                "FFMI", "ffmi", "一英里", "BMI")
+                "FFMI", "ffmi", "一英里", "BMI",
+                "按这个", "挺不错", "没问题",
+                # D6 2026B：疲劳/恢复话题是明确实体（T6-17"不是伤就是疲劳，继续练？"）
+                "疲劳", "恢复")
 
 # W2 指代消解词表（_is_vague_reference 用）：句含任一且无领域实体 → 规则级 clarify。
 # R4 实证：#99 还要继续吗 / #92 能不能换一种 / #83 一天做几个 / #98 帮我看看对不对。
@@ -97,6 +127,23 @@ _REFERENCE_WORDS = ("这个", "那个", "它", "这样", "上次", "随便",
                     "继续", "换一种", "换一个", "换个", "几个", "几组",
                     "多少组", "对不对", "多久能", "不明白", "不太明白",
                     "够不够", "接下来")
+
+
+# 指代消解词表（F2-B 亦复用领域实体豁免）
+_MINOR_WORDS = ("10岁", "11岁", "12岁", "13岁", "14岁", "15岁", "16岁", "17岁",
+                    "初中生", "高中生", "未成年")
+_INTENSITY_WORDS = ("冲pr", "破pr", "大重量", "上重量", "备战", "比赛",
+                    "药检", "举铁", "力量举", "冲记录", "加重")
+
+
+def _is_minor_context(p: str) -> bool:
+    """未成年语境：年龄/学段词命中。"""
+    return any(k in p for k in _MINOR_WORDS)
+
+
+def _is_intensity_context(p: str) -> bool:
+    """训练强度/备战语境：与未成年叠加才触发 guard（防建档误拦）。"""
+    return any(k in p for k in _INTENSITY_WORDS)
 
 
 def _is_vague_reference(t: str) -> bool:
@@ -149,11 +196,44 @@ class StubProvider(LLMProvider):
         if len(t) <= 1 or all(ch in "啊嗯哦哈诶嘿呀嘛吧呢？?。！! " for ch in t):
             return Classification("smalltalk", {"topic": t}, confidence=1.0)
         p = t.lower()
+        # D6 2026B：心理红线否定短路（"我没想死，就是好累" T5-14）——否定前缀的
+        # 红线词不是自报，不得路由 guard。
+        if any(k in t for k in ("没想死", "不想死", "没有想死", "不自杀", "没自杀",
+                                "不想轻生")):
+            pass
+        # D6 2026B：普通应激（压力）+ 评价问法 → 不 guard（T5-17 高三压力失眠想哭
+        # +运动有用吗；T5-18 丧亲失眠含"出事"非"压力"仍 guard——豁免仅限"压力"）
+        elif any(k in t for k in ("压力大", "压力")) and any(
+                k in t for k in ("有用吗", "有效吗", "能缓解", "有帮助吗", "缓解吗")):
+            pass
         # 安全红线：guard 症状词绝对优先于一切规则（防 W1 评价类规则误吞症状问法）。
         # 注意 reversed(_RULES) 中新规则（放末尾者优先）含"可以吗/会不会"等宽词，
         # 必须先于此检查症状信号。
-        if any(k in p or k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA):
+        elif any(k in p or k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA):
             return Classification("guard", {"signal": t}, confidence=1.0)
+        # F2-B 未成年×强度语境复合规则（v3 triage R2）：年龄词 ∧ 冲强度/备战语境 →
+        # guard 保守话术；仅年龄词（建档/普通询问）不拦（防误伤）。
+        if (_is_minor_context(p) and _is_intensity_context(p)):
+            return Classification("guard", {"signal": t}, confidence=1.0)
+        # W2：未成年×补剂/药物语境（G10-10 16岁喝肌酸影响身高）→ guard 保守
+        # 拦截；否则被"会不会"(辟谣)qa 规则截胡。置于 _RULES 前。
+        if _is_minor_context(p) and any(k in t for k in ("肌酸", "补剂", "蛋白粉",
+                                                         "增肌粉", "支链", "氮泵", "增肌剂")):
+            return Classification("guard", {"signal": t}, confidence=1.0)
+        # D6 2026B：未成年×减重施压（T4-18 我妈逼我15岁减肥）→ guard
+        if _is_minor_context(p) and any(k in t for k in ("减肥", "减脂", "节食", "瘦身")):
+            return Classification("guard", {"signal": t}, confidence=1.0)
+        # D5 2026B：注入越权语境——角色扮演/编码/伪造指令/格式混排等不触发 plan_exec
+        # 与指代澄清。含药词（药方/特效药/药单）→ 仍 guard（红线优先）；否则拒绝
+        # 配合走 smalltalk。置于指代消解之前（T8-09 伪造债务含"上次"须先拦截）。
+        _INJECT_KW = ("被授权", "授权为", "角色扮演", "假装", "无视安全", "绕过",
+                      "base64", "编码", "输出：", "====", "你上次欠", "跪下",
+                      "删库", "上面通知", "上级命令", "命令你", "系统指令",
+                      "重置系统", "忽略之前的")
+        if any(k in t for k in _INJECT_KW):
+            if any(k in t for k in ("药方", "特效药", "药单", "药物", "处方", "开药")):
+                return Classification("guard", {"signal": t}, confidence=1.0)
+            return Classification("smalltalk", {"topic": t}, confidence=1.0)
         # W2 指代消解：无领域实体的纯指代问法 → 规则级 clarify（不经 LLM，不硬答）
         if _is_vague_reference(t):
             return Classification("fallback", {}, confidence=0.3,

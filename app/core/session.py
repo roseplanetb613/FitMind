@@ -8,6 +8,7 @@ import uuid
 @dataclass
 class Session:
     id: str
+    user_id: str = "local"                      # F4：记忆图谱归属用户（默认 local）
     history: list = field(default_factory=list)
     profile: dict = field(default_factory=dict)
     last_structured: dict | None = None
@@ -22,12 +23,16 @@ class SessionManager:
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
 
-    def create(self, given_id: str | None = None) -> Session:
+    def create(self, given_id: str | None = None,
+               user_id: str | None = None) -> Session:
         sid = given_id or uuid.uuid4().hex[:12]
         with self._lock:
             if sid in self._sessions:
-                return self._sessions[sid]
-            sess = Session(id=sid)
+                s = self._sessions[sid]
+                if user_id and s.user_id == "local" and user_id != "local":
+                    s.user_id = user_id       # 显式注入升级归属（保持幂等）
+                return s
+            sess = Session(id=sid, user_id=user_id or "local")
             self._sessions[sid] = sess
             return sess
 

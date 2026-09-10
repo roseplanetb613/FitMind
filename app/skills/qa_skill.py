@@ -183,6 +183,7 @@ class QaSkill(Skill):
         p = dict(getattr(ctx, "profile", None) or {})
         if not p:
             return SkillResult(ok=True, data={"items": [], "empty": True,
+                                              "data_kind": "data",
                                               "reason": "尚未建立身体档案，请先建档"},
                                provenance=["qa#session.profile"])
         label = {"name": "称呼", "sex": "性别", "age": "年龄",
@@ -207,7 +208,8 @@ class QaSkill(Skill):
         if m is None:
             return SkillResult(ok=True, data={"items": [{
                 "name": "记忆", "value": "记忆功能暂不可用（图谱离线）"}],
-                "empty": True}, provenance=["qa#memory.offline"])
+                "empty": True, "data_kind": "data"},
+                provenance=["qa#memory.offline"])
         muscle = _PART2MUSCLE.get(part, part)
         s = m.muscle_summary(uid, muscle, part=part)
         if not s["trained_count"] and not s["active_injury"] and not s["preference"]:
@@ -233,7 +235,7 @@ class QaSkill(Skill):
             return SkillResult(
                 ok=True, data={"items": [{"name": "记忆",
                                           "value": "记忆功能暂不可用（图谱离线）"}],
-                               "empty": True},
+                               "empty": True, "data_kind": "data"},
                 provenance=["qa#memory.offline"])
         items = []
         try:
@@ -373,6 +375,7 @@ class QaSkill(Skill):
                     })
         if not items:
             return SkillResult(ok=True, data={"items": [], "empty": True,
+                                              "data_kind": "data",
                                               "reason": "未检索到食物"},
                                provenance=["qa#foods_repo.search"])
         pref = self._diet_prefs(ctx)
@@ -427,6 +430,7 @@ class QaSkill(Skill):
                                   "rest_sec": sug.get("rest_sec")})
         if not items:
             return SkillResult(ok=True, data={"items": [], "empty": True,
+                                              "data_kind": "data",
                                               "reason": "未检索到动作"},
                                provenance=["qa#exercise_repo.search"])
         return SkillResult(ok=True, data={"items": items},

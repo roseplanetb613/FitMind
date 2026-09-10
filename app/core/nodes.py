@@ -22,6 +22,13 @@ _OFFER_MARKS = ("我可以", "可以帮你", "要不要", "如果你想", "需�
 _PLAN_NOUNS = ("计划", "课表", "训练表")
 
 
+def _effective_data_kind(structured: dict) -> str:
+    """空结果分级判定（W2）：缺省/未知一律按 data——宁严勿宽，维持禁虚构约束。
+    'knowledge'（编排原理等通识）须由 skill 侧显式打标，渲染层不猜。"""
+    dk = (structured.get("data") or {}).get("data_kind")
+    return "knowledge" if dk == "knowledge" else "data"
+
+
 def _affirm_plan_intent(msg: str, history: list) -> dict | None:
     """肯定应答 + 上轮 plan 提议 → 承接提议意图（CLI 实证："确认"承接
     "我可以帮你把这套循环排成一周的具体计划"，曾丢上下文落 qa 空检索）。
@@ -262,6 +269,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         structured = build_structured(state.get("intent"), state.get("outcome"),
                                       message=state.get("message"),
                                       history=state.get("history"))
+        # W2：空结果分级显式化（skill 打标，缺省归 data）——渲染侧不猜缺省语义；
+        # 只补空结果，正常命中数据不被改动
+        _d = structured.get("data")
+        if isinstance(_d, dict) and (_d.get("empty") or _d.get("reason")):
+            _d["data_kind"] = _effective_data_kind(structured)
         if state.get("memory_ack"):                     # W1：记忆确认话术透传
             structured["memory_ack"] = list(state["memory_ack"])
         try:

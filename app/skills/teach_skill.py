@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """动作教学：检索动作+处方组次+器械要求（要领文本 RAG 补强，全静默降级）。"""
 from __future__ import annotations
 from app.skills.base import Skill, SkillResult
@@ -214,6 +214,7 @@ class TeachSkill(Skill):
                 return SkillResult(ok=True, data={"items": [myth], "myth": True},
                                    provenance=["teach#myth_kb"])
             return SkillResult(ok=True, data={"items": [], "empty": True,
+                                              "data_kind": "data",
                                               "reason": "动作库未收录，尝试其他说法"},
                                provenance=["teach#exercise_repo.search"])
         self._rag_enrich(ctx, query, items)      # RAG 补强（异常静默，不影响规则结果）

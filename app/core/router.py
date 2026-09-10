@@ -39,6 +39,39 @@ def route(complexity: str, task_type: str = "") -> Mode:
     return _MODE_MAP[cfg["default"].get(complexity, "direct")]
 
 
+# ------------------------------------------------------------ 记忆查询句式直通
+# 缺陷（CLI 实测 2026-09-10）：kind=memory 只能由 L0 的**字面词表**产出
+# （训练记录/练过什么/打卡记录/训练日志/最近练/我的偏好…），而 L2 的 tool schema
+# 里根本没有 kind 字段——表外问法**结构性**到不了 qa._memory，直接落动作库检索：
+#   "我啥时练的核心" → qa#exercise_repo.search → 空 → "没有找到相关内容"
+# 而同一句只要带上 kind=memory 就能列出真实记录。修复：把「自指 + 时间/次数疑问
+# + 记录域 + 已然体」句式提升为确定性 L0 级直通（不经 L1/L2，防被 LLM 判 unknown
+# 转成反问）。判定从严：建议型/动作型/通识型问法一律不碰（宁缺毋滥）。
+_MEM_SELF_KW = ("我", "俺", "自己")
+_MEM_WHEN_KW = ("啥时", "啥时候", "什么时候", "哪天", "几号", "多久", "几次",
+                "上次", "上回", "最近", "以前", "之前")
+_MEM_ASPECT_KW = ("了", "过", "的")          # 已然体标记
+_MEM_PAST_KW = ("上次", "上回", "以前", "之前")   # 显式过去锚（"什么时候"式问句无体标记）
+_MEM_DOMAIN_KW = ("练", "训练", "打卡", "记录", "日志", "健身", "运动", "伤")
+_MEM_ADVICE_KW = ("比较好", "合适", "建议", "应该", "推荐", "最好", "怎样",
+                  "怎么", "如何", "要不要", "能不能", "可以吗", "好吗", "有用")
+
+
+def is_memory_query(text: str) -> bool:
+    """用户**自己的记录**查询（何时/几次练过什么/何时受过伤）——从严判定。"""
+    t = text or ""
+    if not any(k in t for k in _MEM_SELF_KW):
+        return False
+    if not any(k in t for k in _MEM_WHEN_KW):
+        return False
+    if not (any(k in t for k in _MEM_ASPECT_KW)
+            or any(k in t for k in _MEM_PAST_KW)):
+        return False
+    if not any(k in t for k in _MEM_DOMAIN_KW):
+        return False
+    return not any(k in t for k in _MEM_ADVICE_KW)
+
+
 class RouteClassifier:
     """三层分类器：L0 规则(DIRECT，纯规则可复现) → L1 语义例句库 → L2 LLM
     → arbitrate 单点。语义层加载失败静默跳过；stub => 与现状一致。"""
@@ -72,6 +105,11 @@ class RouteClassifier:
         rule = self._rules.classify(text, profile)        # L0 纯规则
         if rule.confidence >= 0.7:                        # 强信号直接定（现状）
             return rule
+        # 记忆查询句式：L0 字面表外无法表达 kind（L2 tool schema 无该字段）→
+        # 确定性直通 qa(kind=memory)，不赌 LLM 分类（避免 unknown→反问死路）
+        if is_memory_query(text):
+            return Classification("qa", {"query": text, "kind": "memory"},
+                                  confidence=0.9)
         # W2：规则级指代澄清（fallback+needs_clarify）不经 L1/L2——
         # 否则 0.3 低置信会被语义层/LLM 转判（#83/#99 实证：clarify 仍变 direct）
         if rule.needs_clarify:

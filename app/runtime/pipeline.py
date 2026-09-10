@@ -3,9 +3,11 @@
 全部落在 lib/ 只读引擎与规则数据上；缺数据透传原因，不猜值。"""
 from __future__ import annotations
 import json
-from datetime import date, timedelta
+import re
+from datetime import date
 from pathlib import Path
 import screening
+import split_cycle
 from app.runtime.repos import exercise_repo, foods_repo
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -16,27 +18,69 @@ UNEDIBLE = ("鱼翅", "燕窝", "冬虫夏草", "琼脂", "石花菜", "蛏干")
 DIRT = (FITT["resistance"]["frequency"], FITT["resistance"]["intensity"],
         FITT["resistance"]["volume"], FITT["resistance"]["rest"])
 
-_WD_ZH = "一二三四五六日"
-
-
-def _day_label(d: date, offset: int) -> str:
-    """训练日 → 用户可读日期锚点（前两天带"今天/明天"相对词，渲染层无当前日期知识）。"""
-    wd = f"周{_WD_ZH[d.weekday()]}"
-    if offset == 0:
-        return f"今天（{d.month}月{d.day}日 {wd}）"
-    if offset == 1:
-        return f"明天（{d.month}月{d.day}日 {wd}）"
-    return f"{d.month}月{d.day}日（{wd}）"
-
 
 def _bp(p: dict, sex: str) -> float:
     w, h, a = p["weight_kg"], p["height_cm"], p["age"]
     return 10 * w + 6.25 * h - 5 * a + (5 if sex == "male" else -161)
 
 
+_REST_NOTE = "睡眠 7-9 小时、蛋白质吃够、可做轻拉伸或散步"
+
+
+def _reps_mid(reps) -> int:
+    """'5-12'/'8' → 目标次数中值（progression.evaluate 入参）。"""
+    nums = [int(x) for x in re.findall(r"\d+", str(reps or ""))]
+    if not nums:
+        return 8
+    return max(1, round(sum(nums[:2]) / min(len(nums), 2)))
+
+
+def _annotate_progression(exercises: list[dict], store) -> None:
+    """LogStore 逐动作回哺（spec §6）：记录原词 search_zh 归一 → 与计划动作
+    标准名匹配 → progression.evaluate 挂建议。无记录/归一失败/任何异常 →
+    不挂字段（宁缺毋滥，主计划不受影响）。"""
+    import progression as prog
+    try:
+        recorded = store.exercise_names()
+    except Exception:
+        return
+    norm_map: dict = {}
+    for raw in recorded:
+        try:
+            hits = exercise_repo().search_zh(raw, limit=1)
+            norm_map[raw] = (hits[0].get("name_zh") if hits else None) or raw
+        except Exception:
+            norm_map[raw] = raw
+    for e in exercises:
+        try:
+            name = e.get("name")
+            src = next((r for r, std in norm_map.items()
+                        if std == name or r == name), None)
+            if src is None:
+                continue
+            rows = store.history(src, top=3)
+            if not rows:
+                continue
+            hist = prog.ExerciseHistory(name, [prog.SetRecord(
+                float(r.get("weight_kg") or 0), int(r.get("reps") or 0),
+                float(r.get("rir") or 0), str(r.get("date") or ""))
+                for r in rows])
+            rep = prog.evaluate(hist, _reps_mid(e.get("reps")), 2)
+            adv = rep.get("advice") or {}
+            if adv.get("reason") == "no history":
+                continue
+            e["progression"] = {"status": rep.get("status"),
+                                "weight_kg": adv.get("weight_kg"),
+                                "reason": adv.get("reason")}
+        except Exception:
+            continue
+
+
 def build_plan(profile: dict, prefs: dict | None = None,
                fatigue: set | None = None,
-               extra_blocked: set | None = None) -> dict:
+               extra_blocked: set | None = None,
+               scheme: dict | None = None, days: int | None = None,
+               log_store=None) -> dict:
     ex, fr = exercise_repo(), foods_repo()   # 共享单例（原模块级 _EX/_FR 副本）
     conds = profile.get("conditions") or []
     pats = profile.get("patterns") or []
@@ -59,15 +103,33 @@ def build_plan(profile: dict, prefs: dict | None = None,
     blocked = {p for l in blocked_patterns for p in l}
     if extra_blocked:
         blocked |= set(extra_blocked)      # 伤痛联动：记忆 injury → 禁忌模式封堵
+    scheme = scheme or split_cycle.default_scheme()
+    try:
+        skeleton = split_cycle.expand(scheme, days, date.today())
+    except ValueError:
+        skeleton = split_cycle.expand(split_cycle.default_scheme(), None,
+                                      date.today())
     training_items = []
     applied = []
-    plans = {"推日(胸·肩·三头)": "push", "拉日(背·二头)": "pull",
-             "腿日(股四·臀·腘绳)": "squat", "核心日": "core"}
-    today = date.today()
-    di = 0                        # 入选训练日的日偏移（被筛查封堵的日不占日期槽）
-    for day, pat in plans.items():
-        if pat in blocked:
+    blocked_notes = []
+    train_cnt = 0
+    for slot in skeleton:
+        if slot["type"] == "rest":
+            training_items.append({"day": slot["label"], "date": slot["date"],
+                                   "type": "rest", "exercises": [],
+                                   "note": slot.get("note") or _REST_NOTE})
             continue
+        pats = [slot["pattern"], *(slot.get("extra_patterns") or [])]
+        if any(p in blocked for p in pats):
+            # 封堵日 → 休息日：循环相位/日期不动（spec §5.2）
+            training_items.append({"day": f"休息日（原：{slot['label']}）",
+                                   "date": slot["date"], "type": "rest",
+                                   "exercises": [], "note": _REST_NOTE,
+                                   "blocked_from": slot["label"]})
+            blocked_notes.append(f"{slot['label']}因身体筛查改为休息日")
+            continue
+        train_cnt += 1
+        pat = slot["pattern"]
         recs = ex.filter(pattern=pat, difficulty=2, limit=4,
                          sort_by_difficulty=True)
         if prefs:
@@ -79,7 +141,7 @@ def build_plan(profile: dict, prefs: dict | None = None,
         focused = bool(prefs and pat in prefs.get("pats_like", ()))
         deload = bool(fatigue and pat in fatigue)
         n = 4 if focused else (2 if deload else 3)
-        item = {"day": day, "date": _day_label(today + timedelta(days=di), di),
+        item = {"day": slot["label"], "date": slot["date"], "type": "train",
                 "pattern": pat,
                 "exercises": [{
                     "name": e.get("name_zh"),
@@ -91,11 +153,16 @@ def build_plan(profile: dict, prefs: dict | None = None,
                 } for e in recs[:n]]}
         if focused:
             item["focused"] = True
-            applied.append(f"{day}加量（偏好）")
+            applied.append(f"{slot['label']}加量（偏好）")
         if deload:
             item["deload"] = True
+        if log_store is not None:
+            _annotate_progression(item["exercises"], log_store)
         training_items.append(item)
-        di += 1
+    if train_cnt == 0:
+        return {"ok": False,
+                "error": "当前身体状况不建议安排训练：全部训练日因筛查封堵改为休息",
+                "provenance": ["pipeline#screening.plan_check"]}
     meals = []
     for f in fr.filter(category="meat", protein_min=18, kcal_max=300,
                        limit=8, sort_by="protein_desc"):
@@ -121,11 +188,13 @@ def build_plan(profile: dict, prefs: dict | None = None,
                       "warnings": sc["warnings"]},
         "fitt": {"resistance": DIRT},
         "macros": macros,
-        "training": {"items": training_items},
+        "training": {"scheme": scheme.get("name_zh"), "items": training_items},
         "meals": {"items": meals[:5]},
     }
     if applied:
         plan["preferences_applied"] = applied   # 偏好应用痕迹（render 可念出）
+    if blocked_notes:
+        plan["blocked_note"] = "；".join(blocked_notes)
     hit_days = [i["day"] for i in training_items if i.get("deload")]
     if hit_days:
         plan["fatigue_note"] = (f"近48小时练过{'、'.join(hit_days)}对应部位，"

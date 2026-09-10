@@ -151,6 +151,8 @@ class PlanSkill(Skill):
             days = None
         if days is not None and days < 1:
             days = None   # <1 归一为未指定：保方案走单周期，防 pipeline 静默重置
+        elif days is not None and days > 90:
+            days = 90     # 超大天数封顶 90（防 expand 平铺挂起；>3 个月的计划无训练学意义）
         try:
             from app.storage.db import LogStore
             store = LogStore()                  # 进阶回哺；构造失败则跳过

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from app.core.intent import Intent, PlannedCall
 from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness
+import split_cycle                      # lib 单源：plan 参数抽取（split/days）
 
 
 @dataclass
@@ -24,7 +25,7 @@ _RULES = [
     # plan：收窄强信号词（去掉单独的"怎么安排"/"一周"，避免吞编排模式问法）
     (("计划", "练什么", "帮我安排", "帮我规划", "帮我排",
       "制定方案", "制定计划", "给我计划", "安排课表", "安排训练", "制定", "方案"), "plan",
-     lambda t, kw: {"days": 1}),
+     lambda t, kw: split_cycle.extract_plan_params(t)),
     (("怎么做", "要领", "动作教学", "怎么练"), "teach",
      lambda t, kw: {"query": t}),
     # 训练编排模式问法（询问"如何分化"而非"生成完整计划"）→ teach
@@ -274,7 +275,8 @@ class StubProvider(LLMProvider):
         if any(k in t for k in ("生成", "制定", "排一份", "排一版", "排一套",
                                 "帮我排", "给我排", "排个")) and any(
                 k in t for k in ("计划", "课表", "训练表", "方案")):
-            return Classification("plan", {"days": 1}, confidence=1.0)
+            return Classification("plan", split_cycle.extract_plan_params(t),
+                                  confidence=1.0)
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
                 # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
@@ -453,6 +455,9 @@ class DeepSeekProvider(LLMProvider):
                  "特别注意：'练三休一/练二休一/推拉腿/上下肢/分化/怎么分化'等训练编排模式"
                  "问法属于 teach（询问如何安排训练），不要误判为 plan（生成完整计划）。"
                  "plan 仅在用户明确要'生成/制定/给我一份训练计划'时采用。"
+                 "若 plan 且原句提到编排方案名（如练三休一/推拉腿/上下肢），"
+                 "params 增加 split 字段原样带出方案词；原句含天数（如'一周''7天'）"
+                 "时 params.days 填整数。"
                  "few-shot 锚点：'练三休一怎么分'→teach；'帮我制定一周计划'→plan；"
                  "'胸口有点闷'→guard；'下一组加几公斤'→progress；'你是谁'→smalltalk；"
                  "'鸡胸肉蛋白质多少'→qa。"

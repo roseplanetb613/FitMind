@@ -21,7 +21,8 @@ def _params_for(task_type: str, text: str) -> dict:
     if task_type == "smalltalk":
         return {"topic": text}
     if task_type == "plan":
-        return {"days": 1}
+        import split_cycle
+        return split_cycle.extract_plan_params(text)
     return {"query": text}
 
 

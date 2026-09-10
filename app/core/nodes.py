@@ -36,7 +36,9 @@ def _affirm_plan_intent(msg: str, history: list) -> dict | None:
     if not (any(k in last_a for k in _OFFER_MARKS)
             and any(k in last_a for k in _PLAN_NOUNS)):
         return None
-    return {"task_type": "plan", "params": {"days": 1}, "raw_text": msg,
+    import split_cycle
+    params = split_cycle.extract_plan_params(last_a)   # 继承提议中的方案/天数
+    return {"task_type": "plan", "params": params, "raw_text": msg,
             "complexity": "complex", "confidence": 1.0,
             "needs_clarify": False}
 
@@ -140,6 +142,13 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         calls = llm.plan(task, registry.names)
         plan_calls = [{"step_id": c.step_id, "skill": c.skill,
                        "params": c.params} for c in calls]
+        # intent 参数透传：split/days 注入 plan 技能调用（LLM 显式给的不覆盖）
+        ip = (state.get("intent") or {}).get("params") or {}
+        for c in plan_calls:
+            if c["skill"] == "plan":
+                for k in ("split", "days"):
+                    if k in ip:
+                        c["params"].setdefault(k, ip[k])
         out: dict = {"plan_calls": plan_calls}
         # plan_exec（seq）：图边直连 aggregate，无 fan-out 槽位 → 在本节点顺序执行计划
         if state.get("mode_used") == "plan_exec":

@@ -1,0 +1,42 @@
+{
+  "schemes": [
+    {
+      "id": "default_4split",
+      "name_zh": "经典四天分化",
+      "aliases": [],
+      "default": true,
+      "cycle": [
+        {"type": "train", "label": "推日(胸·肩·三头)", "pattern": "push"},
+        {"type": "train", "label": "拉日(背·二头)", "pattern": "pull"},
+        {"type": "train", "label": "腿日(股四·臀·腘绳)", "pattern": "squat"},
+        {"type": "train", "label": "核心日", "pattern": "core"}
+      ],
+      "note": "同一肌群间隔 48 小时以上"
+    },
+    {
+      "id": "ppl_3on1off",
+      "name_zh": "练三休一（推拉腿）",
+      "aliases": ["练三休一", "推拉腿", "PPL"],
+      "default": false,
+      "cycle": [
+        {"type": "train", "label": "推日(胸·肩·三头)", "pattern": "push"},
+        {"type": "train", "label": "拉日(背·二头)", "pattern": "pull"},
+        {"type": "train", "label": "腿日+核心", "pattern": "squat", "extra_patterns": ["core"]},
+        {"type": "rest", "label": "休息日", "note": "睡眠 7-9 小时，蛋白质吃够，可做轻拉伸或散步"}
+      ],
+      "note": "4 天一个循环；第 3 个训练日避免极限重量"
+    },
+    {
+      "id": "ul_2on1off",
+      "name_zh": "练二休一（上下肢）",
+      "aliases": ["练二休一", "上下肢分化"],
+      "default": false,
+      "cycle": [
+        {"type": "train", "label": "上肢日(胸·背·肩·臂)", "pattern": "push", "extra_patterns": ["pull"]},
+        {"type": "train", "label": "下肢日(腿·臀)", "pattern": "squat"},
+        {"type": "rest", "label": "休息日", "note": "睡眠 7-9 小时，蛋白质吃够，可做轻拉伸或散步"}
+      ],
+      "note": "3 天一个循环"
+    }
+  ]
+}

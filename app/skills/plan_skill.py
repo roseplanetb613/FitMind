@@ -149,6 +149,8 @@ class PlanSkill(Skill):
             days = int(params["days"]) if params.get("days") else None
         except (TypeError, ValueError):
             days = None
+        if days is not None and days < 1:
+            days = None   # <1 归一为未指定：保方案走单周期，防 pipeline 静默重置
         try:
             from app.storage.db import LogStore
             store = LogStore()                  # 进阶回哺；构造失败则跳过

@@ -123,6 +123,18 @@ class Agent:
         return dict(sess.profile) if sess else None
 
 
+def _split_known(v) -> bool:
+    """split 须在数据包 id/aliases 内；数据加载失败 → 放行（不硬依赖）。"""
+    if not isinstance(v, str):
+        return False
+    try:
+        import split_cycle
+        names = split_cycle.scheme_names()
+    except Exception:
+        return True
+    return (not names) or v in names
+
+
 def validate_profile(profile: dict) -> list[str]:
     """建档字段校验（系统入口边界）：返回错误列表，空=合法。"""
     errors: list[str] = []
@@ -138,6 +150,7 @@ def validate_profile(profile: dict) -> list[str]:
         "fat_g_per_kg": lambda v: isinstance(v, (int, float)) and 0 <= v <= 3,
         "conditions": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
         "patterns": lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v),
+        "split": _split_known,
     }
     for key, ok in rules.items():
         if key in profile and not ok(profile[key]):

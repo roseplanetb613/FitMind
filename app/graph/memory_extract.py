@@ -91,6 +91,10 @@ _SPLIT_HABIT_RE = re.compile(r"习惯|平时")
 # 否定/伤病语境整句否决（宁缺毋滥：假阴性可接受，假偏好 180 天不可接受）
 _SPLIT_NEG_KW = ("不", "别", "没", "讨厌")
 _SPLIT_INJURY_KW = ("疼", "痛", "伤", "肿", "麻", "不适", "恶心")
+# W4 负向编排偏好 carve-out：体验型否定（不习惯/跟不上/受不了/太累/太频繁/吃不消）
+# 是**真偏好**（用户不适合这套节奏），值得落库供 plan 反向避开；祈使型（别/不要/没）
+# 与厌恶型（讨厌）维持否决——"别排推拉腿"不得变 180 天假偏好反向操控方案选择。
+_SPLIT_NEG_FEEL_RE = re.compile(r"不习惯|跟不上|受不了|太累|太频繁|吃不消")
 
 # T3 食物事件/偏好（spec §3-T3）：餐次提示 + 进食动词 + 量词
 _MEAL_HINT = (("早餐", "早餐"), ("早饭", "早餐"), ("早上", "早餐"),
@@ -363,15 +367,24 @@ def _diet_preference(text: str) -> dict | None:
 
 
 def _split_preference(text: str) -> dict | None:
-    """'我习惯练三休一' → preference(about='编排:<方案名>')。
+    """'我习惯练三休一' → preference(about='编排:<方案名>', value='喜欢')；
+    '我不习惯练三休一' → 同槽 value='不喜欢'（W4 体验型负向偏好）。
     只认数据包 aliases 命中；未命中不抽（宁缺毋滥）。
     review 加固（2026-09-10）：触发词收窄（习惯/平时）；否定/伤病语境整句否决
     （抽取先于 guard 执行，"别排推拉腿"不得变成 180 天假偏好反向操控方案选择）；
-    一句命中多个不同方案别名 → 歧义不抽。"""
-    if not _SPLIT_HABIT_RE.search(text):
-        return None
-    if any(k in text for k in _SPLIT_NEG_KW) or any(k in text for k in _SPLIT_INJURY_KW):
-        return None
+    一句命中多个不同方案别名 → 歧义不抽。
+    W4 carve-out：体验型否定（_SPLIT_NEG_FEEL_RE）不视为"否定指令"，无需习惯词即可
+    抽取并记 value='不喜欢'；伤病语境仍是红线——任何极性都不抽。"""
+    feel_neg = bool(_SPLIT_NEG_FEEL_RE.search(text))
+    if feel_neg:
+        if any(k in text for k in _SPLIT_INJURY_KW):
+            return None                  # 伤病语境任何极性都不抽（红线不动）
+    else:
+        if not _SPLIT_HABIT_RE.search(text):
+            return None
+        if any(k in text for k in _SPLIT_NEG_KW) or \
+                any(k in text for k in _SPLIT_INJURY_KW):
+            return None
     try:
         import split_cycle
         hits = []
@@ -385,7 +398,8 @@ def _split_preference(text: str) -> dict | None:
         scheme = hits[0]
     except Exception:
         return None
-    return {"op": "preference_split", "value": "喜欢",
+    return {"op": "preference_split",
+            "value": "不喜欢" if feel_neg else "喜欢",
             "about": f"编排:{scheme.get('name_zh')}"}
 
 
@@ -469,7 +483,11 @@ def _ack_text(cmd: dict) -> str:
                 seg.append(nm)
         return f"饮食记录 {cmd.get('meal') or cmd['occurred']}（{'、'.join(seg)}）"
     if op == "preference_split":
-        return f"训练编排 {cmd.get('about', '').replace('编排:', '')}"
+        # W4：负向必须把"不喜欢"念出来——只写方案名会让用户以为记成了喜欢
+        # （语义反转）；正向保持原文案不变（回归）。
+        name = cmd.get("about", "").replace("编排:", "")
+        neg = "不喜欢" if cmd.get("value") == "不喜欢" else ""
+        return f"训练编排 {neg}{name}"
     if op == "preference_part":
         return f"训练偏好 {cmd['value']}{cmd.get('about', '').replace('部位:', '练')}"
     if op == "checkin":

@@ -64,6 +64,12 @@ class LogStore:
         return [{"weight_kg": r[0], "reps": r[1], "rir": r[2], "date": r[3]}
                 for r in reversed(rows)]
 
+    def exercise_names(self) -> list[str]:
+        """workout_set 去重动作名枚举（计划回哺双向归一用）。"""
+        self._ensure_thread()
+        cur = self._conn.execute("SELECT DISTINCT exercise FROM workout_set")
+        return [r[0] for r in cur.fetchall()]
+
     def log_diet(self, food_id, food_name, grams, date=""):
         self._ensure_thread()
         self._conn.execute(

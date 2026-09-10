@@ -36,8 +36,8 @@ _PART2PAT = {"胸": "push", "肩": "push", "背": "pull", "臂": "pull",
 
 
 def _load_prefs(ctx) -> dict | None:
-    """读记忆偏好 → {pats_like, dislike_ex, like_foods, dislike_foods}；
-    无图/无偏好/异常 → None。"""
+    """读记忆偏好 → {pats_like, dislike_ex, like_foods, dislike_foods,
+    split_pref}；无图/无偏好/异常 → None。"""
     try:
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
@@ -46,6 +46,7 @@ def _load_prefs(ctx) -> dict | None:
         uid = getattr(getattr(ctx, "session", None), "user_id", "local")
         pats_like, dislike_ex = set(), set()
         like_foods, dislike_foods = set(), set()
+        split_pref = None
         for r in m.current(uid, "preference"):
             about = str(r.get("about") or "")
             val = str(r.get("value") or "")
@@ -54,6 +55,9 @@ def _load_prefs(ctx) -> dict | None:
                     pat = _PART2PAT.get(about[3:])
                     if pat:
                         pats_like.add(pat)
+            elif about.startswith("编排:"):           # 周期编排偏好（spec §7.4）
+                if val == "喜欢":
+                    split_pref = about[3:]
             elif about.startswith("食物:"):
                 fname = about[3:]
                 if val == "喜欢":
@@ -63,12 +67,30 @@ def _load_prefs(ctx) -> dict | None:
             elif about:
                 if val == "不喜欢":
                     dislike_ex.add(about)
-        if not (pats_like or dislike_ex or like_foods or dislike_foods):
+        if not (pats_like or dislike_ex or like_foods or dislike_foods
+                or split_pref):
             return None
         return {"pats_like": pats_like, "dislike_ex": dislike_ex,
-                "like_foods": like_foods, "dislike_foods": dislike_foods}
+                "like_foods": like_foods, "dislike_foods": dislike_foods,
+                "split_pref": split_pref}
     except Exception:
         return None
+
+
+def _resolve_scheme(ctx, split_req, prefs) -> tuple[dict, str]:
+    """编排方案三级优先（spec §7.4）：话语参数 > 记忆偏好（编排:X）>
+    profile.split > 数据包默认。别名未命中 → resolve_scheme 内部回落默认。"""
+    import split_cycle
+    if split_req:
+        return split_cycle.resolve_scheme(str(split_req)), "utterance"
+    if prefs is None:
+        prefs = _load_prefs(ctx)          # prefs 未注入 → 自查记忆（独立调用形态）
+    if prefs and prefs.get("split_pref"):
+        return split_cycle.resolve_scheme(prefs["split_pref"]), "memory"
+    prof = (getattr(ctx, "profile", None) or {}).get("split")
+    if prof:
+        return split_cycle.resolve_scheme(str(prof)), "profile"
+    return split_cycle.default_scheme(), "default"
 
 
 def _load_linkage(ctx) -> tuple[set, set]:
@@ -122,8 +144,19 @@ class PlanSkill(Skill):
         profile.setdefault("activity", 1.55)
         prefs = _load_prefs(ctx)
         fatigue, extra_blocked = _load_linkage(ctx)
+        scheme, split_src = _resolve_scheme(ctx, params.get("split"), prefs)
+        try:
+            days = int(params["days"]) if params.get("days") else None
+        except (TypeError, ValueError):
+            days = None
+        try:
+            from app.storage.db import LogStore
+            store = LogStore()                  # 进阶回哺；构造失败则跳过
+        except Exception:
+            store = None
         out = build_plan(profile, prefs=prefs, fatigue=fatigue,
-                         extra_blocked=extra_blocked)
+                         extra_blocked=extra_blocked, scheme=scheme,
+                         days=days, log_store=store)
         if not out.get("ok", True):
             return SkillResult(ok=False, data={},
                                provenance=out.get("provenance", []),
@@ -131,6 +164,7 @@ class PlanSkill(Skill):
         _register_plan(out["plan"],
                       getattr(getattr(ctx, "session", None), "user_id", "local"))  # F4
         prov = list(out.get("provenance", []))
+        prov.append(f"split#{split_src}")        # 方案来源留痕
         if prefs and out["plan"].get("preferences_applied"):
             prov.append("memory#preference")     # 偏好应用留痕
         return SkillResult(ok=True, data=out["plan"], provenance=prov)

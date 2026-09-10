@@ -85,6 +85,9 @@ _DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", 
                  "不吃甜", "戒糖", "无糖", "素食", "吃素", "不吃肉",
                  "吃辣", "重口", "偏咸", "低脂")
 
+# 编排习惯句式（2026-09-10 周期编排 spec §7.2）："我习惯/平时/一直/一般 + 方案别名"
+_SPLIT_HABIT_RE = re.compile(r"(?:我)?(?:习惯|平时|一直|一般)(?:是|练|用|按)?")
+
 # T3 食物事件/偏好（spec §3-T3）：餐次提示 + 进食动词 + 量词
 _MEAL_HINT = (("早餐", "早餐"), ("早饭", "早餐"), ("早上", "早餐"),
               ("午餐", "午餐"), ("中午", "午餐"), ("午饭", "午餐"),
@@ -355,6 +358,23 @@ def _diet_preference(text: str) -> dict | None:
     return {"op": "preference_diet", "value": "、".join(hits)}
 
 
+def _split_preference(text: str) -> dict | None:
+    """'我习惯练三休一' → preference(about='编排:<方案名>')。
+    只认数据包 aliases 命中；未命中不抽（宁缺毋滥）。"""
+    if not _SPLIT_HABIT_RE.search(text):
+        return None
+    try:
+        import split_cycle
+        alias = split_cycle.find_alias(text)
+        if not alias:
+            return None
+        scheme = split_cycle.resolve_scheme(alias)
+    except Exception:
+        return None
+    return {"op": "preference_split", "value": "喜欢",
+            "about": f"编排:{scheme.get('name_zh')}"}
+
+
 def extract(text: str) -> list[dict]:
     """主入口：返回抽取指令列表（空=不抽）。问句/情绪/假设 一律跳过。"""
     if not text or _is_question(text):
@@ -390,6 +410,8 @@ def extract(text: str) -> list[dict]:
                 break
     if dp:
         out.append(dp)
+    if sp := _split_preference(text):
+        out.append(sp)
     if e := _event(text):
         out.append(e)
     if ml := _meal_event(text):
@@ -432,6 +454,8 @@ def _ack_text(cmd: dict) -> str:
             if nm:
                 seg.append(nm)
         return f"饮食记录 {cmd.get('meal') or cmd['occurred']}（{'、'.join(seg)}）"
+    if op == "preference_split":
+        return f"训练编排 {cmd.get('about', '').replace('编排:', '')}"
     if op == "preference_part":
         return f"训练偏好 {cmd['value']}{cmd.get('about', '').replace('部位:', '练')}"
     if op == "checkin":
@@ -467,6 +491,9 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=None) is not None
             elif cmd["op"] == "preference_part":
+                ok = m.upsert_state(user_id, "preference", cmd["value"],
+                                    about=cmd["about"]) is not None
+            elif cmd["op"] == "preference_split":
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=cmd["about"]) is not None
             elif cmd["op"] == "checkin":

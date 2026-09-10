@@ -27,7 +27,7 @@ _FALLBACK = {"schemes": [{
         {"type": "train", "label": "核心日", "pattern": "core"}],
     "note": "同一肌群间隔 48 小时以上"}]}
 
-_DAYS_RE = re.compile(r"(\d{1,2})\s*天")
+_DAYS_RE = re.compile(r"(\d+)\s*天")
 
 
 def day_label(d: date, offset: int) -> str:

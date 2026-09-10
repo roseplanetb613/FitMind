@@ -4,6 +4,7 @@ validate/render。全部复用现有领域层：skills、runtime.validator、rou
 from __future__ import annotations
 import json
 import re
+from app.core.render_util import training_lines
 from app.core.router import Mode, RouteClassifier, route
 from app.skills.base import ExecutionContext, SkillResult
 from app.runtime.validator import RuleValidator
@@ -319,6 +320,14 @@ def _auth_numbers(structured: dict, profile: dict) -> set[tuple[str, float]]:
     add("kg", p.get("weight_kg"))
     add("cm", p.get("height_cm"))
     add("yr", p.get("age"))
+    # progression.weight_kg 在 JSON 里是裸数字（单位在键名），regex 扫不到 →
+    # 显式遍历授权：LLM 按 rule 8 如实念出建议重量时不被幻觉守卫击落。
+    for day in (((structured.get("data") or {}).get("training") or {})
+                .get("items") or []):
+        for e in day.get("exercises") or []:
+            pr = e.get("progression") or {}
+            if pr.get("weight_kg") is not None:
+                add("kg", pr["weight_kg"])
     try:
         for m in _NUM_RE.finditer(json.dumps(structured, ensure_ascii=False)):
             cls = _UNIT_CLASS[m.group(2).lower()]
@@ -352,26 +361,7 @@ def _render_fallback(structured: dict) -> str:
         nm = it.get("name") or it.get("name_zh")
         if nm:
             lines.append(f"· {nm}")
-    for day in (d.get("training") or {}).get("items") or []:
-        head = f"{day.get('date', '')} {day.get('day', '')}".strip()
-        if day.get("type") == "rest":
-            note = day.get("note") or "好好恢复"
-            lines.append(f"{head}：{note}" if head else f"· 休息日：{note}")
-            if day.get("blocked_from"):
-                lines.append("  （因身体筛查，原定训练改为休息）")
-            continue
-        if head:
-            lines.append(head)
-        for e in day.get("exercises") or []:
-            seg = f"· {e.get('name')}"
-            pr = e.get("progression") or {}
-            if pr.get("weight_kg"):
-                seg += f"（建议 {pr['weight_kg']}kg）"
-            lines.append(seg)
-    if d.get("blocked_note"):
-        lines.append(str(d["blocked_note"]))
-    if d.get("fatigue_note"):
-        lines.append(str(d["fatigue_note"]))
+    lines.extend(training_lines(d))   # 天级行（日期/休息/封堵/建议）单源：render_util
     if "macros" in d:
         m = d["macros"]
         lines.append(f"目标热量 {m.get('target_kcal')} kcal，"

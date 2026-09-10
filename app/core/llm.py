@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from app.core.intent import Intent, PlannedCall
+from app.core.render_util import training_lines
 from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness
 import split_cycle                      # lib 单源：plan 参数抽取（split/days）
 
@@ -314,7 +315,11 @@ class StubProvider(LLMProvider):
         data = structured.get("data") or {}
         if data:
             for k in ("macros", "training", "meals"):
-                if k in data:
+                if k == "training":
+                    # 计划型 data：天级行（日期/休息/封堵/建议）单源直出，
+                    # 无 key/断网路径与 nodes._render_fallback 输出一致。
+                    parts.extend(training_lines(data))
+                elif k in data:
                     parts.append(f"[{k}]")
         for it in structured.get("items", []):
             parts.append(f"· {it}")
@@ -541,7 +546,7 @@ class DeepSeekProvider(LLMProvider):
                 "不得省略或改写；type 为 rest 的条目是休息日，念出日期+\'休息日\'并"
                 "带上 note 里的恢复提示；day 含\'原：\'的是筛查封堵降级日，要如实"
                 "说明\'因身体筛查改为休息\'；动作条目含 progression 字段时，用一句话"
-                "念出建议（如\'卧推：上次连续达标，这次试试 62.5kg\'）。")
+                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),

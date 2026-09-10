@@ -107,8 +107,8 @@ def build_plan(profile: dict, prefs: dict | None = None,
     try:
         skeleton = split_cycle.expand(scheme, days, date.today())
     except ValueError:
-        skeleton = split_cycle.expand(split_cycle.default_scheme(), None,
-                                      date.today())
+        scheme = split_cycle.default_scheme()
+        skeleton = split_cycle.expand(scheme, None, date.today())
     training_items = []
     applied = []
     blocked_notes = []

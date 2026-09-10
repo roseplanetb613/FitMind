@@ -21,12 +21,29 @@ _OFFER_MARKS = ("我可以", "可以帮你", "要不要", "如果你想", "需�
                 "帮你排", "帮你制定", "帮你把")
 _PLAN_NOUNS = ("计划", "课表", "训练表")
 
+# E2 通识标注（W2 分级）：LLM 提示词约束不可信——实测把标注用在了有库内出处的
+# 回答上（例："练三休一"命中 teach#split_kb 却标成通识）。代码级兜底：
+# knowledge 分支标注必达，非 knowledge 分支一律剥除。半角/逗号变体一并覆盖。
+_KNOWLEDGE_LABEL = "（通用训练知识，非库内收录）"
+_KNOWLEDGE_LABEL_RE = re.compile(r"\s*[（(]通用训练知识[，,、]?\s*非库内收录[）)]")
+
 
 def _effective_data_kind(structured: dict) -> str:
     """空结果分级判定（W2）：缺省/未知一律按 data——宁严勿宽，维持禁虚构约束。
     'knowledge'（编排原理等通识）须由 skill 侧显式打标，渲染层不猜。"""
     dk = (structured.get("data") or {}).get("data_kind")
     return "knowledge" if dk == "knowledge" else "data"
+
+
+def _enforce_knowledge_label(reply: str, structured: dict) -> str:
+    """E2：通识标注确定性兜底（同 O-4 思路，不依赖提示词自觉）。
+    knowledge 分支 → 标注必达；其余分支 → 越界标注剥除（库内有出处的回答
+    不得标成通识，否则用户会误以为系统没查到）。"""
+    if _effective_data_kind(structured) == "knowledge":
+        if _KNOWLEDGE_LABEL_RE.search(reply or ""):
+            return reply
+        return ((reply or "").rstrip() + "\n\n" + _KNOWLEDGE_LABEL).strip()
+    return _KNOWLEDGE_LABEL_RE.sub("", reply or "").rstrip()
 
 
 def _affirm_plan_intent(msg: str, history: list) -> dict | None:
@@ -291,6 +308,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         acks = structured.get("memory_ack") or []
         if acks and "已记下" not in reply:
             reply = "已记下：" + "、".join(acks) + "\n\n" + reply
+        # E2：通识标注确定性兜底（knowledge 必达 / 非 knowledge 剥除）
+        reply = _enforce_knowledge_label(reply, structured)
         return {"reply": reply}
 
     nodes = {"guard": guard, "guard_route": guard_route,

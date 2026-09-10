@@ -124,15 +124,18 @@ class Agent:
 
 
 def _split_known(v) -> bool:
-    """split 须在数据包 id/aliases 内；数据加载失败 → 放行（不硬依赖）。"""
+    """split 须在数据包 id/名称/别名内；数据包缺失/损坏（兜底生效）或
+    加载失败 → 放行（与 resolve_scheme 静默回落默认的降级方向一致）。"""
     if not isinstance(v, str):
         return False
     try:
         import split_cycle
         names = split_cycle.scheme_names()
+        if not names or not split_cycle.schemes_available():
+            return True
     except Exception:
         return True
-    return (not names) or v in names
+    return v in names or v.lower() in {str(n).lower() for n in names}
 
 
 def validate_profile(profile: dict) -> list[str]:

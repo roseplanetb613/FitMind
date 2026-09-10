@@ -53,6 +53,11 @@ def load_schemes() -> tuple:
     return tuple(_FALLBACK["schemes"])
 
 
+def schemes_available() -> bool:
+    """数据包是否正常加载（False = 缺失/损坏，兜底副本生效中）。"""
+    return load_schemes() != tuple(_FALLBACK["schemes"])
+
+
 def default_scheme() -> dict:
     for s in load_schemes():
         if s.get("default"):
@@ -86,11 +91,13 @@ def resolve_scheme(name: str | None) -> dict:
 
 
 def scheme_names() -> set:
-    """全部 id + aliases（validate_profile 白名单用）。"""
+    """全部 id + name_zh + aliases（validate_profile 白名单用，对齐 resolve_scheme 可解析集）。"""
     out: set = set()
     for s in load_schemes():
         if s.get("id"):
             out.add(s["id"])
+        if s.get("name_zh"):
+            out.add(s["name_zh"])
         out.update(s.get("aliases") or [])
     return out
 

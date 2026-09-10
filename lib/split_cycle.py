@@ -28,6 +28,12 @@ _FALLBACK = {"schemes": [{
     "note": "同一肌群间隔 48 小时以上"}]}
 
 _DAYS_RE = re.compile(r"(\d+)\s*天")
+_WEEK_RE = re.compile(r"一周|本周")
+
+# 缺席态关键词（终审 I-2）：时长短语前后短窗口命中 → 该时长是"多久没练"的
+# 缺席陈述而非计划跨度，否决不抽（"90天没练了"≠90天计划）。
+# 词表不含单字"休"——"练三休一"等方案别名合法含"休"，误伤会破坏 split 抽取。
+_ABSENCE_KW = ("没练", "没锻炼", "没训", "没动", "没去", "停练", "休息了", "歇了")
 
 
 def day_label(d: date, offset: int) -> str:
@@ -128,17 +134,31 @@ def expand(scheme: dict, days: int | None, today: date) -> list[dict]:
     return out
 
 
+def _absence_veto(text: str, start: int, end: int, win: int = 4) -> bool:
+    """时长短语前后短窗口（默认 4 字）内命中缺席态关键词 → True（否决该时长）。
+    否决的是单个时长匹配而非整句：被否决后继续找下一个时长匹配
+    （"休息了3天，排个5天计划"→ 3天被否决、5天正常抽取）。"""
+    seg = text[max(0, start - win):start] + text[end:end + win]
+    return any(k in seg for k in _ABSENCE_KW)
+
+
 def extract_plan_params(text: str) -> dict:
     """plan 意图参数抽取（单源，llm 规则层与 semantic L1 共用）：
     split=原句命中的方案别名；days=显式天数（'5天'/'一周'）。缺省不带 days
-    （=一个循环，由 expand 处理），不再是历史遗留的固定 {"days": 1}。"""
+    （=一个循环，由 expand 处理），不再是历史遗留的固定 {"days": 1}。
+    缺席态否决（终审 I-2）：'90天没练了'是多久没练的陈述，非计划跨度，
+    时长前后窗口命中 _ABSENCE_KW 即跳过该时长（'一周没练'同理不抽 days）。"""
     p: dict = {}
     alias = find_alias(text)
     if alias:
         p["split"] = alias
-    m = _DAYS_RE.search(text or "")
-    if m:
-        p["days"] = int(m.group(1))
-    elif text and ("一周" in text or "本周" in text):
-        p["days"] = 7
+    t = text or ""
+    for m in _DAYS_RE.finditer(t):
+        if not _absence_veto(t, m.start(), m.end()):
+            p["days"] = int(m.group(1))
+            return p
+    for m in _WEEK_RE.finditer(t):
+        if not _absence_veto(t, m.start(), m.end()):
+            p["days"] = 7
+            return p
     return p

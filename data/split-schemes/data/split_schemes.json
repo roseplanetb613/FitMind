@@ -29,7 +29,7 @@
     {
       "id": "ul_2on1off",
       "name_zh": "练二休一（上下肢）",
-      "aliases": ["练二休一", "上下肢分化"],
+      "aliases": ["练二休一", "上下肢分化", "上下肢", "上下分化"],
       "default": false,
       "cycle": [
         {"type": "train", "label": "上肢日(胸·背·肩·臂)", "pattern": "push", "extra_patterns": ["pull"]},

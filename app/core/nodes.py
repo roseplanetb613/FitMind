@@ -38,6 +38,18 @@ def _affirm_plan_intent(msg: str, history: list) -> dict | None:
         return None
     import split_cycle
     params = split_cycle.extract_plan_params(last_a)   # 继承提议中的方案/天数
+    # 指代场景回溯：提议用"这套循环"指代、不含方案名（"按练三休一排计划"→
+    # "把这套循环排成一周"→"好"）→ split 从最近含方案别名的用户历史消息回补。
+    if "split" not in params:
+        try:
+            for h in reversed(history or []):
+                if isinstance(h, dict) and h.get("role") == "user":
+                    alias = split_cycle.find_alias(h.get("text") or "")
+                    if alias:
+                        params["split"] = alias
+                        break
+        except Exception:
+            pass    # 历史缺失/畸形 → 跳过回补，仅继承提议参数
     return {"task_type": "plan", "params": params, "raw_text": msg,
             "complexity": "complex", "confidence": 1.0,
             "needs_clarify": False}

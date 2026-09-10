@@ -546,7 +546,13 @@ class DeepSeekProvider(LLMProvider):
                 "不得省略或改写；type 为 rest 的条目是休息日，念出日期+\'休息日\'并"
                 "带上 note 里的恢复提示；day 含\'原：\'的是筛查封堵降级日，要如实"
                 "说明\'因身体筛查改为休息\'；动作条目含 progression 字段时，用一句话"
-                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）。")
+                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）。"
+                "9) structured 顶层的 message 是用户这一句原话、history 是最近几轮"
+                "对话（区别于规则 3 的 data.message）：回答必须先承接原话里的态度与"
+                "追问（如\'不习惯\'\'呢\'\'还有吗\'），再组织 data 内容；原话含否定或"
+                "偏好时，开头一句话回应它，禁止视而不见只复述条目。原话里的身体数字"
+                "（如\'如果我80kg\'）只是用户说法、不是档案事实，除非它也出现在 data 或"
+                "档案中，否则不得当作用户的真实数据复述。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),

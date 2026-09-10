@@ -257,8 +257,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     def render(state: dict) -> dict:
         from app.core.graph import build_structured
-        # structured 单源组装（标题中文映射+失败原因透传+无 items 死键）
-        structured = build_structured(state.get("intent"), state.get("outcome"))
+        # structured 单源组装（标题中文映射+失败原因透传+无 items 死键）；
+        # W1：用户原话与最近对话一并注入，渲染才能承接态度/追问
+        structured = build_structured(state.get("intent"), state.get("outcome"),
+                                      message=state.get("message"),
+                                      history=state.get("history"))
         if state.get("memory_ack"):                     # W1：记忆确认话术透传
             structured["memory_ack"] = list(state["memory_ack"])
         try:
@@ -305,9 +308,15 @@ _UNIT_CLASS = {"公斤": "kg", "千克": "kg", "kg": "kg", "斤": "kg",
                "厘米": "cm", "cm": "cm", "岁": "yr"}
 _NUM_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(公斤|千克|kg|斤|厘米|cm|岁)", re.I)
 
+# W1：message/history 是用户原话（可能含"如果我80kg""我以前90公斤"这类假设值
+# 与过期值），只作渲染上下文，**绝不进授权集**——否则用户提过的任何数字都被洗成
+# "有出处"，N-11 身体数字幻觉守卫形同虚设。
+_AUTH_EXCLUDED_KEYS = ("message", "history")
+
 
 def _auth_numbers(structured: dict, profile: dict) -> set[tuple[str, float]]:
-    """授权数字集（单位类, 值）：profile 三围 + structured 文本内同量纲数字。"""
+    """授权数字集（单位类, 值）：profile 三围 + structured 文本内同量纲数字。
+    structured 里的 message/history 键被排除（见 _AUTH_EXCLUDED_KEYS）。"""
     out: set[tuple[str, float]] = set()
 
     def add(cls, v):
@@ -329,7 +338,10 @@ def _auth_numbers(structured: dict, profile: dict) -> set[tuple[str, float]]:
             if pr.get("weight_kg") is not None:
                 add("kg", pr["weight_kg"])
     try:
-        for m in _NUM_RE.finditer(json.dumps(structured, ensure_ascii=False)):
+        scan = ({k: v for k, v in structured.items()
+                 if k not in _AUTH_EXCLUDED_KEYS}
+                if isinstance(structured, dict) else structured)
+        for m in _NUM_RE.finditer(json.dumps(scan, ensure_ascii=False)):
             cls = _UNIT_CLASS[m.group(2).lower()]
             v = float(m.group(1)) / (2 if m.group(2) == "斤" else 1)
             out.add((cls, round(v, 1)))

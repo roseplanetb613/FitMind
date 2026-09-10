@@ -101,11 +101,17 @@ TITLE_ZH = {"qa": "知识问答", "teach": "动作教学", "plan": "训练计划
 
 
 def build_structured(intent: dict | None, outcome: dict | None,
-                     sources: list | None = None) -> dict:
+                     sources: list | None = None,
+                     message: str | None = None,
+                     history: list | None = None) -> dict:
     """组装 render/API 共用的结构化结果（单源）。失败原因透传到 error 字段，
     由渲染侧如实转述；不再携带恒空的 items 死键。
     sources 缺省取 outcome.provenance；API 侧可传图顶层 provenance（guard 短路
-    时 outcome 为空，顶层仍保留守卫来源标注）。"""
+    时 outcome 为空，顶层仍保留守卫来源标注）。
+    message/history（W1）：用户原话与最近对话，供渲染承接态度与追问；
+    缺省 None 不出新键——API 侧既有调用与 stub 环境行为不变。
+    注意：这两个键是「用户说的话」，不是有出处的事实，nodes._auth_numbers
+    显式将二者排除在身体数字授权集之外（N-11 红线）。"""
     intent = intent or {}
     outcome = outcome or {}
     structured = {"title": TITLE_ZH.get(intent.get("task_type", "fallback"),
@@ -118,4 +124,14 @@ def build_structured(intent: dict | None, outcome: dict | None,
         err = outcome.get("_error") or outcome.get("error")
         if err:
             structured["error"] = err
+    # W1 渲染上下文注入：用户原话 + 最近 3 轮（只留 role/text 两键，防 token
+    # 膨胀）；空值不建键——签名兼容，缺省行为与注入前逐字一致
+    if message:
+        structured["message"] = message
+    if history:
+        trimmed = [{"role": h.get("role"), "text": h.get("text")}
+                   for h in history[-6:]
+                   if isinstance(h, dict) and h.get("text")]
+        if trimmed:
+            structured["history"] = trimmed
     return structured

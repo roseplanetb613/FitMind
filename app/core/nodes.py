@@ -352,6 +352,26 @@ def _render_fallback(structured: dict) -> str:
         nm = it.get("name") or it.get("name_zh")
         if nm:
             lines.append(f"· {nm}")
+    for day in (d.get("training") or {}).get("items") or []:
+        head = f"{day.get('date', '')} {day.get('day', '')}".strip()
+        if day.get("type") == "rest":
+            note = day.get("note") or "好好恢复"
+            lines.append(f"{head}：{note}" if head else f"· 休息日：{note}")
+            if day.get("blocked_from"):
+                lines.append("  （因身体筛查，原定训练改为休息）")
+            continue
+        if head:
+            lines.append(head)
+        for e in day.get("exercises") or []:
+            seg = f"· {e.get('name')}"
+            pr = e.get("progression") or {}
+            if pr.get("weight_kg"):
+                seg += f"（建议 {pr['weight_kg']}kg）"
+            lines.append(seg)
+    if d.get("blocked_note"):
+        lines.append(str(d["blocked_note"]))
+    if d.get("fatigue_note"):
+        lines.append(str(d["fatigue_note"]))
     if "macros" in d:
         m = d["macros"]
         lines.append(f"目标热量 {m.get('target_kcal')} kcal，"

@@ -85,8 +85,12 @@ _DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", 
                  "不吃甜", "戒糖", "无糖", "素食", "吃素", "不吃肉",
                  "吃辣", "重口", "偏咸", "低脂")
 
-# 编排习惯句式（2026-09-10 周期编排 spec §7.2）："我习惯/平时/一直/一般 + 方案别名"
-_SPLIT_HABIT_RE = re.compile(r"(?:我)?(?:习惯|平时|一直|一般)(?:是|练|用|按)?")
+# 编排习惯句式（2026-09-10 周期编排 spec §7.2 + review 收窄）："我习惯/平时 + 方案别名"
+# review 收窄：去掉"一直/一般"（医学持续态副词，"膝盖一直疼"误抽风险，宁缺毋滥）
+_SPLIT_HABIT_RE = re.compile(r"习惯|平时")
+# 否定/伤病语境整句否决（宁缺毋滥：假阴性可接受，假偏好 180 天不可接受）
+_SPLIT_NEG_KW = ("不", "别", "没", "讨厌")
+_SPLIT_INJURY_KW = ("疼", "痛", "伤", "肿", "麻", "不适", "恶心")
 
 # T3 食物事件/偏好（spec §3-T3）：餐次提示 + 进食动词 + 量词
 _MEAL_HINT = (("早餐", "早餐"), ("早饭", "早餐"), ("早上", "早餐"),
@@ -360,15 +364,25 @@ def _diet_preference(text: str) -> dict | None:
 
 def _split_preference(text: str) -> dict | None:
     """'我习惯练三休一' → preference(about='编排:<方案名>')。
-    只认数据包 aliases 命中；未命中不抽（宁缺毋滥）。"""
+    只认数据包 aliases 命中；未命中不抽（宁缺毋滥）。
+    review 加固（2026-09-10）：触发词收窄（习惯/平时）；否定/伤病语境整句否决
+    （抽取先于 guard 执行，"别排推拉腿"不得变成 180 天假偏好反向操控方案选择）；
+    一句命中多个不同方案别名 → 歧义不抽。"""
     if not _SPLIT_HABIT_RE.search(text):
+        return None
+    if any(k in text for k in _SPLIT_NEG_KW) or any(k in text for k in _SPLIT_INJURY_KW):
         return None
     try:
         import split_cycle
-        alias = split_cycle.find_alias(text)
-        if not alias:
+        hits = []
+        for s in split_cycle.load_schemes():
+            for a in s.get("aliases") or []:
+                if a and (a in text or str(a).lower() in text.lower()):
+                    hits.append(s)
+                    break
+        if not hits or len({h.get("id") for h in hits}) > 1:
             return None
-        scheme = split_cycle.resolve_scheme(alias)
+        scheme = hits[0]
     except Exception:
         return None
     return {"op": "preference_split", "value": "喜欢",

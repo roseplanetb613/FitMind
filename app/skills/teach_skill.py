@@ -1,7 +1,38 @@
 # -*- coding: utf-8 -*-
 """动作教学：检索动作+处方组次+器械要求（要领文本 RAG 补强，全静默降级）。"""
 from __future__ import annotations
+import re
 from app.skills.base import Skill, SkillResult
+
+# W3 练休节奏正则泛化：枚举只留分化类，"练X休Y"（练四休一/练五休二…）统一参数化——
+# 节奏问题是编排问题，落动作库检索属路由对象错误（必然空结果，P2 根因）。
+_SPLIT_CYCLE_RE = re.compile(r"练([一二三四五六日1-7])休([一二三四五六日1-7])")
+_CN2NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7,
+           "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7}
+_NUM2CN = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日"}
+
+# W2/F2 编排问法（通识型）：编排原理/频率类问题数据包不收录，命中即走通识作答，
+# 不谎报"动作库未收录"。刻意不含泛化的"怎么练"——动作类问法（"卡卡罗特怎么练"）
+# 落空必须继续如实说没找到（data 型禁虚构不回退）。
+_SPLIT_ASK_KW = ("怎么排", "怎么分", "怎么安排", "如何排", "如何分", "如何安排",
+                 "几天练", "练几天", "一周练", "每天练", "训练频率", "怎么分配")
+
+
+def _split_cycle_kb(train: int, rest: int) -> dict:
+    """练X休Y → 参数化知识块。频率定位：练/休≥3 偏高，1.5~3 均衡，<1.5 偏恢复。"""
+    cycle = train + rest
+    ratio = train / rest
+    if ratio >= 3:
+        pos = "频率偏高，适合时间充裕、恢复能力好的训练者"
+    elif ratio >= 1.5:
+        pos = "训练频率与恢复较平衡，适合大多数初中级训练者"
+    else:
+        pos = "频率偏低、恢复充分，适合大重量日较多或恢复偏慢的训练者"
+    return {"name_zh": f"练{_NUM2CN[train]}休{_NUM2CN[rest]}（{train} 练 {rest} 休循环）",
+            "summary": f"连续训练 {train} 天、休息 {rest} 天，{cycle} 天一个循环；{pos}。",
+            "example": f"按分化把训练日排入 {train} 个训练日（如推拉腿/上下肢），"
+                       f"之后休息 {rest} 天，循环往复。",
+            "note": "循环天数越长单肌群刺激间隔越大，按自己的恢复能力选择。"}
 
 
 def _repo():
@@ -146,13 +177,28 @@ class TeachSkill(Skill):
 
     def execute(self, ctx, params) -> SkillResult:
         query = str(params.get("query", ""))
-        kb = self._split_hit(query)          # 编排知识优先于场景/动作库检索
+        kb = self._split_hit(query)          # 编排枚举优先（精细文案，回归不变）
         if kb:
             item = {"kind": "编排知识", "name_zh": kb["name_zh"],
                     "summary": kb["summary"], "example": kb["example"],
                     "note": kb["note"]}
             return SkillResult(ok=True, data={"items": [item]},
                                provenance=["teach#split_kb"])
+        # W3：练X休Y 参数化兜底（枚举未收录的练休节奏，如练四休一/练五休二）
+        m = _SPLIT_CYCLE_RE.search(query)
+        if m:
+            try:
+                item = {"kind": "编排知识",
+                        **_split_cycle_kb(_CN2NUM[m.group(1)], _CN2NUM[m.group(2)])}
+                return SkillResult(ok=True, data={"items": [item]},
+                                   provenance=["teach#split_kb"])
+            except Exception:
+                # F2：参数生成失败 → 通识兜底（编排问题不谎报"动作库未收录"）
+                return SkillResult(ok=True,
+                                   data={"items": [], "empty": True,
+                                         "data_kind": "knowledge",
+                                         "reason": "练休节奏类编排问题，库内无对应条目"},
+                                   provenance=["teach#parametric"])
         if kb is None:
             kb = self._scene_hit(query)      # W3 场景知识（办公室/哑铃/酒店等）
         if kb is None:
@@ -213,6 +259,14 @@ class TeachSkill(Skill):
             if myth:
                 return SkillResult(ok=True, data={"items": [myth], "myth": True},
                                    provenance=["teach#myth_kb"])
+            # F2：编排问法未命中知识块 → 通识型空结果（渲染侧按 knowledge 分级作答，
+            # 结尾标注"通用训练知识，非库内收录"），避免把编排原理谎报成"未收录"
+            if any(k in query for k in _SPLIT_ASK_KW):
+                return SkillResult(ok=True,
+                                   data={"items": [], "empty": True,
+                                         "data_kind": "knowledge",
+                                         "reason": "编排原理类问题，库内无对应条目"},
+                                   provenance=["teach#parametric"])
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "data_kind": "data",
                                               "reason": "动作库未收录，尝试其他说法"},

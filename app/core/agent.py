@@ -56,7 +56,9 @@ class Agent:
         # 挂了检查点才会按 thread 累积 state（内存随轮次只增不减）。
         state_in = {"session_id": sess.id, "message": message,
                     "profile": dict(sess.profile), "user_id": sess.user_id,
-                    "memory_ack": acks}
+                    "memory_ack": acks,
+                    # 最近 3 轮对话（classify 上下文消解："确认"承接上轮提议）
+                    "history": list(sess.history[-6:])}
         if self._checkpointer is not None:
             thread = f"{sess.id}-{len(sess.history)}"   # 每轮独立 thread
             result = self.graph.invoke(

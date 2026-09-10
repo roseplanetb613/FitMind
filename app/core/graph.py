@@ -12,6 +12,7 @@ class FitMindState(TypedDict, total=False):
     user_id: str                          # F4：记忆归属（agent.run 注入，nodes._ctx 消费）
     message: str
     profile: dict
+    history: list                         # 最近对话轮（agent.run 注入，classify 上下文消解用）
     intent: dict                      # task_type/params/raw_text/complexity
     mode_used: str                    # guard/direct/react/plan_exec/rewoo
     blocked: bool                     # guard 短路标记

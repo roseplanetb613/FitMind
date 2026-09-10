@@ -11,6 +11,35 @@ from app.runtime.validator import RuleValidator
 MAX_STEPS = 4
 MAX_PLAN = 4
 
+# 上下文消解：肯定应答精确匹配集（剥标点后整词比对，防"好吗/行动"类子串误伤）
+_AFFIRM_WORDS = frozenset({
+    "确认", "好的", "好", "可以", "行", "嗯", "嗯嗯", "要", "没问题",
+    "好呀", "好啊", "好吧", "行吧", "ok", "OK", "Ok"})
+# 上轮提议标记：提议动作 + plan 名词 → 肯定应答承接为 plan
+_OFFER_MARKS = ("我可以", "可以帮你", "要不要", "如果你想", "需要我",
+                "帮你排", "帮你制定", "帮你把")
+_PLAN_NOUNS = ("计划", "课表", "训练表")
+
+
+def _affirm_plan_intent(msg: str, history: list) -> dict | None:
+    """肯定应答 + 上轮 plan 提议 → 承接提议意图（CLI 实证："确认"承接
+    "我可以帮你把这套循环排成一周的具体计划"，曾丢上下文落 qa 空检索）。
+    窄口径宁缺毋滥：肯定词须整词命中；上轮助手消息须同时含提议标记与
+    plan 名词。其余情形返回 None 走正常分类。"""
+    m = (msg or "").strip().strip("。，！!？?、~ ")
+    if m not in _AFFIRM_WORDS:
+        return None
+    last_a = next((h.get("text", "") for h in reversed(history or [])
+                   if h.get("role") == "assistant"), "")
+    if not last_a:
+        return None
+    if not (any(k in last_a for k in _OFFER_MARKS)
+            and any(k in last_a for k in _PLAN_NOUNS)):
+        return None
+    return {"task_type": "plan", "params": {"days": 1}, "raw_text": msg,
+            "complexity": "complex", "confidence": 1.0,
+            "needs_clarify": False}
+
 
 def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
     classifier = classifier or RouteClassifier(llm)
@@ -47,6 +76,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
     def classify(state: dict) -> dict:
         if state.get("intent") and state.get("mode_used"):
             return {}
+        # 上下文消解优先：肯定应答承接上轮提议（audit 留痕 raw_text 保原词）
+        affirm = _affirm_plan_intent(state.get("message", ""),
+                                     state.get("history") or [])
+        if affirm is not None:
+            return {"intent": affirm, "mode_used": "plan_exec"}
         intent = classifier.intent_for(state.get("message", ""),
                                        state.get("profile") or {})
         try:

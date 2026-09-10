@@ -268,6 +268,13 @@ class StubProvider(LLMProvider):
         if _part and any(k in t for k in ("怎么样", "状态", "恢复", "练得")):
             return Classification("qa", {"query": t, "kind": "muscle",
                                          "part": _part}, confidence=1.0)
+        # 明确"生成计划"请求优先于编排模式 teach 截胡（CLI 实证："帮我生成一份
+        # 练三休一的训练计划表"被裸词"练三休一"吞成 teach）："怎么分/如何分化"
+        # 是编排知识问法（teach）；生成动词+计划名词是要完整计划（plan）。
+        if any(k in t for k in ("生成", "制定", "排一份", "排一版", "排一套",
+                                "帮我排", "给我排", "排个")) and any(
+                k in t for k in ("计划", "课表", "训练表", "方案")):
+            return Classification("plan", {"days": 1}, confidence=1.0)
         for kws, tt, build in reversed(_RULES):
             if any(k in p or k in t for k in kws):
                 # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
@@ -523,7 +530,10 @@ class DeepSeekProvider(LLMProvider):
                  "6) 禁止提及实现细节：严禁出现'结构化''字段''data''items''JSON''数组'"
                  "'为空'这类措辞——你是在跟用户说话，不是在描述数据；检索为空就自然地说"
                  "'没有找到相关内容'并给换词建议。"
-                 "7) 仅当结构化结果含非空 memory_ack 数组时，才在回答开头逐字输出\'已记下：\'加各元素（中文顿号连接）；若 memory_ack 为缺省/空数组，禁止出现\'已记下\'字样，也不要从 data.items 中的\'训练记录\'/\'偏好\'等条目名称推断出\'已记下\'——查询/读取不是写入。")
+                 "7) 仅当结构化结果含非空 memory_ack 数组时，才在回答开头逐字输出\'已记下：\'加各元素（中文顿号连接）；若 memory_ack 为缺省/空数组，禁止出现\'已记下\'字样，也不要从 data.items 中的\'训练记录\'/\'偏好\'等条目名称推断出\'已记下\'——查询/读取不是写入。"
+                "8) 训练计划 data.training.items 每项含 date 字段（日期锚点，如"
+                "\'今天（9月10日 周四）\'）：逐日介绍训练安排时必须原样带上该日期，"
+                "不得省略或改写日期。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),

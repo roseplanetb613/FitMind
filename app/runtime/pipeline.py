@@ -3,6 +3,7 @@
 全部落在 lib/ 只读引擎与规则数据上；缺数据透传原因，不猜值。"""
 from __future__ import annotations
 import json
+from datetime import date, timedelta
 from pathlib import Path
 import screening
 from app.runtime.repos import exercise_repo, foods_repo
@@ -14,6 +15,18 @@ FITT = json.load(open(ROOT / "data" / "sports-medicine" / "data"
 UNEDIBLE = ("鱼翅", "燕窝", "冬虫夏草", "琼脂", "石花菜", "蛏干")
 DIRT = (FITT["resistance"]["frequency"], FITT["resistance"]["intensity"],
         FITT["resistance"]["volume"], FITT["resistance"]["rest"])
+
+_WD_ZH = "一二三四五六日"
+
+
+def _day_label(d: date, offset: int) -> str:
+    """训练日 → 用户可读日期锚点（前两天带"今天/明天"相对词，渲染层无当前日期知识）。"""
+    wd = f"周{_WD_ZH[d.weekday()]}"
+    if offset == 0:
+        return f"今天（{d.month}月{d.day}日 {wd}）"
+    if offset == 1:
+        return f"明天（{d.month}月{d.day}日 {wd}）"
+    return f"{d.month}月{d.day}日（{wd}）"
 
 
 def _bp(p: dict, sex: str) -> float:
@@ -50,6 +63,8 @@ def build_plan(profile: dict, prefs: dict | None = None,
     applied = []
     plans = {"推日(胸·肩·三头)": "push", "拉日(背·二头)": "pull",
              "腿日(股四·臀·腘绳)": "squat", "核心日": "core"}
+    today = date.today()
+    di = 0                        # 入选训练日的日偏移（被筛查封堵的日不占日期槽）
     for day, pat in plans.items():
         if pat in blocked:
             continue
@@ -64,7 +79,8 @@ def build_plan(profile: dict, prefs: dict | None = None,
         focused = bool(prefs and pat in prefs.get("pats_like", ()))
         deload = bool(fatigue and pat in fatigue)
         n = 4 if focused else (2 if deload else 3)
-        item = {"day": day, "pattern": pat,
+        item = {"day": day, "date": _day_label(today + timedelta(days=di), di),
+                "pattern": pat,
                 "exercises": [{
                     "name": e.get("name_zh"),
                     "difficulty": e.get("difficulty"),
@@ -79,6 +95,7 @@ def build_plan(profile: dict, prefs: dict | None = None,
         if deload:
             item["deload"] = True
         training_items.append(item)
+        di += 1
     meals = []
     for f in fr.filter(category="meat", protein_min=18, kcal_max=300,
                        limit=8, sort_by="protein_desc"):

@@ -94,7 +94,7 @@ def _resolve_scheme(ctx, split_req, prefs) -> tuple[dict, str]:
 
 
 def _load_linkage(ctx) -> tuple[set, set]:
-    """联动信号：疲劳（48h 内练过的 pattern）+ 伤痛禁忌模式集。异常/无图 → 空集。"""
+    """联动信号：疲劳（48h 内练过的模式）+ 伤痛禁忌模式集。异常/无图 → 空集。"""
     fatigue: set = set()
     blocked: set = set()
     try:
@@ -115,12 +115,94 @@ def _load_linkage(ctx) -> tuple[set, set]:
                 nm = it.get("name") or it.get("raw")     # raw 段也参与（E2E 形态）
                 if not nm:
                     continue
-                hit = ex.search_zh(nm, limit=1)
-                if hit and hit[0].get("movement_pattern"):
-                    fatigue.add(hit[0]["movement_pattern"])
+                fatigue |= _trained_patterns(ex, nm)
     except Exception:
         pass
     return fatigue, blocked
+
+
+# ---------------------------------------------------------------- 疲劳归属
+# 缺陷（CLI 实测 2026-09-10）：checkin 里的**部位词**曾被当动作名做 top1 模糊检索，
+# 再直接采信该动作的 movement_pattern——"腿" 命中「摆臂 悬垂 屈膝 腿」（腹直肌，
+# pattern=core）→ 错标核心日减量，并对用户陈述"近48小时练过核心日对应的部位"。
+# 修复：部位词走「部位→肌群→该肌群 primary 动作的主导模式」；判不准则不产生信号
+# （宁可不减量，也不错误减量 + 说错话）。
+#
+# 部位词表：数据包肌群别名（肱二/股四/小腿/下背…）优先；口语词补两张小表。
+_PART_MUSCLE_ZH = {"二头": "biceps", "三头": "triceps", "腹肌": "rectus_abdominis"}
+_PART_REGION_ZH = {"腿": "upper_legs", "大腿": "upper_legs", "胸": "chest",
+                   "背": "back", "肩": "shoulders", "腰": "back",
+                   "手臂": "upper_arms", "胳膊": "upper_arms",
+                   "前臂": "forearms", "臀": "glutes", "小腿": "lower_legs",
+                   "核心": "core", "腹": "core", "髋": "hips"}
+# 非训练模式不参与疲劳判定（拉伸/有氧/搬运/其他）
+_FATIGUE_SKIP_PATTERNS = {"stretch", "other", "cardio", "carry"}
+_FATIGUE_DOMINANT_SHARE = 0.5    # 主导模式阈值：占该部位 primary 动作最大票数的比例
+_PART_KW_MAXLEN = 6              # 含部位词的兜底解析只认短词（防"悬垂举腿4x8"被当腿）
+
+
+def _dominant_patterns(ex, muscles: set) -> set:
+    """肌群集合 → 其 primary(target) 动作的主导模式（占比达阈值；空=判不准）。"""
+    from collections import Counter
+    c = Counter(r["movement_pattern"] for r in ex.by_id.values()
+                if r["muscles_canonical"]["target"] in muscles
+                and r["movement_pattern"] not in _FATIGUE_SKIP_PATTERNS)
+    if not c:
+        return set()
+    top = max(c.values())
+    return {p for p, n in c.items() if n >= top * _FATIGUE_DOMINANT_SHARE}
+
+
+def _bare_part_patterns(ex, term: str) -> set | None:
+    """裸部位词 → 模式集合；不是部位词 → None。"""
+    mus = ex._norm_muscle(term)
+    if mus:
+        if any(r["muscles_canonical"]["target"] == mus for r in ex.by_id.values()):
+            return _dominant_patterns(ex, {mus})
+        # 退化节点（如本体的 'core'：无 primary 动作）→ 回退其 region 肌群
+        region = (ex.muscle_meta.get(mus) or {}).get("region")
+        if region:
+            return _dominant_patterns(
+                ex, {m["id"] for m in ex.ontology if m.get("region") == region})
+        return None
+    if term in _PART_MUSCLE_ZH:
+        return _dominant_patterns(ex, {_PART_MUSCLE_ZH[term]})
+    if term in _PART_REGION_ZH:
+        region = _PART_REGION_ZH[term]
+        return _dominant_patterns(
+            ex, {m["id"] for m in ex.ontology if m.get("region") == region})
+    return None
+
+
+def _segment_patterns(ex, seg: str) -> set:
+    """单段词 → 模式集合：裸部位词 → 动作检索 top1 → 短词含部位兜底 → 空。"""
+    seg = (seg or "").strip()
+    if not seg:
+        return set()
+    part = _bare_part_patterns(ex, seg)
+    if part is not None:
+        return part
+    hits = ex.search_zh(seg, limit=1)
+    if hits and hits[0].get("movement_pattern"):
+        return {hits[0]["movement_pattern"]}
+    # 兜底：脏 raw（如 N-10 产生的"过肩背"）检索无命中但含部位词
+    if len(seg) <= _PART_KW_MAXLEN:
+        for k in sorted(_PART_REGION_ZH, key=len, reverse=True):
+            if k in seg:
+                region = _PART_REGION_ZH[k]
+                return _dominant_patterns(
+                    ex, {m["id"] for m in ex.ontology
+                         if m.get("region") == region})
+    return set()
+
+
+def _trained_patterns(ex, nm: str) -> set:
+    """一次 checkin 词（可能含"腿、悬垂举腿4x8"式复合）→ 训练到的模式集合。"""
+    import re as _re
+    out: set = set()
+    for seg in _re.split(r"[、,，/;；和\s]+", str(nm or "")):
+        out |= _segment_patterns(ex, seg)
+    return out
 
 
 class PlanSkill(Skill):

@@ -4,6 +4,7 @@ validate/render。全部复用现有领域层：skills、runtime.validator、rou
 from __future__ import annotations
 import json
 import re
+from datetime import date, timedelta
 from app.core.render_util import training_lines
 from app.core.router import Mode, RouteClassifier, route
 from app.skills.base import ExecutionContext, SkillResult
@@ -13,13 +14,21 @@ MAX_STEPS = 4
 MAX_PLAN = 4
 
 # 上下文消解：肯定应答精确匹配集（剥标点后整词比对，防"好吗/行动"类子串误伤）
+# 2026-09-11 补选择式应答（"就这个计划"）：此前只认 确认/好的 等短应答，
+# 用户用"就这个计划"承接提议时落 _is_vague_reference → clarify，承接通道失效。
 _AFFIRM_WORDS = frozenset({
     "确认", "好的", "好", "可以", "行", "嗯", "嗯嗯", "要", "没问题",
-    "好呀", "好啊", "好吧", "行吧", "ok", "OK", "Ok"})
+    "好呀", "好啊", "好吧", "行吧", "ok", "OK", "Ok",
+    "就这个", "就这个计划", "就按这个", "按这个", "按这个来", "就要这个",
+    "就用这个", "就它", "这个吧"})
 # 上轮提议标记：提议动作 + plan 名词 → 肯定应答承接为 plan
 _OFFER_MARKS = ("我可以", "可以帮你", "要不要", "如果你想", "需要我",
                 "帮你排", "帮你制定", "帮你把")
 _PLAN_NOUNS = ("计划", "课表", "训练表")
+# 编排提议的指代词（2026-09-11）：teach 的编排推荐语用"这套循环/这个循环"收尾
+# （"如果你想按这个循环把具体动作排进去…我来帮你搭"），不含"计划"三词之一，
+# 导致承接门开不了。编排语境下这三个词与 plan 名词等价。
+_CYCLE_NOUNS = ("循环", "这套", "这个安排")
 
 # E2 通识标注（W2 分级）：LLM 提示词约束不可信——实测把标注用在了有库内出处的
 # 回答上（例："练三休一"命中 teach#split_kb 却标成通识）。代码级兜底：
@@ -33,6 +42,81 @@ def _effective_data_kind(structured: dict) -> str:
     'knowledge'（编排原理等通识）须由 skill 侧显式打标，渲染层不猜。"""
     dk = (structured.get("data") or {}).get("data_kind")
     return "knowledge" if dk == "knowledge" else "data"
+
+
+# O-4 对侧（2026-09-11）：无写入却自称写入 = 假确认。提示词规则 7 已明令禁止，
+# 但实测 LLM 照说不误——"已记下：你要三分化、练三休一"出现时 memory_ack 为空、
+# 图谱 preference 行数为 0，用户据此以为已记账。故与 E2 同法：代码级剥除。
+_FAKE_ACK_RE = re.compile(r"已记下[：:][^。\n]*。?[ \t]*")
+
+
+def _strip_fake_ack(reply: str) -> str:
+    """acks 为空时剥除幻觉的"已记下：…"（只认冒号式断言，不误伤"没记下"类表述）。"""
+    if not reply or "已记下" not in reply:
+        return reply
+    out = _FAKE_ACK_RE.sub("", reply)
+    out = re.sub(r"[ \t]+\n", "\n", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+# 计划改动断言的依据校验（2026-09-11）：提示词不可信，凡"声称改动了计划"必须由
+# provenance 支撑。CLI 实证：数据是 9/11 推日…9/14 核心日（**无 plan#edit**），回复
+# 却叙述"把整周安排整体后延一天"并**编造出数据里不存在的 9月15日**——用户会照着
+# 一个不存在的日程训练。与 _strip_fake_ack 同源思路：代码级兜底，不赌 LLM 自觉。
+# 词形取"改变计划结构"的完成态断言；单字/疑问式不入表（"如果要去掉某个动作…"
+# 是建议而非断言，不该被降级——误判代价是渲染退化，漏判代价是用户被误导，
+# 故宁可略偏保守地多收完成态词形）。
+_PLAN_EDIT_CLAIM_KW = ("已改", "已经改", "已调整", "已后延", "已延", "已顺延",
+                       "已推迟", "已平移", "已挪", "后延", "延后", "顺延", "推迟",
+                       "平移", "往后挪", "挪到", "已排到", "已去掉", "去掉了",
+                       "已撤", "撤掉了", "已换", "换成了")
+# 编辑**失败**的 provenance 结尾（"无法解析/未找到/无计划"等如实拒绝不算改动依据）
+_PLAN_EDIT_FAIL = (".parse_fail", ".not_found", ".no_plan", ".no_base",
+                   ".guard", ".pattern_mismatch", ".y_not_found")
+
+
+def _edit_ok_provenance(sources) -> bool:
+    """sources 里是否存在**成功**的计划编辑依据。"""
+    for s in sources or []:
+        s = str(s)
+        if s.startswith("plan#edit") and not s.endswith(_PLAN_EDIT_FAIL):
+            return True
+    return False
+
+
+def _fabricated_plan_edit(reply: str, sources) -> bool:
+    """reply 声称改动了计划，却无成功编辑依据 → 判幻觉（调用方降级零幻觉渲染）。"""
+    if not reply or not any(k in reply for k in _PLAN_EDIT_CLAIM_KW):
+        return False
+    return not _edit_ok_provenance(sources)
+
+
+# 日期锚点断言（2026-09-11 D2 渲染侧残留）：数据锚点已按"今天"重算，但 LLM 仍按
+# "今天（X月Y日）"模板输出 → 把 9月9日 称作"今天"（实测）。只认**带具体日期**的
+# 今天/明天锚点，不误伤"今天就休息"这类无数值表述。
+_ANCHOR_CLAIM_RE = re.compile(r"(今天|明天)[（(]\s*(\d{1,2})月(\d{1,2})日")
+
+
+def _fabricated_date_anchor(reply: str, structured: dict,
+                            today: date | None = None) -> bool:
+    """回复把某个具体旧日期称作"今天/明天" → 判幻觉（调用方降级零幻觉渲染）。
+    仅对含 training.items 的计划类数据生效；无计划数据不适用（聊天里说"今天"很正常）。"""
+    if not reply:
+        return False
+    items = ((structured.get("data") or {}).get("training") or {}).get("items") or []
+    if not items:
+        return False
+    t = today or date.today()
+    expect = {"今天": t, "明天": t + timedelta(days=1)}
+    for m in _ANCHOR_CLAIM_RE.finditer(reply):
+        want = expect.get(m.group(1))
+        try:
+            got = (int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+        if want is not None and got != (want.month, want.day):
+            return True
+    return False
 
 
 def _enforce_knowledge_label(reply: str, structured: dict) -> str:
@@ -50,7 +134,7 @@ def _affirm_plan_intent(msg: str, history: list) -> dict | None:
     """肯定应答 + 上轮 plan 提议 → 承接提议意图（CLI 实证："确认"承接
     "我可以帮你把这套循环排成一周的具体计划"，曾丢上下文落 qa 空检索）。
     窄口径宁缺毋滥：肯定词须整词命中；上轮助手消息须同时含提议标记与
-    plan 名词。其余情形返回 None 走正常分类。"""
+    plan 名词（或编排指代名词 _CYCLE_NOUNS）。其余情形返回 None 走正常分类。"""
     m = (msg or "").strip().strip("。，！!？?、~ ")
     if m not in _AFFIRM_WORDS:
         return None
@@ -59,7 +143,7 @@ def _affirm_plan_intent(msg: str, history: list) -> dict | None:
     if not last_a:
         return None
     if not (any(k in last_a for k in _OFFER_MARKS)
-            and any(k in last_a for k in _PLAN_NOUNS)):
+            and any(k in last_a for k in _PLAN_NOUNS + _CYCLE_NOUNS)):
         return None
     import split_cycle
     params = split_cycle.extract_plan_params(last_a)   # 继承提议中的方案/天数
@@ -169,9 +253,12 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             return {"outcome": {"ok": False, "data": {}, "provenance": [],
                                 "error": f"无技能承接 {task_type}"}}
         r = cands[0].execute(_ctx(state, "direct"), params)
+        # skill：实际承接的技能名。此前 state 里没有它，CLI 只能把 provenance 当
+        # 技能名打印（"工具→pipeline#screening.plan_check"），排查时误导。
         return {"outcome": {"ok": r.ok, "data": r.data,
                             "provenance": r.provenance, "error": r.error},
-                "provenance": r.provenance}
+                "provenance": r.provenance,
+                "skill": cands[0].name}
 
     # ---------------- plan（PlanExec/ReWOO 共用） ----------------
     def plan_node(state: dict) -> dict:
@@ -179,11 +266,13 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         calls = llm.plan(task, registry.names)
         plan_calls = [{"step_id": c.step_id, "skill": c.skill,
                        "params": c.params} for c in calls]
-        # intent 参数透传：split/days 注入 plan 技能调用（LLM 显式给的不覆盖）
+        # intent 参数透传：split/days/read 注入 plan 技能调用（LLM 显式给的不覆盖）。
+        # read（计划**查询**标记，2026-09-11）也必须透传——漏传时技能看不到标记，
+        # 会静默重跑引擎覆盖用户已编辑的计划（实测编辑后"今天练啥"读不回来）。
         ip = (state.get("intent") or {}).get("params") or {}
         for c in plan_calls:
             if c["skill"] == "plan":
-                for k in ("split", "days"):
+                for k in ("split", "days", "read"):
                     if k in ip:
                         c["params"].setdefault(k, ip[k])
         out: dict = {"plan_calls": plan_calls}
@@ -308,8 +397,17 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         acks = structured.get("memory_ack") or []
         if acks and "已记下" not in reply:
             reply = "已记下：" + "、".join(acks) + "\n\n" + reply
+        elif not acks:
+            # 对侧必达：无写入不得出现"已记下"（提示词约束不可信，代码级剥除）
+            reply = _strip_fake_ack(reply)
         # E2：通识标注确定性兜底（knowledge 必达 / 非 knowledge 剥除）
         reply = _enforce_knowledge_label(reply, structured)
+        # 计划改动断言必达依据：无 plan#edit* 却声称改了 → 判幻觉，降级零幻觉渲染
+        if _fabricated_plan_edit(reply, structured.get("sources")):
+            reply = _render_fallback(structured)
+        # 日期锚点断言：把具体旧日期称作"今天/明天" → 判幻觉，同上
+        if _fabricated_date_anchor(reply, structured):
+            reply = _render_fallback(structured)
         return {"reply": reply}
 
     nodes = {"guard": guard, "guard_route": guard_route,

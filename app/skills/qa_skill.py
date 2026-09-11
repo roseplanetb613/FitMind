@@ -158,6 +158,15 @@ class QaSkill(Skill):
             res = self._exercises(ctx, ex, query)
         if res.ok and res.data.get("items"):
             self._rag_science(res.data["items"], query)
+        # 概念/术语题：库内**未命中**才走通识分支（data_kind=knowledge，渲染侧按
+        # 通识作答并标注"通用训练知识，非库内收录"）。命中即照常返库内数据。
+        if (kind == "concept" and res.ok
+                and not (res.data or {}).get("items")):
+            return SkillResult(
+                ok=True,
+                data={"items": [], "empty": True, "data_kind": "knowledge",
+                      "reason": "概念/术语类问题，库内无对应条目"},
+                provenance=["qa#concept"])
         return res
 
     @classmethod

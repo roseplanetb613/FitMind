@@ -99,7 +99,12 @@ def _fmt_node(node: str, out: dict) -> list[str]:
         oc = out.get("outcome") or {}
         prov = out.get("provenance") or oc.get("provenance") or []
         st = "成功" if oc.get("ok") else f"失败({oc.get('error')})"
-        lines.append(f"工具→{','.join(map(str, prov)) or 'skill'} {st}")
+        # 技能名与来源分开打印：此前把 provenance 当技能名（"工具→pipeline#…"），
+        # 排查时误以为调了那个"技能"。skill 缺省回落旧行为（兼容旧图）。
+        skill = out.get("skill") or "skill"
+        lines.append(f"工具→{skill} {st}")
+        if prov:
+            lines.append(f"来源→{','.join(map(str, prov))}")
         if oc.get("data"):
             lines.append(f"数据→{_trunc(oc.get('data'))}")
     elif node == "plan_node":

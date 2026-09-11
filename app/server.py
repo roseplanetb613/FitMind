@@ -36,7 +36,10 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"status": "ok"}
+        # semantic：L1 例句库状态（on / off(unreachable) / disabled）。全静默降级时
+        # "enabled=true 但其实没在工作"无法从外部发现，故在此显式暴露。
+        return {"status": "ok",
+                "semantic": getattr(agent.classifier, "semantic_status", "unknown")}
 
     @app.post("/v1/chat")
     def chat(req: ChatRequest):

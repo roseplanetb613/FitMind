@@ -55,11 +55,33 @@ _MEM_PAST_KW = ("上次", "上回", "以前", "之前")   # 显式过去锚（"�
 _MEM_DOMAIN_KW = ("练", "训练", "打卡", "记录", "日志", "健身", "运动", "伤")
 _MEM_ADVICE_KW = ("比较好", "合适", "建议", "应该", "推荐", "最好", "怎样",
                   "怎么", "如何", "要不要", "能不能", "可以吗", "好吗", "有用")
+# 部位/内容追问（2026-09-11）："48小时练推日部位？练的哪里？"——用户追问系统自身
+# 疲劳断言（"近48小时练过X，已自动减量"）的**依据**时，因无"我"字被四段门的自指门
+# 误杀 → 落动作库检索 → "没有找到相关内容"（系统答不上自己刚说过的话）。
+# 此类句式**天然自指**（问的就是自己的记录），命中记录域 + 部位/内容疑问词即直通；
+# 建议型问法（"练的哪些部位比较好"）仍被 _MEM_ADVICE_KW 否决。
+# 注意不能用裸"哪里"：那是**解剖问法**（"深蹲练哪里"=蹲练哪块肌肉），落记忆查询会
+# 把知识问题变成读打卡。自指判据必须是"练的…"结构（带"的"），或叠加时域词。
+_MEM_WHERE_SELF_KW = ("练的哪里", "练了哪里", "练的哪儿", "练的哪些",
+                      "练的什么部位", "练的什么", "练了什么",
+                      "练过哪里", "练过什么", "练过哪些")
+# 时域词只取**过去**："今天练什么"是前瞻（该由 plan 读回安排），"48小时练过什么"
+# 才是回读记录。混入"今天"会把计划查询拽进记忆域。
+_MEM_WHERE_FRAME_KW = ("48小时", "24小时", "最近", "上次", "上回",
+                       "前天", "昨天", "以前", "之前")
 
 
 def is_memory_query(text: str) -> bool:
-    """用户**自己的记录**查询（何时/几次练过什么/何时受过伤）——从严判定。"""
+    """用户**自己的记录**查询（何时/几次练过什么/何时受过伤/练的哪里）——从严判定。"""
     t = text or ""
+    if any(k in t for k in _MEM_ADVICE_KW):
+        return False
+    if any(k in t for k in _MEM_WHERE_SELF_KW):
+        return True
+    if (any(k in t for k in _MEM_WHERE_FRAME_KW)
+            and any(k in t for k in ("什么", "哪些", "哪里"))
+            and any(k in t for k in _MEM_DOMAIN_KW)):
+        return True
     if not any(k in t for k in _MEM_SELF_KW):
         return False
     if not any(k in t for k in _MEM_WHEN_KW):
@@ -89,6 +111,11 @@ class RouteClassifier:
         self._guard_adopt = float(sem.get("guard_adopt_sim", 0.55))
         # 线上紧急开关：semantic.enabled=false 时强制置 None（跳过 L1）
         self._store = ExemplarStore.get() if self._sem_on else None
+        # L1 状态显式化（2026-09-11）：enabled=true 但 store 为 None（Ollama 不可达）
+        # 时 L1 整层空转，此前全静默 → 排查时误以为语义层在参与决策。供 /health 查。
+        self.semantic_status = ("disabled" if not self._sem_on
+                                else "on" if self._store is not None
+                                else "off(unreachable)")
 
     def intent_for(self, text: str, profile: dict | None = None) -> Intent:
         c = self._classify(text, profile)         # 三层决策

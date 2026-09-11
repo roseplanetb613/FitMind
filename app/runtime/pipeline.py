@@ -80,7 +80,9 @@ def build_plan(profile: dict, prefs: dict | None = None,
                fatigue: set | None = None,
                extra_blocked: set | None = None,
                scheme: dict | None = None, days: int | None = None,
-               log_store=None) -> dict:
+               log_store=None, fatigue_sources: list | None = None) -> dict:
+    """fatigue_sources：疲劳信号的出处 [{date,term,pattern}]（plan_skill 单源产生）。
+    缺省 None → 不落键，输出与注入前逐字一致。"""
     ex, fr = exercise_repo(), foods_repo()   # 共享单例（原模块级 _EX/_FR 副本）
     conds = profile.get("conditions") or []
     pats = profile.get("patterns") or []
@@ -104,11 +106,13 @@ def build_plan(profile: dict, prefs: dict | None = None,
     if extra_blocked:
         blocked |= set(extra_blocked)      # 伤痛联动：记忆 injury → 禁忌模式封堵
     scheme = scheme or split_cycle.default_scheme()
+    _today = date.today()
+    today_iso = _today.isoformat()          # 日期基准：落 plan["start_date"]（见下）
     try:
-        skeleton = split_cycle.expand(scheme, days, date.today())
+        skeleton = split_cycle.expand(scheme, days, _today)
     except ValueError:
         scheme = split_cycle.default_scheme()
-        skeleton = split_cycle.expand(scheme, None, date.today())
+        skeleton = split_cycle.expand(scheme, None, _today)
     training_items = []
     applied = []
     blocked_notes = []
@@ -191,14 +195,25 @@ def build_plan(profile: dict, prefs: dict | None = None,
         "training": {"scheme": scheme.get("name_zh"), "items": training_items},
         "meals": {"items": meals[:5]},
     }
+    # 日期基准（2026-09-11）：items[].date 是"今天/明天/具体日期"的**生成时快照**，
+    # 读回时不重算就会把昨天说成今天（实测隔日读回锚点整体倒退一天）。落 start_date
+    # 作为唯一基准，供 split_cycle.reanchor 在读路径与平移时重算。
+    plan["start_date"] = today_iso
     if applied:
         plan["preferences_applied"] = applied   # 偏好应用痕迹（render 可念出）
     if blocked_notes:
         plan["blocked_note"] = "；".join(blocked_notes)
     hit_days = [i["day"] for i in training_items if i.get("deload")]
     if hit_days:
-        plan["fatigue_note"] = (f"近48小时练过{'、'.join(hit_days)}对应部位，"
-                                "已自动减量")
+        # 归因可追溯（2026-09-11）：断言必须带出处——此前 fatigue_note 是脱离证据的
+        # 概括句，用户追问"练的哪里"时系统答不上来（落动作库检索 → 没找到）。
+        note = f"近48小时练过{'、'.join(hit_days)}对应部位，已自动减量"
+        if fatigue_sources:
+            plan["fatigue_sources"] = list(fatigue_sources)
+            seg = "、".join(f"{s.get('date', '')}「{s.get('term', '')}」"
+                            for s in fatigue_sources[:3])
+            note += f"（依据：{seg}）"
+        plan["fatigue_note"] = note
     return {"ok": True, "plan": plan,
             "provenance": ["pipeline#screening.plan_check",
                            "pipeline#exercise_repo.filter",

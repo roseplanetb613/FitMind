@@ -23,6 +23,9 @@ class FitMindState(TypedDict, total=False):
     react_done: bool
     react_next: dict                  # think 决策的下一步 {"skill","params"}
     outcome: dict                     # {"ok","data","provenance","error",...}
+    skill: str                        # direct 模式实际承接的技能名（CLI trace 用；
+                                      # 未声明时被 TypedDict 丢弃 → CLI 只能把
+                                      # provenance 当技能名打印，排查时误导）
     reply: str
     memory_ack: list[str]             # 记忆写入确认话术（agent.run 注入，render/clarify 消费）
     provenance: Annotated[list, operator.add]   # 顶层来源标注（guard/execute/aggregate 写入）

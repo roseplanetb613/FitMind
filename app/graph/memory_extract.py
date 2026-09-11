@@ -25,6 +25,11 @@ _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六
                ("昨天", 1), ("前天", 2), ("上个月", 30), ("上周", 7),
                ("今天", 0))
 _EVENT_VERB = ("练了", "练", "做了", "跑了", "练过")
+# 否定否决（2026-09-11）："不练三头"里含"练"，此前与"练了三头"抽出**完全相同**的
+# checkin → 否定句被记成正向训练记录 → 48h 疲劳联动据此给推日减量（假减量）。
+# 动词前短窗口（_EVENT_NEG_WIN 字）命中否定词即否决；段级同样否决（"练了腿，没练胸"）。
+_EVENT_NEG_KW = ("不", "没", "别", "未", "取消", "免", "拒绝")
+_EVENT_NEG_WIN = 2
 
 _EVENT_SPLIT = re.compile(r"[+，、和,\s]+")
 _SETS_RE = re.compile(r"(\d{1,2})\s*[xX×*]\s*(\d{1,3})")
@@ -88,6 +93,12 @@ _DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", 
 # 编排习惯句式（2026-09-10 周期编排 spec §7.2 + review 收窄）："我习惯/平时 + 方案别名"
 # review 收窄：去掉"一直/一般"（医学持续态副词，"膝盖一直疼"误抽风险，宁缺毋滥）
 _SPLIT_HABIT_RE = re.compile(r"习惯|平时")
+# 编排**采纳**句式（2026-09-11）："我要/我想/就要/就按/按这个 + 方案别名"。
+# 与习惯句式的区别在时效：习惯是长期状态（沿用类型默认 preference=180 天），
+# 采纳是"这阵子按这个练"的一次性选择 → _SPLIT_ADOPT_TTL_DAYS 天后自动失效，
+# 既不丢用户的选择，也不永久绑架方案选择（超期自动回落 default/profile.split）。
+_SPLIT_ADOPT_RE = re.compile(r"我要|我想|就要|就按|按这个|用这个|来这个|来一套")
+_SPLIT_ADOPT_TTL_DAYS = 30
 # 否定/伤病语境整句否决（宁缺毋滥：假阴性可接受，假偏好 180 天不可接受）
 _SPLIT_NEG_KW = ("不", "别", "没", "讨厌")
 _SPLIT_INJURY_KW = ("疼", "痛", "伤", "肿", "麻", "不适", "恶心")
@@ -248,12 +259,24 @@ def _height(text: str) -> dict | None:
 
 
 def _preference(text: str) -> dict | None:
-    """'我喜欢/讨厌 X' → 动作归一命中才抽取。"""
-    for kw in _LIKE + _DISLIKE:
+    """'我喜欢/讨厌 X' → 动作归一命中才抽取。
+
+    2026-09-11 修两处缺陷（CLI 实测"我不喜欢练腿"被记成 value='喜欢'）：
+    ① **最长优先**：`_LIKE` 在前且"喜欢"是"不喜欢"的子串 → 极性反转，往偏好库写
+       反数据。同文件下方的部位/食物回退循环早已用 sorted(key=len, reverse=True)
+       防过这个坑，本函数漏了；
+    ② **部位词不进动作槽**：tail 是"练腿/练肩背/练核心"这类部位短语时交回
+       _part_preference 记 `部位:X`——此前经 top1 模糊检索记成
+       "摆臂 悬垂 屈膝 腿" 这类垃圾动作名（部位词被当动作名检索的老毛病）。"""
+    for kw in sorted(_LIKE + _DISLIKE, key=len, reverse=True):
         idx = text.find(kw)
         if idx < 0:
             continue
-        tail = text[idx + len(kw):].strip(" ，。的、和跟练")
+        raw_tail = text[idx + len(kw):]
+        # 部位短语（含"练"+部位）→ 交回部位槽；极性由回退循环按同一 kw 判定
+        if _part_preference(raw_tail, True):
+            return None
+        tail = raw_tail.strip(" ，。的、和跟练")
         if not tail:
             return None
         name = _norm_exercise(tail)
@@ -288,7 +311,17 @@ def _event(text: str) -> dict | None:
     混合存储：归一命中（无空格干净名）存 name，否则存 raw=用户原词保底（宁丢结构不丢信息）；组次可解析即带。
     注：search_zh 对绝大多数输入返回带空格复合名（如 '腿'→'摆臂 悬垂 屈膝 腿'），
     存 raw 更保真；仅当归一为无空格单一名时才存 name。"""
-    verb_hit = next((v for v in _EVENT_VERB if v in text), None)
+    verb_hit = None
+    for v in _EVENT_VERB:
+        idx = text.find(v)
+        if idx < 0:
+            continue
+        # 动词前短窗口命中否定 → 该动词是"不练/没练/别练"，不是训练事件
+        if any(k in text[max(0, idx - _EVENT_NEG_WIN):idx]
+               for k in _EVENT_NEG_KW):
+            continue
+        verb_hit = v
+        break
     if verb_hit is None:
         return None
     time_hit = next(((n, d) for n, d in _EVENT_HINT if n in text), None)
@@ -299,6 +332,9 @@ def _event(text: str) -> dict | None:
     for part in _EVENT_SPLIT.split(seg):
         part = part.strip(" 的了。，")
         if not part:
+            continue
+        # 段级否定否决："练了腿，没练胸" → "没练胸" 段不得入记录
+        if any(k in part[:_EVENT_NEG_WIN] for k in _EVENT_NEG_KW):
             continue
         m = _SETS_RE.search(part)
         namepart = _SETS_RE.sub("", part).strip(" 的了。")
@@ -374,17 +410,25 @@ def _split_preference(text: str) -> dict | None:
     （抽取先于 guard 执行，"别排推拉腿"不得变成 180 天假偏好反向操控方案选择）；
     一句命中多个不同方案别名 → 歧义不抽。
     W4 carve-out：体验型否定（_SPLIT_NEG_FEEL_RE）不视为"否定指令"，无需习惯词即可
-    抽取并记 value='不喜欢'；伤病语境仍是红线——任何极性都不抽。"""
+    抽取并记 value='不喜欢'；伤病语境仍是红线——任何极性都不抽。
+    2026-09-11 采纳句式：正向后新增 `_SPLIT_ADOPT_RE`（我要/就按…），落库带
+    `expires_days=30` 时效——此前祈使句一律弃权，"我要练三休一"下轮即丢，
+    用户"无法主动改计划"。习惯句式（习惯/平时）保持类型默认 180 天不变。"""
     feel_neg = bool(_SPLIT_NEG_FEEL_RE.search(text))
+    expires_days = None
     if feel_neg:
         if any(k in text for k in _SPLIT_INJURY_KW):
             return None                  # 伤病语境任何极性都不抽（红线不动）
     else:
-        if not _SPLIT_HABIT_RE.search(text):
+        is_habit = bool(_SPLIT_HABIT_RE.search(text))
+        is_adopt = bool(_SPLIT_ADOPT_RE.search(text))
+        if not (is_habit or is_adopt):
             return None
         if any(k in text for k in _SPLIT_NEG_KW) or \
                 any(k in text for k in _SPLIT_INJURY_KW):
             return None
+        if is_adopt and not is_habit:
+            expires_days = _SPLIT_ADOPT_TTL_DAYS   # 采纳（非习惯）→ 带时效
     try:
         import split_cycle
         hits = []
@@ -398,9 +442,12 @@ def _split_preference(text: str) -> dict | None:
         scheme = hits[0]
     except Exception:
         return None
-    return {"op": "preference_split",
-            "value": "不喜欢" if feel_neg else "喜欢",
-            "about": f"编排:{scheme.get('name_zh')}"}
+    cmd = {"op": "preference_split",
+           "value": "不喜欢" if feel_neg else "喜欢",
+           "about": f"编排:{scheme.get('name_zh')}"}
+    if expires_days:
+        cmd["expires_days"] = expires_days     # 采纳句式带时效；习惯句式不带（走类型默认）
+    return cmd
 
 
 def extract(text: str) -> list[dict]:
@@ -487,7 +534,10 @@ def _ack_text(cmd: dict) -> str:
         # （语义反转）；正向保持原文案不变（回归）。
         name = cmd.get("about", "").replace("编排:", "")
         neg = "不喜欢" if cmd.get("value") == "不喜欢" else ""
-        return f"训练编排 {neg}{name}"
+        # 2026-09-11：带时效的采纳偏好必须把期限念出来——否则用户以为被永久记住
+        ttl = cmd.get("expires_days")
+        span = f"（{ttl} 天内有效）" if ttl else ""
+        return f"训练编排 {neg}{name}{span}"
     if op == "preference_part":
         return f"训练偏好 {cmd['value']}{cmd.get('about', '').replace('部位:', '练')}"
     if op == "checkin":
@@ -526,8 +576,11 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=cmd["about"]) is not None
             elif cmd["op"] == "preference_split":
+                # expires_days 缺省 None → upsert_state 走类型默认（preference 180 天）；
+                # 采纳句式显式带 30 天（见 _split_preference）
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
-                                    about=cmd["about"]) is not None
+                                    about=cmd["about"],
+                                    expires_days=cmd.get("expires_days")) is not None
             elif cmd["op"] == "checkin":
                 # name（归一）与 raw（用户原词）都试：CONTAINS 解析，宁多挂不漏挂
                 names = [i[k] for i in cmd.get("items", [])

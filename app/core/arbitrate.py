@@ -23,13 +23,20 @@ def arbitrate(task_type, confidence: float, params: dict,
         conf = 0.0
     if conf >= 0.7:
         return Classification(task_type, params or {}, confidence=conf)
-    clarify_floor = 0.5 if task_type == "plan" else 0.4   # plan 收窄
-    if conf >= clarify_floor:
-        # 不确定但不至于否定：不硬猜，标记澄清（图走 clarify_node 反问）
-        base = fallback if fallback.task_type == task_type else Classification(
-            task_type, params or {})
-        base.complexity = "simple"
-        base.confidence = conf
-        base.needs_clarify = True
-        return base
+    # 澄清带只留给**重操作**（plan）：生成整份计划猜错的代价远高于反问一句。
+    # 只读/建议类（qa/teach/progress/smalltalk）此前同样落在 0.4~0.7 澄清带，
+    # 实测把正常提问打死（qa 0.6、progress 0.62 全被反问成"我不确定你想做哪件事"）
+    # ——而这类答错的代价很低（空检索会如实回"没找到"），反问才是死路。
+    # guard 落在 0.4~0.7 也从"反问"变"采纳"，方向更安全。
+    if task_type == "plan":
+        if conf >= 0.5:
+            base = (fallback if fallback.task_type == task_type
+                    else Classification(task_type, params or {}))
+            base.complexity = "simple"
+            base.confidence = conf
+            base.needs_clarify = True
+            return base
+        return fallback               # 重操作低置信 → 不采纳（原行为）
+    if conf >= 0.4:
+        return Classification(task_type, params or {}, confidence=conf)
     return fallback

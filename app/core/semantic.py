@@ -10,6 +10,15 @@ EXEMPLARS = Path(__file__).resolve().parent.parent / "config" / "intent_exemplar
 SIM_FLOOR, SIM_CEIL = 0.40, 0.75      # 待标定（calibrate_intent_sim.py 产出终值）
 
 
+def available() -> bool:
+    """L1 例句库是否在线（Ollama 不可达/缺依赖 → False，整条语义层空转降级）。
+
+    显式暴露（2026-09-11）：此前降级全静默，`semantic.enabled=true` 看着像在工作，
+    实际 L1 从未参与决策——排查"为什么语义层没拦住"时会误判。供 /health 与调用方
+    发现；真正的修复是让 Ollama(127.0.0.1:11434) 可达（运维动作，非代码）。"""
+    return ExemplarStore.get() is not None
+
+
 def map_conf(sim: float) -> float:
     """相似度 → confidence（接 arbitrate 三档阈值）。"""
     return max(0.0, min(1.0, (sim - SIM_FLOOR) / (SIM_CEIL - SIM_FLOOR)))

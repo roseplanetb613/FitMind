@@ -23,10 +23,18 @@ class Classification:
 
 # 规则意图词典（stub 分类用；真实 provider 接管后可删）
 _RULES = [
-    # plan：收窄强信号词（去掉单独的"怎么安排"/"一周"，避免吞编排模式问法）
-    (("计划", "练什么", "帮我安排", "帮我规划", "帮我排",
-      "制定方案", "制定计划", "给我计划", "安排课表", "安排训练", "制定", "方案"), "plan",
+    # plan 强信号（1.0）：compound/明确生成请求（前置门已处理生成动词+计划名词）
+    (("练什么", "帮我安排", "帮我规划", "帮我排",
+      "制定方案", "制定计划", "给我计划", "安排课表", "安排训练"), "plan",
      lambda t, kw: split_cycle.extract_plan_params(t)),
+    # plan 宽词（0.6）：裸"计划/制定/方案"可能是查询或评价，**必须 <0.7** 才让
+    # L2 有机会纠正——两道门都是 `>=0.7` 直通（router.py / llm.py），此前设 0.8
+    # 与 1.0 行为完全等价（spy 实测 L2调用=0），降置信是空操作。
+    # 同时**保留**裸"计划"而非删除：删除会让离线环境（StubProvider 无 classify_llm，
+    # _sem_or_llm 直接返回规则结果）把这些常用句式打到 qa 0.3 → 动作库检索 → "没找到"。
+    # 0.6 兼顾两端：离线仍出计划，生产交 L2 裁决。
+    (("计划", "制定", "方案"), "plan",
+     lambda t, kw: split_cycle.extract_plan_params(t), 0.6),
     (("怎么做", "要领", "动作教学", "怎么练"), "teach",
      lambda t, kw: {"query": t}),
     # 训练编排模式问法（询问"如何分化"而非"生成完整计划"）→ teach
@@ -112,6 +120,9 @@ _RULES = [
     # 2026-09-09 记忆查询：伤/训练/偏好记录问答 → qa(kind=memory)（只读）
     (("受伤记录", "受过伤", "伤病记录", "有伤吗", "哪里受伤", "伤过吗",
       "训练记录", "练过什么", "打卡记录", "训练日志", "最近练",
+      # 2026-09-11 疲劳依据追问："48小时练推日部位？练的哪里？" 曾落动作库检索
+      # → "没有找到相关内容"（系统答不上自己刚说的"近48小时练过X"）
+      "练的哪里", "练了哪里", "练的哪些", "练过哪里", "练的什么部位",
       "我的偏好", "我喜欢什么", "记得我喜欢", "我的喜好"), "qa",
      lambda t, kw: {"query": t, "kind": "memory"}),
 ]
@@ -159,6 +170,14 @@ def _is_minor_context(p: str) -> bool:
 def _is_intensity_context(p: str) -> bool:
     """训练强度/备战语境：与未成年叠加才触发 guard（防建档误拦）。"""
     return any(k in p for k in _INTENSITY_WORDS)
+
+
+# 计划编辑的**近时域**标记（2026-09-11）：破坏性操作（改写并持久化用户计划）的触发
+# 必须比非破坏性更严。"不练X" 只有叠加近时域才算指令（"今天不练三头"）；否则是
+# 状态/习惯**陈述**（"我不练腿很久了""我平时不练腿""我从来不练核心"）——实测这些
+# 曾全部被判为编辑并真的撤销了计划动作，同时偏好也没被记录。
+_EDIT_SCOPE_KW = ("今天", "明天", "今儿", "今晚", "这周", "本周", "下次", "这次",
+                  "接下来", "以后", "之后", "从今")
 
 
 def _is_vague_reference(t: str) -> bool:
@@ -259,11 +278,38 @@ class StubProvider(LLMProvider):
                                   needs_clarify=True)
         # T5 计划指令控制：换/删计划内动作 → plan_edit（直达 PlanSkill._edit）。
         # 删/去类须排除记忆域句（"把我的训练记录删掉"是删除权请求非计划编辑）。
+        # "edit": True 标记编辑意图 → plan_skill 在句式未识别时如实拒绝，
+        # 不再静默回落整份重新生成（CLI 实证："今天不练三头"曾零改动却叙述已改）。
         if any(k in t for k in ("换成", "换掉", "改成做")):
-            return Classification("plan_edit", {"query": t}, confidence=1.0)
-        if any(k in t for k in ("去掉", "删掉", "不要练")) and not any(
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
+        if any(k in t for k in ("去掉", "删掉", "不要练", "别练", "取消")) \
+                and not any(k in t for k in ("记忆", "数据", "档案", "记录")):
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
+        # "不练" 单列：祈使词本身就带指令性；"不练" 需叠加近时域才算指令（见
+        # _EDIT_SCOPE_KW 注释——状态/习惯陈述误触破坏性编辑）。
+        if "不练" in t and any(k in t for k in _EDIT_SCOPE_KW) \
+                and not any(k in t for k in ("记忆", "数据", "档案", "记录")):
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
+        # 计划整体平移（2026-09-11 W4）："把计划都后延一天呢"——此前无此能力，
+        # 静默重生成 + 渲染编造平移日程（含数据里不存在的日期）。
+        _shift = split_cycle.extract_shift_days(t)
+        if _shift is not None and not any(
                 k in t for k in ("记忆", "数据", "档案", "记录")):
-            return Classification("plan_edit", {"query": t}, confidence=1.0)
+            return Classification("plan_edit",
+                                  {"query": t, "edit": True, "shift_days": _shift},
+                                  confidence=1.0)
+        # "修改/调整 + 计划"（无具体目标）→ 进编辑流程如实询问改什么，
+        # 不再重跑整份计划引擎（CLI 实证："我要修改计划"曾重跑一遍生成）。
+        # 疑问式（怎么调整/如何改）仍走 qa 咨询规则，不在此截胡。
+        if (any(k in t for k in ("修改", "改计划", "改一下", "改改", "调整"))
+                and any(k in t for k in ("计划", "课表", "训练安排"))
+                and not any(k in t for k in ("记忆", "数据", "档案", "记录",
+                                             "怎么", "如何", "吗", "？", "?"))):
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
         # T7 肌肉状态面板：部位词 ∧ 评价问法 → qa(kind=muscle)（guard 检查已先行）
         _part = next((pt for pt in ("腿", "背", "肩", "胸", "臂", "腹", "臀",
                                     "核心") if pt in t), None)
@@ -278,10 +324,50 @@ class StubProvider(LLMProvider):
                 k in t for k in ("计划", "课表", "训练表", "方案")):
             return Classification("plan", split_cycle.extract_plan_params(t),
                                   confidence=1.0)
-        for kws, tt, build in reversed(_RULES):
+        # 方案别名出现 → 三态判别（2026-09-11 补本体缺项"采纳方案"）：此前裸词一律
+        # 归 teach，"我要练三休一这种"只返知识、不进 plan（用户"无法主动改计划"）。
+        # adopt（选择/习惯）→ plan；query（怎么/如何/吗）→ teach；两者皆非（陈述、
+        # 否定语境）→ 不硬判，给 0.3 交 L1/L2 消歧（正文层 conf<0.7 才轮到语义层）。
+        if split_cycle.find_alias(t):
+            _si = split_cycle.scheme_intent(t)
+            if _si == "adopt":
+                return Classification("plan", split_cycle.extract_plan_params(t),
+                                      confidence=1.0)
+            if _si == "query":
+                return Classification("teach", {"query": t}, confidence=1.0)
+            return Classification("qa", {"query": t}, confidence=0.3)
+        # 计划**查询** vs **生成**（2026-09-11）：CLI 实证"我的健身计划 / 所有今天练什么
+        # / 练啥 / 9.27练啥"四轮全部重跑 plan 引擎（问一句"今天练啥"要跑筛查→FITT→
+        # 两库检索），且**编辑过的计划读不回来**（重新生成覆盖了"不练三头"）。加 read
+        # 标记：有既有计划则读回，没有则由 plan 技能照常生成（首次体验不变）。
+        if not any(k in t for k in ("生成", "制定", "帮我排", "给我排", "排一份",
+                                    "排一版", "排一套", "排个", "帮我做", "给我做")):
+            _ask = any(k in t for k in ("练啥", "练什么", "练哪些", "练点什么"))
+            _mine = (any(k in t for k in ("计划", "课表", "训练安排", "计划安排"))
+                     and any(k in t for k in ("我的", "今天", "明天", "这周",
+                                              "本周", "下周")))
+            # 查看式（2026-09-11 D3）："看下训练计划"此前落 L0 qa 0.3 → L2 plan →
+            # **重新生成**，而不是读回既有计划（用户看的是"现在的安排"）。
+            _view = (any(k in t for k in ("看下", "看看", "查看", "看眼", "瞧一眼",
+                                          "瞧瞧", "给我看"))
+                     and any(k in t for k in ("计划", "课表", "训练安排", "安排")))
+            if _ask or _mine or _view:
+                return Classification("plan", {"query": t, "read": True},
+                                      confidence=1.0)
+        # 概念/术语题（2026-09-11）："日常活动系数是什么"此前落 qa 动作库检索 → 空 →
+        # 谎报"没有找到相关内容"（库内本就不收 TDEE/活动系数这类概念）。标记 concept：
+        # 库内命中照常作答，**未命中**才走通识分支（data_kind=knowledge + 标注），
+        # 不再对概念问题谎报未收录。动作类问法不受影响（无 concept 标记）。
+        if any(k in t for k in ("是什么", "什么是", "什么意思", "啥意思",
+                                "是什么意思", "指什么")):
+            return Classification("qa", {"query": t, "kind": "concept"},
+                                  confidence=1.0)
+        for entry in reversed(_RULES):
+            kws, tt, build = entry[0], entry[1], entry[2]
+            conf = entry[3] if len(entry) > 3 else 1.0
             if any(k in p or k in t for k in kws):
-                # 规则强信号：命中即高置信（零 token、可复现；供真实 provider 跳过 LLM）
-                return Classification(tt, build(t, kws), confidence=1.0)
+                # 规则信号：命中即返回（零 token、可复现；宽词降置信让 LLM 有纠正机会）
+                return Classification(tt, build(t, kws), confidence=conf)
         return Classification("qa", {"query": t}, confidence=0.3)  # 非强命中信号
 
     def plan(self, task, available) -> list[PlannedCall]:
@@ -289,7 +375,10 @@ class StubProvider(LLMProvider):
         # task 为 task_type（"plan"）或含计划关键词 → 调 plan 技能
         if "plan" in available and (task == "plan" or any(
                 k in task for k in ("计划", "训练", "减脂", "维持"))):
-            return [PlannedCall("1", "plan", {"goal": task})]
+            # 不传 {"goal": task}——task 是 **task_type**（"plan"），不是目标枚举。
+            # 实测：无 goal 档案时它会字面落进计划（goal="plan"）。目标由档案/params
+            # 决定，这里留空（plan_node 仍按 intent.params 注入 split/days）。
+            return [PlannedCall("1", "plan", {})]
         return [PlannedCall("1", "qa", {"query": task})]
 
     def think(self, context, available) -> PlannedCall:
@@ -457,13 +546,18 @@ class DeepSeekProvider(LLMProvider):
                  "并给出确信度。规则参考：疾病/疼痛/伤/晕/骨折/断/扭伤/TFCC/ACL/半月板/"
                  "韧带等健康信号→guard；问候/寒暄/语气词→smalltalk；怎么做/要领→teach；"
                  "计划/安排/一周→plan；下一组/加重量/减载→progress；食物/动作知识检索→qa。"
-                 "特别注意：'练三休一/练二休一/推拉腿/上下肢/分化/怎么分化'等训练编排模式"
-                 "问法属于 teach（询问如何安排训练），不要误判为 plan（生成完整计划）。"
-                 "plan 仅在用户明确要'生成/制定/给我一份训练计划'时采用。"
+                 "特别注意分辨训练编排的**两种**表达（2026-09-11 补本体缺项）："
+                 "①**询问**编排知识（'练三休一怎么分''五分化怎么安排''上下肢分化怎么排'）"
+                 "→ teach；②**选择/采纳**某个方案（'我要练三休一这种''就按推拉腿来'"
+                 "'我习惯练三休一'）→ plan，此时**即使用户没说'计划'二字**也要判 plan，"
+                 "并把方案词原样带进 params.split。"
+                 "否定或负向偏好（'不习惯练三休一''别排推拉腿''跟不上'）不是 plan，交 qa。"
+                 "plan 亦在用户明确要'生成/制定/给我一份训练计划'时采用。"
                  "若 plan 且原句提到编排方案名（如练三休一/推拉腿/上下肢），"
                  "params 增加 split 字段原样带出方案词；原句含天数（如'一周''7天'）"
                  "时 params.days 填整数。"
-                 "few-shot 锚点：'练三休一怎么分'→teach；'帮我制定一周计划'→plan；"
+                 "few-shot 锚点：'练三休一怎么分'→teach；'我要练三休一这种'→plan；"
+                 "'帮我制定一周计划'→plan；"
                  "'胸口有点闷'→guard；'下一组加几公斤'→progress；'你是谁'→smalltalk；"
                  "'鸡胸肉蛋白质多少'→qa。"
                  "若语句不通顺/语序明显混乱/看不出意图（例如'出来多久腹肌练能'），"
@@ -550,7 +644,10 @@ class DeepSeekProvider(LLMProvider):
                 "不得省略或改写；type 为 rest 的条目是休息日，念出日期+\'休息日\'并"
                 "带上 note 里的恢复提示；day 含\'原：\'的是筛查封堵降级日，要如实"
                 "说明\'因身体筛查改为休息\'；动作条目含 progression 字段时，用一句话"
-                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）。"
+                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）；"
+                "data.fatigue_sources 是减量断言的**出处**（date/term/pattern）："
+                "用户追问依据（\'练的哪里\'\'为什么减量\'\'48小时练了什么\'）时必须"
+                "念出其中的日期与原词，不得改写、省略或臆造。"
                 "9) structured 顶层的 message 是用户这一句原话、history 是最近几轮"
                 "对话（区别于规则 3 的 data.message）：回答必须先承接原话里的态度与"
                 "追问（如\'不习惯\'\'呢\'\'还有吗\'），再组织 data 内容；原话含否定或"

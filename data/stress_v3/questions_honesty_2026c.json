@@ -1,0 +1,923 @@
+[
+  {
+    "id": "H1-01",
+    "group": "H1",
+    "intent": "采纳方案意图：我要练三休一这种",
+    "attack": "选择型祈使句（本轮修复前落 teach 只答知识）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我要练三休一这种"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "reply_contains": [
+        "三休一"
+      ],
+      "provenance_has": [
+        "split#utterance"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H1-02",
+    "group": "H1",
+    "intent": "采纳方案意图：就按推拉腿来",
+    "attack": "就按X来",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我就按推拉腿来"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "split#utterance"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H1-03",
+    "group": "H1",
+    "intent": "采纳方案意图：用户原句（含干扰词三分化）",
+    "attack": "我要三分化 练三休一这种",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我要三分化 练三休一这种"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "reply_contains": [
+        "三休一"
+      ],
+      "provenance_has": [
+        "split#utterance"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H1-04",
+    "group": "H1",
+    "intent": "习惯陈述按采纳处理",
+    "attack": "我习惯X",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我习惯练三休一"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "split#utterance"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H2-01",
+    "group": "H2",
+    "intent": "编排问法仍是 teach（不得被采纳意图吞）",
+    "attack": "练三休一怎么分",
+    "turns": [
+      {
+        "user": "练三休一怎么分"
+      }
+    ],
+    "expect": {
+      "mode": "teach",
+      "provenance_forbids": [
+        "split#utterance"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H2-02",
+    "group": "H2",
+    "intent": "编排问法仍是 teach",
+    "attack": "五分化怎么安排",
+    "turns": [
+      {
+        "user": "五分化怎么安排"
+      }
+    ],
+    "expect": {
+      "mode": "teach"
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H2-03",
+    "group": "H2",
+    "intent": "编排问法仍是 teach（别名裸词）",
+    "attack": "上下肢分化怎么排",
+    "turns": [
+      {
+        "user": "上下肢分化怎么排"
+      }
+    ],
+    "expect": {
+      "mode": "teach"
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H3-01",
+    "group": "H3",
+    "intent": "读现有计划：有则读回不重生成",
+    "attack": "今天练啥（已有计划）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "今天练啥"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "plan#read"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H3-02",
+    "group": "H3",
+    "intent": "查看式表达进 read 判别式",
+    "attack": "看下训练计划",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "看下训练计划"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "plan#read"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H3-03",
+    "group": "H3",
+    "intent": "无既有计划时仍生成（read 不得空手而归）",
+    "attack": "我的训练计划（首次）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的训练计划"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_forbids": [
+        "plan#read"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H4-01",
+    "group": "H4",
+    "intent": "祈使删除按肌群真编辑",
+    "attack": "今天不练三头",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "今天不练三头"
+      }
+    ],
+    "expect": {
+      "mode": "direct",
+      "provenance_has": [
+        "plan#edit"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H4-02",
+    "group": "H4",
+    "intent": "状态陈述不得触发破坏性编辑",
+    "attack": "我不练腿很久了",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "我不练腿很久了"
+      }
+    ],
+    "expect": {
+      "provenance_forbids": [
+        "plan#edit"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H4-03",
+    "group": "H4",
+    "intent": "整体平移计划",
+    "attack": "把计划都后延一天呢",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "把计划都后延一天呢"
+      }
+    ],
+    "expect": {
+      "mode": "direct",
+      "provenance_has": [
+        "plan#edit.shift"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H4-04",
+    "group": "H4",
+    "intent": "点名删除动作（含空格动作名归一）",
+    "attack": "去掉窄距卧推（计划内名为『杠铃 窄距 卧推』）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "去掉窄距卧推"
+      }
+    ],
+    "expect": {
+      "mode": "direct",
+      "provenance_has": [
+        "plan#edit"
+      ],
+      "provenance_forbids": [
+        "plan#edit.not_found"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H5-01",
+    "group": "H5",
+    "intent": "无记忆写入不得出现已记下",
+    "attack": "读计划轮（无写入）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "今天练啥"
+      }
+    ],
+    "expect": {
+      "reply_forbids": [
+        "已记下"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H5-02",
+    "group": "H5",
+    "intent": "编排知识轮不得出现已记下",
+    "attack": "练三休一怎么分",
+    "turns": [
+      {
+        "user": "练三休一怎么分"
+      }
+    ],
+    "expect": {
+      "reply_forbids": [
+        "已记下"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H5-03",
+    "group": "H5",
+    "intent": "查看式轮不得出现已记下",
+    "attack": "看下训练计划（无写入）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "看下训练计划"
+      }
+    ],
+    "expect": {
+      "reply_forbids": [
+        "已记下"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H6-01",
+    "group": "H6",
+    "intent": "否定句不得记成正向训练记录",
+    "attack": "今天不练三头",
+    "turns": [
+      {
+        "user": "今天不练三头"
+      }
+    ],
+    "expect": {
+      "memory_assert": {
+        "check": "count_events",
+        "type": "checkin",
+        "expect": 0
+      }
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H6-02",
+    "group": "H6",
+    "intent": "偏好极性不得反转（不喜欢≠喜欢）",
+    "attack": "我不喜欢练腿",
+    "turns": [
+      {
+        "user": "我不喜欢练腿"
+      }
+    ],
+    "expect": {
+      "reply_contains": [
+        "不喜欢"
+      ],
+      "reply_forbids": [
+        "训练偏好 喜欢"
+      ],
+      "memory_assert": {
+        "check": "active_about",
+        "type": "preference",
+        "about": "部位:腿"
+      }
+    },
+    "severity": "high"
+  },
+  {
+    "id": "H6-03",
+    "group": "H6",
+    "intent": "部位词落部位槽（不得挂垃圾动作名）",
+    "attack": "我喜欢练腿",
+    "turns": [
+      {
+        "user": "我喜欢练腿"
+      }
+    ],
+    "expect": {
+      "memory_assert": {
+        "check": "active_about",
+        "type": "preference",
+        "about": "部位:腿"
+      }
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H6-04",
+    "group": "H6",
+    "intent": "状态陈述不得记成打卡",
+    "attack": "我不练腿很久了",
+    "turns": [
+      {
+        "user": "我不练腿很久了"
+      }
+    ],
+    "expect": {
+      "memory_assert": {
+        "check": "count_events",
+        "type": "checkin",
+        "expect": 0
+      }
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H7-01",
+    "group": "H7",
+    "intent": "疲劳依据追问应读回真实记录",
+    "attack": "有打卡后追问练了哪里",
+    "turns": [
+      {
+        "action": {
+          "op": "log_event",
+          "type": "checkin",
+          "days_ago": 1,
+          "payload": {
+            "items": [
+              {
+                "raw": "腿"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "user": "48小时练了哪里？"
+      }
+    ],
+    "expect": {
+      "mode": "qa",
+      "reply_contains": [
+        "腿"
+      ],
+      "provenance_has": [
+        "qa#memory"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H7-02",
+    "group": "H7",
+    "intent": "疲劳减量断言可追溯",
+    "attack": "有腿打卡后出计划",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "action": {
+          "op": "log_event",
+          "type": "checkin",
+          "days_ago": 1,
+          "payload": {
+            "items": [
+              {
+                "raw": "腿"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "user": "我的健身计划"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "reply_contains": [
+        "减量"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H8-01",
+    "group": "H8",
+    "intent": "回归：guard 症状词未被改坏",
+    "attack": "膝盖疼还能练吗",
+    "turns": [
+      {
+        "user": "我膝盖疼还能练吗"
+      }
+    ],
+    "expect": {
+      "mode": "guard"
+    },
+    "severity": "high"
+  },
+  {
+    "id": "H8-02",
+    "group": "H8",
+    "intent": "回归：食物检索未被改坏",
+    "attack": "鸡胸肉蛋白质多少",
+    "turns": [
+      {
+        "user": "鸡胸肉蛋白质多少"
+      }
+    ],
+    "expect": {
+      "mode": "qa",
+      "reply_contains": [
+        "蛋白质"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H8-03",
+    "group": "H8",
+    "intent": "回归：档案查询未被改坏",
+    "attack": "我是谁（已建档）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我是谁"
+      }
+    ],
+    "expect": {
+      "mode": "qa",
+      "reply_contains": [
+        "28"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H8-04",
+    "group": "H8",
+    "intent": "回归：记忆查询未被改坏",
+    "attack": "我啥时候练的核心",
+    "turns": [
+      {
+        "action": {
+          "op": "log_event",
+          "type": "checkin",
+          "days_ago": 2,
+          "payload": {
+            "items": [
+              {
+                "raw": "核心"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "user": "我啥时候练的核心"
+      }
+    ],
+    "expect": {
+      "mode": "qa",
+      "provenance_has": [
+        "qa#memory"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H9-01",
+    "group": "H9",
+    "intent": "采纳后读回应为新方案（状态一致性）",
+    "attack": "采纳练三休一 → 今天练啥",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "我要练三休一这种",
+        "setup": true
+      },
+      {
+        "user": "今天练啥"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "plan#read"
+      ],
+      "data_contains": [
+        "练三休一"
+      ],
+      "data_forbids": [
+        "经典四天分化"
+      ]
+    },
+    "severity": "high"
+  },
+  {
+    "id": "H9-02",
+    "group": "H9",
+    "intent": "编辑后读回应保留编辑（不得回退）",
+    "attack": "不练三头 → 今天练啥（编辑是否持久）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "我的健身计划",
+        "setup": true
+      },
+      {
+        "user": "今天不练三头",
+        "setup": true
+      },
+      {
+        "user": "今天练啥"
+      }
+    ],
+    "expect": {
+      "mode": "plan_exec",
+      "provenance_has": [
+        "plan#read"
+      ],
+      "data_forbids": [
+        "窄距"
+      ]
+    },
+    "severity": "high"
+  },
+  {
+    "id": "H9-03",
+    "group": "H9",
+    "intent": "无计划时平移应如实拒绝（不得静默重生成）",
+    "attack": "把计划后延一天（无既有计划）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "把计划后延一天"
+      }
+    ],
+    "expect": {
+      "provenance_has": [
+        "plan#edit.no_plan"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H9-04",
+    "group": "H9",
+    "intent": "无计划时删除应如实拒绝",
+    "attack": "去掉窄距卧推（无既有计划）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "去掉窄距卧推"
+      }
+    ],
+    "expect": {
+      "provenance_has": [
+        "plan#edit.no_plan"
+      ]
+    },
+    "severity": "normal"
+  },
+  {
+    "id": "H9-05",
+    "group": "H9",
+    "intent": "无计划时按肌群删除应如实拒绝",
+    "attack": "今天不练三头（无既有计划）",
+    "turns": [
+      {
+        "user": "我身高175",
+        "setup": true
+      },
+      {
+        "user": "我体重75",
+        "setup": true
+      },
+      {
+        "user": "我28岁",
+        "setup": true
+      },
+      {
+        "user": "今天不练三头"
+      }
+    ],
+    "expect": {
+      "provenance_has": [
+        "plan#edit.no_plan"
+      ]
+    },
+    "severity": "normal"
+  }
+]

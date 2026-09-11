@@ -10,6 +10,7 @@ import uuid
 from datetime import date, timedelta
 
 import split_cycle
+from exercise_repo import norm_zh as _norm_zh   # 中文检索归一单源（去空格+小写）
 from app.skills.base import Skill, SkillResult
 from app.runtime.pipeline import build_plan
 
@@ -403,11 +404,15 @@ class PlanSkill(Skill):
         x_raw = re.sub(r"(?:推|拉|腿|核心|胸|背|肩|臀|腹|臂)日", "",
                        x_raw).strip(" ，。的")
         y_raw = mrep.group(2).strip(" ，。") if mrep else None
+        # 空格归一后比对（2026-09-11）：计划内动作名来自 search_zh，多为带空格复合名
+        # （'杠铃 窄距 卧推'），而用户说的是 '窄距卧推' → 朴素子串包含**永不命中**
+        # （实测 plan#edit.not_found）。复用检索层同一归一口径 norm_zh（单源）。
+        _x = _norm_zh(x_raw)
         hit_day = hit_ex = None
         for d in items:
             for e in d.get("exercises", []):
-                if x_raw and (x_raw in str(e.get("name", ""))
-                              or str(e.get("name", "")) in x_raw):
+                _n = _norm_zh(str(e.get("name", "")))
+                if _x and (_x in _n or _n in _x):
                     hit_day, hit_ex = d, e
                     break
             if hit_ex:

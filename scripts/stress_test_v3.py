@@ -95,8 +95,18 @@ def _assert_isolation(mem, spec: dict) -> tuple[bool, str]:
 
 
 def _apply_expect(expect: dict, mode: str, reply: str,
-                  mem, uid: str) -> dict:
-    """三层断言。返回 {"ok","detail","skipped"}。"""
+                  mem, uid: str, sources: list | None = None,
+                  data: dict | None = None) -> dict:
+    """五层断言（mode/回复关键词/provenance/结构化数据/记忆）。
+
+    provenance 断言（2026-09-11 新增，可选字段，不填=不断言——不影响既有题库）：
+    `provenance_has` / `provenance_forbids`：子串命中 provenance 列表。用于断言
+    **产出路径**而非措辞——"真的编辑了"（plan#edit.*）与"静默重新生成"在 mode
+    和回复措辞上可能都看不出差别，只有 provenance 能区分。
+
+    data 断言（同日新增）：`data_contains` / `data_forbids`：子串命中
+    structured.data 的 JSON 序列化。用于**措辞无法区分**的场景——例：读回计划是
+    默认四天分化还是练三休一，两者推日/拉日文字完全相同，只有数据里的 scheme 能区分。"""
     res = {"ok": True, "detail": [], "skipped": False}
     if mode is None:
         res["skipped"] = True
@@ -107,6 +117,25 @@ def _apply_expect(expect: dict, mode: str, reply: str,
         if not hit:
             res["ok"] = False
             res["detail"].append(f"mode: expect {exp_mode}, got {mode}")
+    src = [str(x) for x in (sources or [])]
+    for kw in expect.get("provenance_has") or []:
+        if not any(kw in s for s in src):
+            res["ok"] = False
+            res["detail"].append(f"provenance 缺 {kw!r}（实际 {src[:5]}）")
+    for kw in expect.get("provenance_forbids") or []:
+        if any(kw in s for s in src):
+            res["ok"] = False
+            res["detail"].append(f"provenance 出现禁项 {kw!r}（实际 {src[:5]}）")
+    if expect.get("data_contains") or expect.get("data_forbids"):
+        blob = json.dumps(data or {}, ensure_ascii=False)
+        for kw in expect.get("data_contains") or []:
+            if kw not in blob:
+                res["ok"] = False
+                res["detail"].append(f"data 缺 {kw!r}")
+        for kw in expect.get("data_forbids") or []:
+            if kw in blob:
+                res["ok"] = False
+                res["detail"].append(f"data 出现禁项 {kw!r}")
     reply = reply or ""
     for kw in expect.get("reply_contains") or []:
         if kw not in reply:
@@ -211,7 +240,7 @@ def run_bank(questions: list[dict], limit: int | None = None) -> list[dict]:
                      "attack": q.get("attack"), "mode": None, "reply": "",
                      "setup_ok": True, "flag": "", "detail": []}
             try:
-                last_mode, last_reply = None, ""
+                last_mode, last_reply, last_prov, last_data = None, "", [], {}
                 for turn in q["turns"]:
                     if "action" in turn:                    # 时间旅行注入（记忆断言前置）
                         if mem is None:
@@ -227,12 +256,15 @@ def run_bank(questions: list[dict], limit: int | None = None) -> list[dict]:
                                              "session_id": uid, "user_id": uid})
                     b = r.json()
                     last_mode, last_reply = b.get("mode_used"), (b.get("reply") or "")
+                    last_prov = b.get("provenance") or []
+                    last_data = (b.get("structured") or {}).get("data") or {}
                 if entry["flag"]:
                     results.append(entry)
                     continue
                 entry["mode"], entry["reply"] = last_mode, (last_reply or "")[:200]
+                entry["provenance"] = last_prov
                 res = _apply_expect(q.get("expect") or {}, last_mode, last_reply,
-                                    mem, uid)
+                                    mem, uid, last_prov, last_data)
                 entry["flag"] = "OK" if res["ok"] else "FAIL"
                 entry["detail"] = res["detail"]
                 if res["skipped"]:

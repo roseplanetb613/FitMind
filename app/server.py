@@ -40,10 +40,13 @@ def create_app() -> FastAPI:
         # "enabled=true 但其实没在工作"无法从外部发现，故在此显式暴露。
         # degraded：静默降级计数（见 app/core/diag.py）。降级是有意策略，但"静默"
         # 曾让整条链路不可用而表面正常（食物库构建失败 → 27 个测试连锁挂而无迹可查）。
-        from app.core.diag import counts as _deg
+        from app.core.diag import counts as _deg, details as _degd
         return {"status": "ok",
                 "semantic": getattr(agent.classifier, "semantic_status", "unknown"),
-                "degraded": _deg()}
+                "degraded": _deg(),
+                # 只记次数等于"知道坏了但不知道为什么"——实测食物库间歇 OOM 就是靠
+                # 这里的异常摘要才从"4 个断言莫名失败"定位到 MemoryError
+                "degraded_detail": _degd()}
 
     @app.post("/v1/chat")
     def chat(req: ChatRequest):

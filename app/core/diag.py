@@ -17,12 +17,22 @@ from __future__ import annotations
 from collections import Counter
 
 _COUNTS: Counter = Counter()
+# 每个 key 最近一次的异常摘要——只记次数等于"知道坏了但不知道为什么"。
+# 实测价值：食物库间歇加载失败曾表现为"4 个断言莫名失败"，有它才看出是 MemoryError。
+_DETAIL: dict[str, str] = {}
 
 
-def bump(key: str, n: int = 1) -> None:
-    """记一次降级。**绝不抛异常**——它本身就在异常路径上被调用。"""
+def bump(key: str, n: int = 1, detail: str | None = None) -> None:
+    """记一次降级。**绝不抛异常**——它本身就在异常路径上被调用。
+
+    `n` 保持**第二位**：`bump(key, 5)` 的既有直觉就是"记 5 次"；若把 detail 插到
+    第二位，`bump(key, 5)` 会静默变成"记 1 次 + 摘要是 5"——这类静默语义漂移正是
+    本仓反复出现的缺陷类型。
+    `detail`：异常摘要（建议 `f"{type(e).__name__}: {e}"`），便于事后定位。"""
     try:
         _COUNTS[key] += n
+        if detail:
+            _DETAIL[key] = str(detail)[:200]
     except Exception:
         pass
 
@@ -32,6 +42,12 @@ def counts() -> dict:
     return dict(_COUNTS)
 
 
+def details() -> dict:
+    """{key: 最近一次异常摘要}——与 counts 同为只读快照。"""
+    return dict(_DETAIL)
+
+
 def reset() -> None:
     """清空（测试用）。"""
     _COUNTS.clear()
+    _DETAIL.clear()

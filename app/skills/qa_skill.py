@@ -221,6 +221,17 @@ class QaSkill(Skill):
                 provenance=["qa#memory.offline"])
         muscle = _PART2MUSCLE.get(part, part)
         s = m.muscle_summary(uid, muscle, part=part)
+        # 恢复度（2026-09-11）：肌肉状态图的数据源。**编排参考，不是生理测量**——
+        # 措辞由 recovery.describe 单源控制（含"约"与非精确口吻、低置信标注）。
+        rec_txt = ""
+        try:
+            import recovery as _rec
+            from datetime import datetime, timezone
+            st = _rec.recovery_map(m.muscle_load_map(uid),
+                                   datetime.now(timezone.utc)).get(muscle)
+            rec_txt = _rec.describe(muscle, st)
+        except Exception:
+            rec_txt = ""
         if not s["trained_count"] and not s["active_injury"] and not s["preference"]:
             val = "这块肌肉还没有记录——打卡训练或聊聊偏好后再问我"
         else:
@@ -228,8 +239,11 @@ class QaSkill(Skill):
             val = (f"近30天训练 {s['trained_count']} 次；最近：{last}；"
                    f"伤情：{'、'.join(s['active_injury']) or '无'}；"
                    f"偏好：{s['preference'] or '无'}")
+        if rec_txt:
+            val += f"；恢复：{rec_txt}"
         return SkillResult(ok=True, data={"items": [
-            {"name": f"{part}（{muscle}）面板", "value": val}]},
+            {"name": f"{part}（{muscle}）面板", "value": val}],
+            "recovery": rec_txt},
             provenance=["qa#muscle_panel"])
 
     def _memory(self, ctx, query: str) -> SkillResult:

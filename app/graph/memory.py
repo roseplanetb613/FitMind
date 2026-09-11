@@ -521,6 +521,45 @@ class MemoryStore:
             diag.bump("memory.muscle_rows")   # 失败 → per-muscle 面板恒空
         return rows
 
+    def muscle_load_map(self, user_id: str, days: int = 7) -> dict:
+        """近 N 天训练 → {muscle: [{"at","role","sets","reps"}]}（只读）。
+
+        走**已有** `(Event)-[:TARGETS {role}]->(Muscle)` 边，零新图结构；供
+        `lib/recovery.py` 计算恢复度。异常 → {}（并 diag 留痕，见 audit G）。
+
+        **近似说明**：`sets/reps` 取自该次事件的第一个带组次的条目——事件与肌群是
+        多对多（一次卧推同时挂胸/三头/三角），无法把组次精确分摊到各肌群。故这里
+        给的是"该次训练的组次方案"，由恢复模型侧按角色权重折算；缺组次时模型自行
+        退化为计次并标 low confidence。"""
+        _validate_user_id(user_id)
+        out: dict = {}
+        try:
+            since = _add_days(self._now(), -days)
+            with self._g._driver.session(database=self._g._database) as s:
+                for r in s.run(
+                        "MATCH (u:User {user_id: $uid})-[:LOGGED]->(e:Event)"
+                        "-[t:TARGETS]->(mm:Muscle) "
+                        "WHERE e.invalidated_at IS NULL AND e.occurred_at >= $since "
+                        "RETURN mm.name AS muscle, e.occurred_at AS at, "
+                        "       coalesce(t.role, 'target') AS role, "
+                        "       e.payload AS payload", uid=user_id, since=since):
+                    sets = reps = None
+                    try:
+                        for it in (json.loads(r["payload"] or "{}")
+                                   .get("items") or []):
+                            if it.get("sets") and it.get("reps"):
+                                sets, reps = it["sets"], it["reps"]
+                                break
+                    except (TypeError, ValueError):
+                        pass
+                    out.setdefault(str(r["muscle"]), []).append(
+                        {"at": str(r["at"]), "role": str(r["role"]),
+                         "sets": sets, "reps": reps})
+        except Exception:
+            diag.bump("memory.load_map")
+            return {}
+        return out
+
     def link_injury_muscle(self, user_id: str, site: str) -> bool:
         """active injury StateFact(about=部位) → ABOUT_MUSCLE 边；不中/异常 → False。"""
         _validate_user_id(user_id)

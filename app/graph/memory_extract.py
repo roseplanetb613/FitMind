@@ -141,8 +141,10 @@ def _norm_food(text: str):
         hits = foods_repo().search(text, limit=1)
         if hits:
             return hits[0].get("name_zh") or hits[0].get("name")
-    except Exception:
-        bump("memory_extract.norm_food")   # 食物库构建失败曾静默致 27 个测试连锁挂
+    except Exception as e:
+        # 食物库构建失败曾静默致 27 个测试连锁挂——记异常类型才定位得到（实测：
+        # 间歇 MemoryError，表现为"4 个断言莫名失败"，看计数+摘要才见真因）
+        bump("memory_extract.norm_food", detail=f"{type(e).__name__}: {e}")
     return None
 
 

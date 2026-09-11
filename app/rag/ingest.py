@@ -188,13 +188,21 @@ def _build_graph(graph: "GraphStore", ex: ExerciseRepo) -> None:
             "id": e["id"],
             "name_zh": e.get("name_zh"),
             "name_en": e.get("name")})
+        # 肌群角色（2026-09-11）：此前 target/muscle_group/secondary 被并成一个集合，
+        # 边全等权 → 消费方无法区分"主要练胸、三头只是协同"。改为逐肌群带 role：
+        # target（主动肌）/ synergist（协同）。已核实 muscle_group 恒为 secondary 子集
+        # （0/1324 例外），故并入 synergist 不丢边、不引入第三态。
         mus = e.get("muscles_canonical") or {}
-        for m in ({mus.get("target"), mus.get("muscle_group")} |
-                  set(mus.get("secondary") or [])):
+        roles: dict = {}
+        if mus.get("target"):
+            roles[mus["target"]] = "target"
+        for m in (mus.get("muscle_group"), *(mus.get("secondary") or [])):
             if m:
-                graph.merge_entity("Muscle", "name", {"name": m})
-                graph.merge_rel("Exercise", "id", e["id"], "targets",
-                                "Muscle", "name", m)
+                roles.setdefault(m, "synergist")
+        for m, role in roles.items():
+            graph.merge_entity("Muscle", "name", {"name": m})
+            graph.merge_rel("Exercise", "id", e["id"], "targets",
+                            "Muscle", "name", m, {"role": role})
         eq = e.get("normalized_equipment")
         if eq:
             graph.merge_entity("Equipment", "name", {"name": eq})

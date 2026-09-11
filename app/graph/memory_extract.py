@@ -590,7 +590,11 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                     {"about": cmd["about"] or "", "verb": cmd["verb"],
                      "items": cmd.get("items", [])},
                     occurred_at=f"{cmd['occurred']}T00:00:00+00:00",
-                    muscles=m.muscles_of_exercises(names) if names else None))
+                    muscles=m.muscles_of_exercises(names) if names else None,
+                    # 角色随边落库（2026-09-11）：per-muscle 负荷加权需要区分
+                    # 主动肌与协同肌，否则"练了卧推"会把胸/三头/三角等权记账
+                    muscle_roles=(m.muscle_roles_of_exercises(names)
+                                  if names else None)))
             elif cmd["op"] == "preference_food":
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=cmd["about"]) is not None

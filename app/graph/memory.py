@@ -18,6 +18,7 @@ Neo4j 单图 user_id 分区：
 from __future__ import annotations
 import hashlib
 import json
+from collections import Counter
 import re
 import threading
 import uuid
@@ -363,10 +364,13 @@ class MemoryStore:
                   occurred_at: str | None = None,
                   plan_id: str | None = None,
                   muscles: list[str] | None = None,
-                  foods: list[str] | None = None) -> str | None:
+                  foods: list[str] | None = None,
+                  muscle_roles: dict[str, str] | None = None) -> str | None:
         """事件（checkin/pr/…）：occurred_at 缺省=now；补录时 occurred<recorded 保留。
         muscles/foods：枢纽挂边（Event-TARGETS→Muscle / Event-ATE→Food，MATCH
-        不中静默跳过；Food 为个人域 MERGE）。"""
+        不中静默跳过；Food 为个人域 MERGE）。
+        muscle_roles：{肌群: target|synergist} → 写入 TARGETS 边 role，供 per-muscle
+        负荷加权（缺省 None → 不写，边无 role = 未知）。"""
         _validate_user_id(user_id)
         now = self._now()
         occ = occurred_at or now
@@ -384,7 +388,9 @@ class MemoryStore:
                 for mn in (muscles or []):       # 挂 Muscle（MATCH 不中静默跳过）
                     s.run("MATCH (e:Event {event_id: $eid}), "
                           "(mm:Muscle {name: $mn}) "
-                          "MERGE (e)-[:TARGETS]->(mm)", eid=eid, mn=mn)
+                          "MERGE (e)-[r:TARGETS]->(mm) "
+                          "SET r.role = $role",
+                          eid=eid, mn=mn, role=(muscle_roles or {}).get(mn))
                 for fn in (foods or []):         # Food 个人域 MERGE
                     s.run("MATCH (e:Event {event_id: $eid}) "
                           "MERGE (f:Food {name: $fn}) "
@@ -399,20 +405,107 @@ class MemoryStore:
         except Exception:
             return None
 
-    def muscles_of_exercises(self, names: list[str]) -> list[str]:
+    def muscles_of_exercises(self, names: list[str],
+                             roles: tuple[str, ...] | None = None) -> list[str]:
         """动作名 → 图谱 Exercise-[:targets]->Muscle 肌肉名集（只读；异常→[]）。
-        Exercise 属性为 name_zh/name_en 且多为复合名（'杠铃 深蹲'）→ CONTAINS 匹配。"""
+
+        空格归一（2026-09-11）：图内 name_zh 多为带空格复合名（'杠铃 卧推'），而调用方
+        传进来的是用户原词/归一名（'杠铃卧推'）→ 裸 CONTAINS **永不命中**，于是打卡
+        建不出 (Event)-[:TARGETS]->(Muscle) 边、per-muscle 聚合全空（实测：任何部位问
+        "我的X怎么样"都恒答"还没有记录"）。两侧统一去空格+小写，与检索层 norm_zh
+        同口径（单源）——同类缺陷此前已在 plan_skill._edit 修过一次。
+
+        roles=None → 全部肌群；roles=("target",) → 仅主动肌（供负荷/恢复加权消费）。
+        role 属性由 ingest 写入、scripts/backfill_muscle_roles.py 回填存量边。"""
         out: set[str] = set()
+        for n in names:
+            for name, role_ in self._dominant_rows(n):
+                if roles is None or role_ in roles:
+                    out.add(name)
+        return sorted(out)
+
+    def muscle_roles_of_exercises(self, names: list[str]) -> dict[str, str]:
+        """动作名 → {肌群: role}；同肌群多角色取更强（target > synergist）。
+
+        供 log_event 把角色写进 (Event)-[:TARGETS]->(Muscle) 边——per-muscle 负荷
+        加权需要区分"这次主要练的是胸，三头只是协同"。"""
+        rank = {"synergist": 1, "target": 2}
+        out: dict[str, str] = {}
+        for n in names:
+            for name, role_ in self._dominant_rows(n):
+                if rank.get(role_, 0) >= rank.get(out.get(name, ""), 0):
+                    out[name] = role_
+        return out
+
+    def _dominant_rows(self, name: str) -> list[tuple[str, str]]:
+        """单动作词 → [(肌群, role)]（已剔复合名噪声）。
+
+        CONTAINS 过匹配（2026-09-11）："深蹲" 子串命中 72 个动作，含
+        '哑铃 肱二头肌弯举 深蹲'(biceps)、'绳索 深蹲划船'(latissimus_dorsi) 这类
+        **复合名**——它们的运动模式与主体不同。实测 72 个里 69 个 squat、3 个 pull，
+        恰好就是这 3 个噪声。故按**模态运动模式**过滤（数据驱动，不手写词表）；
+        模态占比不足 _DOMINANT_SHARE 时视为歧义词，**不过滤**（宁缺毋滥）。"""
+        pat = self._dominant_pattern(name)
+        return [(m, r) for m, r, _ in self._muscle_rows(name, pat)]
+
+    def _dominant_pattern(self, name: str) -> str | None:
+        """**按动作计数**的模态 movement_pattern；不足 _DOMINANT_SHARE → None（歧义）。
+
+        计数必须按动作而非去重后的肌肉行：肌肉行去重后"深蹲"只剩 ~10 squat vs 3 pull
+        （77%），会掉到阈值下把过滤整个跳过——而按动作计是 69 vs 3（96%）。"""
+        import exercise_repo
+        nq = exercise_repo.norm_zh(str(name or ""))
+        if not nq:
+            return None
         try:
             with self._g._driver.session(database=self._g._database) as s:
-                for n in names:
-                    for r in s.run(
-                            "MATCH (e:Exercise)-[:targets]->(mm:Muscle) "
-                            "WHERE e.name_zh CONTAINS $n OR e.name_en CONTAINS $n "
-                            "RETURN DISTINCT mm.name AS name", n=n):
-                        out.add(str(r["name"]))
+                # 模式在 (e)-[:pattern_of]->(:Pattern) 节点上，**不是** Exercise 属性
+                pats = [str(r["p"]) for r in s.run(
+                    "MATCH (e:Exercise) "
+                    "OPTIONAL MATCH (e)-[:pattern_of]->(p:Pattern) "
+                    "WITH e, coalesce(p.name, '') AS pat "
+                    "WHERE replace(replace(e.name_zh, ' ', ''), '　', '')"
+                    "      CONTAINS $n "
+                    "   OR toLower(replace(e.name_en, ' ', '')) CONTAINS $n "
+                    "RETURN pat AS p", n=nq)]
+        except Exception:
+            return None
+        if len(pats) < 2:
+            return None
+        modal, n_modal = Counter(pats).most_common(1)[0]
+        return modal if n_modal >= len(pats) * _DOMINANT_SHARE else None
+
+    def _muscle_rows(self, name: str, pattern: str | None = None
+                     ) -> list[tuple[str, str, str]]:
+        """单动作词 → [(肌群, role, movement_pattern)]（只读；异常/无命中 → []）。
+        pattern 非空 → 只取该模式的动作（剔复合名噪声）。"""
+        import exercise_repo
+        nq = exercise_repo.norm_zh(str(name or ""))
+        if not nq:
+            return []
+        rows: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                for r in s.run(
+                        "MATCH (e:Exercise)-[t:targets]->(mm:Muscle) "
+                        "OPTIONAL MATCH (e)-[:pattern_of]->(p:Pattern) "
+                        "WITH e, t, mm, coalesce(p.name, '') AS pat "
+                        "WHERE (replace(replace(e.name_zh, ' ', ''), '　', '')"
+                        "       CONTAINS $n "
+                        "    OR toLower(replace(e.name_en, ' ', '')) CONTAINS $n) "
+                        "  AND ($pat IS NULL OR pat = $pat) "
+                        "RETURN DISTINCT mm.name AS name, "
+                        "       coalesce(t.role, 'unknown') AS role, pat",
+                        n=nq, pat=pattern):
+                    pair = (str(r["name"]), str(r["role"]))
+                    if pair not in seen:
+                        seen.add(pair)
+                        rows.append((str(r["name"]), str(r["role"]),
+                                     str(r["pat"])))
         except Exception:
             pass
+        return rows
         return sorted(out)
 
     def link_injury_muscle(self, user_id: str, site: str) -> bool:
@@ -567,7 +660,14 @@ _INJURY_SITE_ZH = {
 
 # 部位→Muscle 名（宁缺毋滥：以图谱实际 Muscle.name 校准——英文 snake_case，
 # 不中不挂；膝/肘/手腕/颈/髋/跟腱无精确肌肉节点故不入表）
-_PART2MUSCLE = {"背": "latissimus_dorsi", "胸": "pectoralis", "肩": "deltoids",
+# 注：每个 value 必须是图谱里真实存在的 Muscle.name（英文 snake_case）；"胸" 曾误写
+# 单数 pectoralis（本体/图谱实为 pectorals）→ 胸部面板无论匹配对不对都查不到。
+# test_memory_guard 的校准用例已改为**遍历全表**校验，防同类漏网。
+# 模态运动模式阈值（_dominant_rows 用）：CONTAINS 匹配到的动作里，占比达此值的模式
+# 视为"主体模式"，其余模式的动作判为复合名噪声剔除。低于阈值 → 视为歧义词不过滤。
+_DOMINANT_SHARE = 0.8
+
+_PART2MUSCLE = {"背": "latissimus_dorsi", "胸": "pectorals", "肩": "deltoids",
                 "腿": "quadriceps", "大腿": "quadriceps", "臂": "biceps",
                 "腹": "rectus_abdominis", "臀": "glutes", "核心": "core",
                 "腰": "lower_back", "脚踝": "ankle_stabilizers"}

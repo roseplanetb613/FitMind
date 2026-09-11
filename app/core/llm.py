@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from app.core.intent import Intent, PlannedCall
 from app.core.render_util import training_lines
-from app.core.vocab import GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness
+from app.core.vocab import (GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness,
+                            MEMORY_QUERY_RULE_KW)   # 记忆查询词表单源（见 vocab.py）
 import split_cycle                      # lib 单源：plan 参数抽取（split/days）
 
 
@@ -117,13 +118,10 @@ _RULES = [
      lambda t, kw: {"query": t, "kind": "profile"}),
     (("建档", "建立档案", "建档案", "录入档案"), "qa",
      lambda t, kw: {"query": t, "kind": "profile"}),
-    # 2026-09-09 记忆查询：伤/训练/偏好记录问答 → qa(kind=memory)（只读）
-    (("受伤记录", "受过伤", "伤病记录", "有伤吗", "哪里受伤", "伤过吗",
-      "训练记录", "练过什么", "打卡记录", "训练日志", "最近练",
-      # 2026-09-11 疲劳依据追问："48小时练推日部位？练的哪里？" 曾落动作库检索
-      # → "没有找到相关内容"（系统答不上自己刚说的"近48小时练过X"）
-      "练的哪里", "练了哪里", "练的哪些", "练过哪里", "练的什么部位",
-      "我的偏好", "我喜欢什么", "记得我喜欢", "我的喜好"), "qa",
+    # 2026-09-09 记忆查询：伤/训练/偏好记录问答 → qa(kind=memory)（只读）。
+    # 词表单源在 app/core/vocab.py（与 router.is_memory_query 的四段门共表）——
+    # 此前两处平行维护，2026-09-11 修疲劳依据追问时必须同时改两处才生效。
+    (MEMORY_QUERY_RULE_KW, "qa",
      lambda t, kw: {"query": t, "kind": "memory"}),
 ]
 
@@ -178,6 +176,15 @@ def _is_intensity_context(p: str) -> bool:
 # 曾全部被判为编辑并真的撤销了计划动作，同时偏好也没被记录。
 _EDIT_SCOPE_KW = ("今天", "明天", "今儿", "今晚", "这周", "本周", "下次", "这次",
                   "接下来", "以后", "之后", "从今")
+
+
+# 计划**生成**动词（单源）：生成门与 read 判别式的排除表共用。
+# 此前两处各写一份字面量且**已经漂移**（排除表多"帮我做/给我做"）——加词只改一处
+# 就会出现"生成门拦下了、read 判定又放行"的不一致。关系是**显式超集**而非复制：
+# 生成门收紧（明确生成请求才给 1.0），read 排除放宽（任何"做/排"类动作都不该读）。
+_GEN_VERBS = ("生成", "制定", "排一份", "排一版", "排一套", "排个",
+              "帮我排", "给我排")
+_READ_EXCLUDE_VERBS = _GEN_VERBS + ("帮我做", "给我做")
 
 
 def _is_vague_reference(t: str) -> bool:
@@ -319,8 +326,7 @@ class StubProvider(LLMProvider):
         # 明确"生成计划"请求优先于编排模式 teach 截胡（CLI 实证："帮我生成一份
         # 练三休一的训练计划表"被裸词"练三休一"吞成 teach）："怎么分/如何分化"
         # 是编排知识问法（teach）；生成动词+计划名词是要完整计划（plan）。
-        if any(k in t for k in ("生成", "制定", "排一份", "排一版", "排一套",
-                                "帮我排", "给我排", "排个")) and any(
+        if any(k in t for k in _GEN_VERBS) and any(
                 k in t for k in ("计划", "课表", "训练表", "方案")):
             return Classification("plan", split_cycle.extract_plan_params(t),
                                   confidence=1.0)
@@ -340,8 +346,7 @@ class StubProvider(LLMProvider):
         # / 练啥 / 9.27练啥"四轮全部重跑 plan 引擎（问一句"今天练啥"要跑筛查→FITT→
         # 两库检索），且**编辑过的计划读不回来**（重新生成覆盖了"不练三头"）。加 read
         # 标记：有既有计划则读回，没有则由 plan 技能照常生成（首次体验不变）。
-        if not any(k in t for k in ("生成", "制定", "帮我排", "给我排", "排一份",
-                                    "排一版", "排一套", "排个", "帮我做", "给我做")):
+        if not any(k in t for k in _READ_EXCLUDE_VERBS):
             _ask = any(k in t for k in ("练啥", "练什么", "练哪些", "练点什么"))
             _mine = (any(k in t for k in ("计划", "课表", "训练安排", "计划安排"))
                      and any(k in t for k in ("我的", "今天", "明天", "这周",

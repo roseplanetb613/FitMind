@@ -9,6 +9,9 @@ from app.core.intent import Intent
 from app.core.llm import Classification, LLMProvider, StubProvider
 from app.core.arbitrate import arbitrate
 from app.core.semantic import ExemplarStore, _params_for, map_conf
+from app.core.vocab import (                       # 记忆查询词表单源（见 vocab.py）
+    _MEM_ADVICE_KW, _MEM_ASPECT_KW, _MEM_DOMAIN_KW, _MEM_PAST_KW,
+    _MEM_SELF_KW, _MEM_WHEN_KW, _MEM_WHERE_FRAME_KW, _MEM_WHERE_SELF_KW)
 
 
 class Mode(Enum):
@@ -44,31 +47,11 @@ def route(complexity: str, task_type: str = "") -> Mode:
 # （训练记录/练过什么/打卡记录/训练日志/最近练/我的偏好…），而 L2 的 tool schema
 # 里根本没有 kind 字段——表外问法**结构性**到不了 qa._memory，直接落动作库检索：
 #   "我啥时练的核心" → qa#exercise_repo.search → 空 → "没有找到相关内容"
-# 而同一句只要带上 kind=memory 就能列出真实记录。修复：把「自指 + 时间/次数疑问
-# + 记录域 + 已然体」句式提升为确定性 L0 级直通（不经 L1/L2，防被 LLM 判 unknown
-# 转成反问）。判定从严：建议型/动作型/通识型问法一律不碰（宁缺毋滥）。
-_MEM_SELF_KW = ("我", "俺", "自己")
-_MEM_WHEN_KW = ("啥时", "啥时候", "什么时候", "哪天", "几号", "多久", "几次",
-                "上次", "上回", "最近", "以前", "之前")
-_MEM_ASPECT_KW = ("了", "过", "的")          # 已然体标记
-_MEM_PAST_KW = ("上次", "上回", "以前", "之前")   # 显式过去锚（"什么时候"式问句无体标记）
-_MEM_DOMAIN_KW = ("练", "训练", "打卡", "记录", "日志", "健身", "运动", "伤")
-_MEM_ADVICE_KW = ("比较好", "合适", "建议", "应该", "推荐", "最好", "怎样",
-                  "怎么", "如何", "要不要", "能不能", "可以吗", "好吗", "有用")
-# 部位/内容追问（2026-09-11）："48小时练推日部位？练的哪里？"——用户追问系统自身
-# 疲劳断言（"近48小时练过X，已自动减量"）的**依据**时，因无"我"字被四段门的自指门
-# 误杀 → 落动作库检索 → "没有找到相关内容"（系统答不上自己刚说过的话）。
-# 此类句式**天然自指**（问的就是自己的记录），命中记录域 + 部位/内容疑问词即直通；
-# 建议型问法（"练的哪些部位比较好"）仍被 _MEM_ADVICE_KW 否决。
-# 注意不能用裸"哪里"：那是**解剖问法**（"深蹲练哪里"=蹲练哪块肌肉），落记忆查询会
-# 把知识问题变成读打卡。自指判据必须是"练的…"结构（带"的"），或叠加时域词。
-_MEM_WHERE_SELF_KW = ("练的哪里", "练了哪里", "练的哪儿", "练的哪些",
-                      "练的什么部位", "练的什么", "练了什么",
-                      "练过哪里", "练过什么", "练过哪些")
-# 时域词只取**过去**："今天练什么"是前瞻（该由 plan 读回安排），"48小时练过什么"
-# 才是回读记录。混入"今天"会把计划查询拽进记忆域。
-_MEM_WHERE_FRAME_KW = ("48小时", "24小时", "最近", "上次", "上回",
-                       "前天", "昨天", "以前", "之前")
+# 修复：把「自指 + 时间/次数疑问 + 记录域 + 已然体」句式提升为确定性 L0 级直通
+# （不经 L1/L2，防被 LLM 判 unknown 转成反问）。判定从严：建议型/动作型/通识型
+# 问法一律不碰（宁缺毋滥）。
+# 词表已集中到 app/core/vocab.py（单源，2026-09-11 收口）——此前与 llm._RULES 的
+# 记忆查询行平行维护，修"疲劳依据追问"时必须同时改两处才生效。**加词只改 vocab**。
 
 
 def is_memory_query(text: str) -> bool:

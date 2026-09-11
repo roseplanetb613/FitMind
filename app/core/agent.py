@@ -7,6 +7,7 @@ from app.core.graph import build_graph, build_structured
 from app.core.llm import LLMProvider
 from app.core.registry import SkillRegistry
 from app.core.router import RouteClassifier
+from app.core import diag                     # 降级可观测（静默失败可查）
 from app.core.session import Session, SessionManager
 
 
@@ -95,7 +96,7 @@ class Agent:
             if p:
                 sess.profile.update(p)
         except Exception:
-            pass
+            diag.bump("agent.project_profile")   # 投影失败 → 会话用旧档案
 
     def update_profile(self, session_id: str, profile: dict,
                        user_id: str | None = None) -> dict:

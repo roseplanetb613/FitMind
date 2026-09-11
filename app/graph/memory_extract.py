@@ -12,12 +12,16 @@ import re
 import json
 from datetime import datetime, timedelta, timezone
 
+from lib.negation import has_negation, negated_at, negated_prefix  # 否定原语单源
+from lib.parts import PART_CHARS as _PART_CHARS, PART_WORDS as _PART_WORDS
+from app.core.diag import bump            # 降级可观测
+
 _LIKE = ("喜欢", "偏爱", "沉迷", "上瘾")
 _DISLIKE = ("讨厌", "不喜欢", "不想", "排斥")
 
-# N-3 部位偏好（spec §6）：单字部位 + 常见双字部位
-_PART_CHARS = "腿肩背胸臂腹臀"
-_PART_WORDS = ("核心",)
+# N-3 部位偏好（spec §6）：逐字扫描用（单源 lib/parts.py）。
+# 注意 PART_CHARS/PART_WORDS ≠ PARTS 的全部部位词——这里只认单字 + 少数多字部位，
+# 扩它属行为变更（"我喜欢练手臂"会新变成可抽取），故与 PARTS 分开维护。
 
 # 训练动作时态词 →（occurred 偏移天数，名称）
 _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六", 6),
@@ -27,9 +31,7 @@ _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六
 _EVENT_VERB = ("练了", "练", "做了", "跑了", "练过")
 # 否定否决（2026-09-11）："不练三头"里含"练"，此前与"练了三头"抽出**完全相同**的
 # checkin → 否定句被记成正向训练记录 → 48h 疲劳联动据此给推日减量（假减量）。
-# 动词前短窗口（_EVENT_NEG_WIN 字）命中否定词即否决；段级同样否决（"练了腿，没练胸"）。
-_EVENT_NEG_KW = ("不", "没", "别", "未", "取消", "免", "拒绝")
-_EVENT_NEG_WIN = 2
+# 词表与判定原语已下沉 lib/negation.py（单源）——本处只用"动词前短窗口"语义。
 
 _EVENT_SPLIT = re.compile(r"[+，、和,\s]+")
 _SETS_RE = re.compile(r"(\d{1,2})\s*[xX×*]\s*(\d{1,3})")
@@ -99,8 +101,8 @@ _SPLIT_HABIT_RE = re.compile(r"习惯|平时")
 # 既不丢用户的选择，也不永久绑架方案选择（超期自动回落 default/profile.split）。
 _SPLIT_ADOPT_RE = re.compile(r"我要|我想|就要|就按|按这个|用这个|来这个|来一套")
 _SPLIT_ADOPT_TTL_DAYS = 30
-# 否定/伤病语境整句否决（宁缺毋滥：假阴性可接受，假偏好 180 天不可接受）
-_SPLIT_NEG_KW = ("不", "别", "没", "讨厌")
+# 否定/伤病语境整句否决（宁缺毋滥：假阴性可接受，假偏好 180 天不可接受）。
+# 否定词表与判定原语已下沉 lib/negation.py（单源）——本处只用"整句否决"语义。
 _SPLIT_INJURY_KW = ("疼", "痛", "伤", "肿", "麻", "不适", "恶心")
 # W4 负向编排偏好 carve-out：体验型否定（不习惯/跟不上/受不了/太累/太频繁/吃不消）
 # 是**真偏好**（用户不适合这套节奏），值得落库供 plan 反向避开；祈使型（别/不要/没）
@@ -128,7 +130,7 @@ def _norm_exercise(text: str):
         if hits:
             return hits[0].get("name_zh")
     except Exception:
-        pass
+        bump("memory_extract.norm_exercise")   # 静默失败可查（见 diag）
     return None
 
 
@@ -140,7 +142,7 @@ def _norm_food(text: str):
         if hits:
             return hits[0].get("name_zh") or hits[0].get("name")
     except Exception:
-        pass
+        bump("memory_extract.norm_food")   # 食物库构建失败曾静默致 27 个测试连锁挂
     return None
 
 
@@ -317,8 +319,7 @@ def _event(text: str) -> dict | None:
         if idx < 0:
             continue
         # 动词前短窗口命中否定 → 该动词是"不练/没练/别练"，不是训练事件
-        if any(k in text[max(0, idx - _EVENT_NEG_WIN):idx]
-               for k in _EVENT_NEG_KW):
+        if negated_at(text, idx):
             continue
         verb_hit = v
         break
@@ -334,7 +335,7 @@ def _event(text: str) -> dict | None:
         if not part:
             continue
         # 段级否定否决："练了腿，没练胸" → "没练胸" 段不得入记录
-        if any(k in part[:_EVENT_NEG_WIN] for k in _EVENT_NEG_KW):
+        if negated_prefix(part):
             continue
         m = _SETS_RE.search(part)
         namepart = _SETS_RE.sub("", part).strip(" 的了。")
@@ -424,8 +425,7 @@ def _split_preference(text: str) -> dict | None:
         is_adopt = bool(_SPLIT_ADOPT_RE.search(text))
         if not (is_habit or is_adopt):
             return None
-        if any(k in text for k in _SPLIT_NEG_KW) or \
-                any(k in text for k in _SPLIT_INJURY_KW):
+        if has_negation(text) or any(k in text for k in _SPLIT_INJURY_KW):
             return None
         if is_adopt and not is_habit:
             expires_days = _SPLIT_ADOPT_TTL_DAYS   # 采纳（非习惯）→ 带时效

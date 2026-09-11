@@ -386,29 +386,10 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             reply = llm.render(structured)
         except Exception:
             reply = _render_fallback(structured)
-        # N-11：LLM 幻觉身体数字（与档案/structured 矛盾）→ 降级确定性渲染。
-        # 无条件校验（不按 is_stub 门控）：stub 渲染输出逐字来自 structured，
-        # 同量纲数字必在授权集内，校验为空操作；而固定文本测试替身继承
-        # is_stub=True 却在模拟真实 LLM 幻觉，门控会放行幻觉。
-        if _reply_fake_numbers(
-                reply, _auth_numbers(structured, state.get("profile"))):
-            reply = _render_fallback(structured)
-        # O-4：ack 必达——LLM 吞掉时代码级补前缀（不依赖提示词自觉）
-        acks = structured.get("memory_ack") or []
-        if acks and "已记下" not in reply:
-            reply = "已记下：" + "、".join(acks) + "\n\n" + reply
-        elif not acks:
-            # 对侧必达：无写入不得出现"已记下"（提示词约束不可信，代码级剥除）
-            reply = _strip_fake_ack(reply)
-        # E2：通识标注确定性兜底（knowledge 必达 / 非 knowledge 剥除）
-        reply = _enforce_knowledge_label(reply, structured)
-        # 计划改动断言必达依据：无 plan#edit* 却声称改了 → 判幻觉，降级零幻觉渲染
-        if _fabricated_plan_edit(reply, structured.get("sources")):
-            reply = _render_fallback(structured)
-        # 日期锚点断言：把具体旧日期称作"今天/明天" → 判幻觉，同上
-        if _fabricated_date_anchor(reply, structured):
-            reply = _render_fallback(structured)
-        return {"reply": reply}
+        # 渲染后置护栏（单点注册，见模块底部 _POST_RENDER_GUARDS）：
+        # 数字幻觉 / ack 双向必达 / 通识标注 / 假计划改动 / 假日程锚点。
+        # 顺序敏感，由列表定义；新增护栏只加注册项，不动此处。
+        return {"reply": _apply_post_render_guards(reply, structured, state)}
 
     nodes = {"guard": guard, "guard_route": guard_route,
              "classify": classify, "mode_route": mode_route,
@@ -510,3 +491,62 @@ def _render_fallback(structured: dict) -> str:
     if structured.get("sources"):
         lines.append("来源: " + ", ".join(structured["sources"][:3]))
     return "\n".join(lines) if lines else "（渲染服务暂不可用）"
+
+# ---------------------------------------------------------------- 渲染后置护栏
+# 单点注册（2026-09-11 收口）：此前 5 道护栏平铺在 render 尾部，每新增一类幻觉就要
+# 再插一段 if（假确认 → 假编辑 → 假日程，一个月内三处）。改为注册式列表——
+# **新增护栏 = 追加一个 (name, fn) + 一条测试**，不再动主流程。
+# 统一签名 fn(reply, structured, state) -> str；顺序即执行顺序，不可随意调换
+# （如数字幻觉降级到 _render_fallback 后，ack 已由 fallback 写入，ack 护栏随即成为空操作）。
+def _g_number_hallucination(reply: str, structured: dict, state: dict) -> str:
+    """N-11：reply 里带身体量纲却无出处的数字 → 降级确定性渲染。
+    无条件校验（不按 is_stub 门控）：stub 输出逐字来自 structured，必在授权集内；
+    而固定文本测试替身继承 is_stub=True 却在模拟真实 LLM 幻觉，门控会放行幻觉。"""
+    if _reply_fake_numbers(reply, _auth_numbers(structured, state.get("profile"))):
+        return _render_fallback(structured)
+    return reply
+
+
+def _g_ack_truth(reply: str, structured: dict, state: dict) -> str:
+    """O-4 双向必达：有写入必须念出"已记下"；**无写入不得出现**。"""
+    acks = structured.get("memory_ack") or []
+    if acks and "已记下" not in reply:
+        return "已记下：" + "、".join(acks) + "\n\n" + reply
+    if not acks:
+        return _strip_fake_ack(reply)
+    return reply
+
+
+def _g_knowledge_label(reply: str, structured: dict, state: dict) -> str:
+    """E2：通识标注确定性兜底（knowledge 必达 / 非 knowledge 剥除）。"""
+    return _enforce_knowledge_label(reply, structured)
+
+
+def _g_plan_edit_claim(reply: str, structured: dict, state: dict) -> str:
+    """声称改了计划但 provenance 无成功 plan#edit* → 判幻觉，降级零幻觉渲染。"""
+    if _fabricated_plan_edit(reply, structured.get("sources")):
+        return _render_fallback(structured)
+    return reply
+
+
+def _g_date_anchor(reply: str, structured: dict, state: dict) -> str:
+    """把具体旧日期称作"今天/明天" → 判幻觉，同上。"""
+    if _fabricated_date_anchor(reply, structured):
+        return _render_fallback(structured)
+    return reply
+
+
+_POST_RENDER_GUARDS = (
+    ("number_hallucination", _g_number_hallucination),
+    ("ack_truth", _g_ack_truth),
+    ("knowledge_label", _g_knowledge_label),
+    ("plan_edit_claim", _g_plan_edit_claim),
+    ("date_anchor", _g_date_anchor),
+)
+
+
+def _apply_post_render_guards(reply: str, structured: dict, state: dict) -> str:
+    """按注册顺序施加全部后置护栏。**渲染出口只有一个，护栏才守得住**。"""
+    for _name, fn in _POST_RENDER_GUARDS:
+        reply = fn(reply, structured, state)
+    return reply

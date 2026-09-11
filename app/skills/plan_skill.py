@@ -11,6 +11,8 @@ from datetime import date, timedelta
 
 import split_cycle
 from exercise_repo import norm_zh as _norm_zh   # 中文检索归一单源（去空格+小写）
+from app.core import diag                     # 降级可观测（静默失败可查）
+import parts                                   # 部位词单表（lib/parts.py）
 from app.skills.base import Skill, SkillResult
 from app.runtime.pipeline import build_plan
 
@@ -38,9 +40,8 @@ def _register_plan(plan: dict, user_id: str) -> None:
         pass
 
 
-# N-8 偏好消费：部位→pattern 映射（仅在 screening 放行空间内加权，绝不解禁）
-_PART2PAT = {"胸": "push", "肩": "push", "背": "pull", "臂": "pull",
-             "腿": "squat", "臀": "squat", "腹": "core", "核心": "core"}
+# N-8 偏好消费：部位→pattern 来自 lib/parts.py 单表（仅在 screening 放行空间内加权，
+# 绝不解禁）。无 pattern 的部位词（腰/前臂等）→ None → 不加权，与收口前一致。
 
 
 def _load_prefs(ctx) -> dict | None:
@@ -60,7 +61,7 @@ def _load_prefs(ctx) -> dict | None:
             val = str(r.get("value") or "")
             if about.startswith("部位:"):
                 if val == "喜欢":
-                    pat = _PART2PAT.get(about[3:])
+                    pat = parts.pattern_of(about[3:])
                     if pat:
                         pats_like.add(pat)
             elif about.startswith("编排:"):           # 周期编排偏好（spec §7.4）
@@ -140,7 +141,7 @@ def _load_linkage(ctx) -> tuple[set, set, list]:
                     sources.append({"date": date, "term": str(nm),
                                     "pattern": "/".join(sorted(pats))})
     except Exception:
-        pass
+        diag.bump("plan.linkage")   # 静默失败 → 计划会漏减量且无迹可查
     return fatigue, blocked, sources
 
 
@@ -152,12 +153,6 @@ def _load_linkage(ctx) -> tuple[set, set, list]:
 # （宁可不减量，也不错误减量 + 说错话）。
 #
 # 部位词表：数据包肌群别名（肱二/股四/小腿/下背…）优先；口语词补两张小表。
-_PART_MUSCLE_ZH = {"二头": "biceps", "三头": "triceps", "腹肌": "rectus_abdominis"}
-_PART_REGION_ZH = {"腿": "upper_legs", "大腿": "upper_legs", "胸": "chest",
-                   "背": "back", "肩": "shoulders", "腰": "back",
-                   "手臂": "upper_arms", "胳膊": "upper_arms",
-                   "前臂": "forearms", "臀": "glutes", "小腿": "lower_legs",
-                   "核心": "core", "腹": "core", "髋": "hips"}
 # 非训练模式不参与疲劳判定（拉伸/有氧/搬运/其他）
 _FATIGUE_SKIP_PATTERNS = {"stretch", "other", "cardio", "carry"}
 _FATIGUE_DOMINANT_SHARE = 0.5    # 主导模式阈值：占该部位 primary 动作最大票数的比例
@@ -188,10 +183,10 @@ def _bare_part_patterns(ex, term: str) -> set | None:
             return _dominant_patterns(
                 ex, {m["id"] for m in ex.ontology if m.get("region") == region})
         return None
-    if term in _PART_MUSCLE_ZH:
-        return _dominant_patterns(ex, {_PART_MUSCLE_ZH[term]})
-    if term in _PART_REGION_ZH:
-        region = _PART_REGION_ZH[term]
+    if parts.kind_of(term) == "muscle" and parts.muscle_of(term):
+        return _dominant_patterns(ex, {parts.muscle_of(term)})
+    if parts.region_of(term):
+        region = parts.region_of(term)
         return _dominant_patterns(
             ex, {m["id"] for m in ex.ontology if m.get("region") == region})
     return None
@@ -210,9 +205,9 @@ def _segment_patterns(ex, seg: str) -> set:
         return {hits[0]["movement_pattern"]}
     # 兜底：脏 raw（如 N-10 产生的"过肩背"）检索无命中但含部位词
     if len(seg) <= _PART_KW_MAXLEN:
-        for k in sorted(_PART_REGION_ZH, key=len, reverse=True):
+        for k in sorted(parts.region_words(), key=len, reverse=True):
             if k in seg:
-                region = _PART_REGION_ZH[k]
+                region = parts.region_of(k)
                 return _dominant_patterns(
                     ex, {m["id"] for m in ex.ontology
                          if m.get("region") == region})
@@ -233,14 +228,18 @@ def _trained_patterns(ex, nm: str) -> set:
 # name（无肌群字段）→ 按名字包含匹配必然落空。改为：部位词 → 肌群集合 → 反查计划内
 # 每个动作名的肌群（exercise_repo 单源）。仅用于删除（替换仍须点名动作）。
 def _tag_muscles(ex, tag: str) -> set:
-    """部位词 → muscle id 集合（肌群别名优先；region 词 → 该区全部肌群）。"""
+    """部位词 → muscle id 集合（单源 lib/parts.py）。
+
+    策略（与收口前逐条等价）：本体精确肌群名优先 → 细分工位词（二头/三头/腹肌）直接
+    取该肌群 → 区域词**展开整个区域**（"腿"→ upper_legs 全部，而非只 quadriceps——
+    腿日含股四/臀/腘绳，只撤股四会漏）。"""
     m = ex._norm_muscle(tag)
     if m:
         return {m}
-    if tag in _PART_MUSCLE_ZH:
-        return {_PART_MUSCLE_ZH[tag]}
-    if tag in _PART_REGION_ZH:
-        region = _PART_REGION_ZH[tag]
+    if parts.kind_of(tag) == "muscle" and parts.muscle_of(tag):
+        return {parts.muscle_of(tag)}
+    if parts.region_of(tag):
+        region = parts.region_of(tag)
         return {x["id"] for x in ex.ontology if x.get("region") == region}
     return set()
 

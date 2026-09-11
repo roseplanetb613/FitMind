@@ -9,6 +9,8 @@ import copy
 import json
 import re
 from datetime import date, timedelta
+
+from negation import has_negation  # 同库否定原语单源（lib 在 sys.path 上）
 from functools import lru_cache
 from pathlib import Path
 
@@ -95,7 +97,7 @@ _QUERY_MARK = ("怎么", "如何", "吗", "?", "？", "啥", "为什么", "能�
                "可不可以", "可以吗", "该不该", "要不要", "值不值")
 _ADOPT_MARK = ("我要", "我想", "就要", "就按", "按这个", "用这个", "搞这个",
                "来这个", "来一套", "习惯", "平时")
-_NEG_MARK = ("不", "别", "没", "讨厌")
+# 否定词表与判定原语已下沉 lib/negation.py（单源，2026-09-11 收口）
 
 
 def scheme_intent(text: str) -> str | None:
@@ -108,7 +110,7 @@ def scheme_intent(text: str) -> str | None:
     t = text or ""
     if any(k in t for k in _QUERY_MARK):
         return "query"
-    if any(k in t for k in _NEG_MARK):
+    if has_negation(t):
         return None
     if any(k in t for k in _ADOPT_MARK):
         return "adopt"

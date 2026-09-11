@@ -57,6 +57,16 @@ def norm_zh(s: str) -> str:
     """中文检索归一：去空格+小写（'杠铃 卧推'→'杠铃卧推'）。装配与查询两侧共用。"""
     return "".join((s or "").split()).lower()
 
+def same_name(a: str, b: str) -> bool:
+    """中文名等价判定（归一后**双向包含**）——跨层名字比对的唯一入口。
+
+    2026-09-11 收口：`norm_zh` 早已是单源，但**没有机制强制消费方调用它**——
+    同一天出现过两个独立同类缺陷（plan_skill._edit 的动作名匹配、
+    memory.muscles_of_exercises 的图谱匹配），根因都是裸子串比对遇上带空格复合名。
+    新代码做名字比对请用本函数；裸 `a in b` 式比对在 review 中视为缺陷。"""
+    x, y = norm_zh(a), norm_zh(b)
+    return bool(x) and bool(y) and (x in y or y in x)
+
 
 # 中文问句修饰词表：剥离后提取核心动作名（qa/teach 统一，单源）
 # W1 扩展：复合句尾"怎么做才X/怎么做比较X"（#61）、"哪个先/哪个后"（#76）、

@@ -19,6 +19,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from app.core import diag                     # 降级可观测（静默失败可查）
+from lib.parts import PARTS                     # 部位词单表（见 lib/parts.py）
 import re
 import threading
 import uuid
@@ -69,6 +71,19 @@ def _days_between(a: str, b: str) -> int:
 
 def _fid() -> str:
     return uuid.uuid4().hex[:16]
+
+
+def _norm_zh_expr(col: str) -> str:
+    """Cypher 侧**中文**归一表达式（去半角/全角空格；与 exercise_repo.norm_zh 同口径）。
+
+    单源：muscles_of_exercises 与 _dominant_pattern 曾各自重复书写同一段 replace——
+    改一处漏一处，与"裸 CONTAINS 遇上带空格复合名永不命中"是同一类缺陷的温床。"""
+    return f"replace(replace({col}, ' ', ''), '　', '')"
+
+
+def _norm_en_expr(col: str) -> str:
+    """Cypher 侧英文归一表达式（去空格 + 小写）。"""
+    return f"toLower(replace({col}, ' ', ''))"
 
 
 def _validate_user_id(uid: str) -> None:
@@ -464,11 +479,11 @@ class MemoryStore:
                     "MATCH (e:Exercise) "
                     "OPTIONAL MATCH (e)-[:pattern_of]->(p:Pattern) "
                     "WITH e, coalesce(p.name, '') AS pat "
-                    "WHERE replace(replace(e.name_zh, ' ', ''), '　', '')"
-                    "      CONTAINS $n "
-                    "   OR toLower(replace(e.name_en, ' ', '')) CONTAINS $n "
+                    f"WHERE {_norm_zh_expr('e.name_zh')} CONTAINS $n "
+                    f"   OR {_norm_en_expr('e.name_en')} CONTAINS $n "
                     "RETURN pat AS p", n=nq)]
         except Exception:
+            diag.bump("memory.dominant_pattern")
             return None
         if len(pats) < 2:
             return None
@@ -491,9 +506,8 @@ class MemoryStore:
                         "MATCH (e:Exercise)-[t:targets]->(mm:Muscle) "
                         "OPTIONAL MATCH (e)-[:pattern_of]->(p:Pattern) "
                         "WITH e, t, mm, coalesce(p.name, '') AS pat "
-                        "WHERE (replace(replace(e.name_zh, ' ', ''), '　', '')"
-                        "       CONTAINS $n "
-                        "    OR toLower(replace(e.name_en, ' ', '')) CONTAINS $n) "
+                        f"WHERE ({_norm_zh_expr('e.name_zh')} CONTAINS $n "
+                        f"    OR {_norm_en_expr('e.name_en')} CONTAINS $n) "
                         "  AND ($pat IS NULL OR pat = $pat) "
                         "RETURN DISTINCT mm.name AS name, "
                         "       coalesce(t.role, 'unknown') AS role, pat",
@@ -504,9 +518,8 @@ class MemoryStore:
                         rows.append((str(r["name"]), str(r["role"]),
                                      str(r["pat"])))
         except Exception:
-            pass
+            diag.bump("memory.muscle_rows")   # 失败 → per-muscle 面板恒空
         return rows
-        return sorted(out)
 
     def link_injury_muscle(self, user_id: str, site: str) -> bool:
         """active injury StateFact(about=部位) → ABOUT_MUSCLE 边；不中/异常 → False。"""
@@ -667,10 +680,11 @@ _INJURY_SITE_ZH = {
 # 视为"主体模式"，其余模式的动作判为复合名噪声剔除。低于阈值 → 视为歧义词不过滤。
 _DOMINANT_SHARE = 0.8
 
-_PART2MUSCLE = {"背": "latissimus_dorsi", "胸": "pectorals", "肩": "deltoids",
-                "腿": "quadriceps", "大腿": "quadriceps", "臂": "biceps",
-                "腹": "rectus_abdominis", "臀": "glutes", "核心": "core",
-                "腰": "lower_back", "脚踝": "ankle_stabilizers"}
+# 部位 → 代表肌群：**从 lib/parts.py 单表派生**（2026-09-11 收口），不再本地维护。
+# 派生后键集比原表多 4 个（二头/三头/腹肌/大腿）——这是有意的覆盖扩张：同一个部位词
+# 不该在 plan_skill 认、在 memory 不认。值均由 test_part2muscle_all_values_exist_in_graph
+# 遍历全表校验其存在于图谱。
+_PART2MUSCLE = {p: v["muscle"] for p, v in PARTS.items() if v.get("muscle")}
 
 
 def extract_injury_site(text: str) -> tuple[str, str] | None:

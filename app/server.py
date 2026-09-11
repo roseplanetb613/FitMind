@@ -38,8 +38,12 @@ def create_app() -> FastAPI:
     def health():
         # semantic：L1 例句库状态（on / off(unreachable) / disabled）。全静默降级时
         # "enabled=true 但其实没在工作"无法从外部发现，故在此显式暴露。
+        # degraded：静默降级计数（见 app/core/diag.py）。降级是有意策略，但"静默"
+        # 曾让整条链路不可用而表面正常（食物库构建失败 → 27 个测试连锁挂而无迹可查）。
+        from app.core.diag import counts as _deg
         return {"status": "ok",
-                "semantic": getattr(agent.classifier, "semantic_status", "unknown")}
+                "semantic": getattr(agent.classifier, "semantic_status", "unknown"),
+                "degraded": _deg()}
 
     @app.post("/v1/chat")
     def chat(req: ChatRequest):

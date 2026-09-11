@@ -10,6 +10,20 @@ Thumbs.db
 # 临时
 tmp/
 *.log
+# 编辑器/AI 工具的本地临时脚本（按需改成误建的正经文件）
+_*.py
+_*.txt
+
+# 压测产物（scripts/stress_test*.py 可重跑再生；留盘不入库）
+# docs/json/ 是**纯产物目录**（题库资产已归位 data/stress_v3/），故整目录忽略。
+# 若日后要往里放需要入库的东西，必须同步改这里，否则会被静默漏掉。
+docs/json/
+# 无锚定模式：产物挪到哪都仍然被忽略（上一版写成 stress_v3/ 根锚定路径，
+# 目录一移就整体失配，产物重新变成待提交项）。
+stress_results*.json
+q_debug*.json
+pytest_full_loop.txt
+scripts/_dbg_fail_dump.py
 
 # 私有本地数据
 storage_output/

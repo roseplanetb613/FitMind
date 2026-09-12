@@ -92,13 +92,15 @@ export function labelVisible(
   state: MuscleState | null,
   opts: { layerVisible: boolean; showUnknown: boolean; hovered?: boolean },
 ): boolean {
-  // 总开关优先：显式关掉就是关掉，悬停也不破例 —— 否则那个开关不成立
-  // （用户关它是为了让画面干净，悬停时又冒出来会让人以为开关坏了）
-  if (!opts.layerVisible) return false
-
-  // **悬停即"用户点名要看这一块"。** 这是"无记录默认折叠"能成立的前提：
-  // 默认不抢视线，但你想看哪块就指哪块，不必先去勾开关。
+  // **悬停优先于一切，包括总开关。** 它是"用户点名要看这一块"——tooltip 语义，
+  // 不是"标签显示策略"的一部分。两个开关因此都是**背景**标签的开关：
+  // 关掉让画面干净，但指着哪块仍能知道那是哪块，不必先去勾开关再回头看。
+  //
+  // （初版把总开关放在悬停之前，理由是不想让"关掉"被偷偷破例。实测用户要的是
+  //  tooltip 行为 —— 而且关掉标签后悬停毫无反应，会让人以为悬停坏了。）
   if (opts.hovered) return true
+
+  if (!opts.layerVisible) return false
 
   const known = !!state && state.has_record
   return known ? true : opts.showUnknown
@@ -107,8 +109,8 @@ export function labelVisible(
 /**
  * 遮挡射线的节流窗口（毫秒）。
  *
- * 实测一趟 8.0ms（占 60fps 预算 48%），而遮挡只影响标签**淡化与否** ——
- * 100ms（10Hz）在拖拽旋转时肉眼分辨不出，却把这块开销降到约 1/6。
+ * 遮挡只影响标签**淡化与否**，10Hz 在拖拽旋转时肉眼分辨不出，
+ * 却把这块开销降到约 1/6（60fps 下每 6 帧才打一趟）。
  */
 export const OCCLUSION_INTERVAL_MS = 100
 
@@ -151,7 +153,9 @@ export interface LabelLayer {
 
 /**
  * 遮挡剔除：每条标签向相机方向 raycast，被前方体块挡住的淡化。
- * 28 条标签每帧 28 次 raycast，开销可接受（spec §6.1）。
+ *
+ * **不是每帧都打。** 相机与悬停/聚焦都没变时整段跳过；变化时射线本身也按
+ * `OCCLUSION_INTERVAL_MS` 节流 —— 详见那两处的说明与实测数字。
  */
 export function createLabelLayer(
   container: HTMLElement,
@@ -199,18 +203,21 @@ export function createLabelLayer(
     elById.set(id, el)
   }
 
-  // 上一次 update 的相机指纹。**相机没动就整段跳过** ——
-  // 遮挡剔除要对 27 个肌群网格（共 7.6 万三角面）各打一条射线，
-  // 实测每帧最坏 210 万次三角面测试，而**静止时它一点产出都没有**：
-  // 锚点是静态的，相机不动则投影与遮挡都不变。这是本组件唯一的重开销。
+  // 上一次 update 的相机指纹。**一切都没变就整段跳过** ——
+  // 锚点是静态的，相机不动则投影与遮挡都不变，而**静止时它一点产出都没有**。
+  // （遮挡射线是本层最贵的部分；模型减面后 27 个网格共 1.06 万三角面，
+  //   一趟 28 条射线稳态实测约 1.7ms。）
   let lastCamKey = ''
 
   // 遮挡结果的缓存 + 节流时间戳。
   //
-  // **实测**：28 条射线趟一遍 = **8.0 ms**，占 60fps 预算（16.7ms）的 **48%** ——
-  // 这就是卡顿的来源。而遮挡只是个"淡化/不淡化"的观感，10Hz 与 60Hz 肉眼无差，
-  // 所以把**每帧都要做的投影/transform**与**昂贵的射线**拆开：前者照常每帧跑
-  // （标签才跟得住模型），后者按时间节流。
+  // 把**每帧都该做的投影/transform**与**昂贵的射线**拆开：前者照常每帧跑
+  // （标签才跟得住模型），后者按时间节流。遮挡只影响"淡化与否"，10Hz 与 60Hz
+  // 肉眼无差。
+  //
+  // 实测（减面后的模型，27 网格 / 1.06 万三角面）：**首趟 7.3ms、稳态 1.7ms**。
+  // 差值那 5.6ms 是 three 惰性算包围球的一次性开销 —— 所以稳态其实是小头，
+  // 节流主要是把拖拽旋转时的每帧开销压掉。
   let occludedCache = new Map<string, boolean>()
   let lastOcclusionAt = 0
 

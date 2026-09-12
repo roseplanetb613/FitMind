@@ -8,9 +8,11 @@ import * as THREE from 'three'
  *
  * 注意「不可交互」的真实依赖**不是**"没有 muscleId"，而是两件本模块管不到的事：
  * Group 自身的 `Object3D.raycast` 是空实现，以及调用方必须做**非递归**遍历
- * `intersectObjects(..., false)`。实测对同一场景从头顶向下打射线：`false` 命中
- * spine 等肌肉，而 `true` 时**首个命中就是无 muscleId 的装饰 mesh**
- * （userData.muscleId 为 undefined）——一旦递归遍历，Task 9 的遮挡判定
+ * `intersectObjects(..., false)`。实测（射线起点 (0,5,0)、方向 (0,-1,0)，且先
+ * `updateMatrixWorld(true)`——不更新则 matrixWorld 仍是单位阵，所有 mesh 都落在原点，
+ * 测出来的命中表没有意义）：`false` 只命中 ["cardio_system", "core", "core"] 三处肌肉；
+ * `true` 时**首个命中就是无 muscleId 的装饰 mesh**（userData.muscleId 为 undefined）
+ * ——一旦递归遍历，Task 9 的遮挡判定
  * `hits.some(h => h.object.userData.muscleId !== it.id)` 就会把这类命中当成遮挡物，
  * 导致所有标签一起变暗。
  *

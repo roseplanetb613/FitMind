@@ -6,7 +6,12 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "noUnusedLocals": true
   },
-  "include": ["src", "tests", "vite.config.ts"]
+  "include": [
+    "src",
+    "tests",
+    "vite.config.ts"
+  ]
 }

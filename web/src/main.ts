@@ -8,7 +8,7 @@ import './styles.css'
 import { ApiSource } from './data/api'
 import { loadInto, type LoadTarget } from './data/load'
 import type { MuscleMapSource } from './data/source'
-import { fetchPicks } from './data/exercises'
+import { fetchPicks, type ExercisePick } from './data/exercises'
 import { muscleState, resolveLabel, type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
 import { createScene, framingFor, pickMuscleId, setHover } from './render/scene'
@@ -78,6 +78,32 @@ function showDetailFor(id: string | null): void {
   }
   // muscleState 而非 latest.muscles[id]：缺键与 null 都要归一（见 types.ts）
   showDetail(detailEl, resolveLabel(latest.labels, id), muscleState(latest, id))
+
+  // 推荐动作。**注意 showDetail 会清空容器**，所以每次重绘后都要把推荐重新挂上——
+  // 否则 60 秒一轮的数据刷新会把推荐抹掉（`afterLabels` 也会走到这里）。
+  // 有缓存就直接重挂，避免每轮刷新都打一次后端。
+  const hit = picksCache.get(id)
+  if (hit) renderPicks(detailEl, hit.exercises, hit.fallback)
+  else void loadPicks(id)
+}
+
+/**
+ * 推荐动作的缓存。**不只是省请求**：`showDetail` 每次会 `innerHTML = ''`，
+ * 刷新一轮若不重挂，用户正看着的推荐会突然消失。
+ */
+const picksCache = new Map<string, { exercises: ExercisePick[]; fallback: boolean }>()
+
+async function loadPicks(id: string): Promise<void> {
+  try {
+    const r = await fetchPicks(id, 3)
+    if (selectedId !== id) return // 用户已经点了别的，这个响应作废（防竞态）
+    picksCache.set(id, { exercises: r.exercises, fallback: r.fallback })
+    renderPicks(detailEl, r.exercises, r.fallback)
+  } catch (err) {
+    if (selectedId !== id) return
+    console.warn('推荐动作加载失败', err)
+    renderPicks(detailEl, null, false, err)
+  }
 }
 
 /** 选中/取消选中一块肌肉：标签提亮 + roving tabindex + 详情浮层，三处同步。

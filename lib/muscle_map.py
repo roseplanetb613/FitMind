@@ -38,10 +38,35 @@ def _text_color(recovery: float) -> str:
     return "#0b1b2b" if float(recovery) >= 0.55 else "#ffffff"
 
 
-def render(states: dict, *, title: str = "肌肉状态（编排参考）") -> str:
+def labels_from_repo() -> dict:
+    """肌群 id → 中文名（取本体 `name_zh`，如 pectorals→胸大肌）。
+
+    仓不可用 → {}（调用方回落显示 id），与本仓"降级不阻断主链路"一致。"""
+    try:
+        from app.runtime.repos import exercise_repo
+        return {m["id"]: (m.get("name_zh") or m["id"])
+                for m in exercise_repo().ontology}
+    except Exception:
+        return {}
+
+
+def display_name(label: str) -> str:
+    """展示名：**去掉括号补充**（'下背部（竖脊肌区）'→'下背部'）——格宽有限，
+    括号里的解剖细分放在 aria/title 里，不挤占主标签。"""
+    for ch in ("（", "("):
+        i = label.find(ch)
+        if i > 0:
+            label = label[:i]
+    return label.strip()
+
+
+def render(states: dict, *, labels: dict | None = None,
+           title: str = "肌肉状态（编排参考）") -> str:
     """{muscle: state|None} → SVG 字符串。state 见 `lib/recovery.recovery_map`。
 
+    `labels`：{muscle_id: 中文名}，缺省回落到肌群 id（见 `labels_from_repo`）。
     未出现在 states 里的肌群**不臆造**；显式传 None（或 `has_record=False`）渲染为未知态。"""
+    labels = labels or {}
     items = sorted((states or {}).items(), key=lambda kv: kv[0])
     rows = (len(items) + _COLS - 1) // _COLS or 1
     w = _PAD * 2 + _COLS * _CELL_W
@@ -64,11 +89,13 @@ def render(states: dict, *, title: str = "肌肉状态（编排参考）") -> st
             fill, tcol = "none", "#5b6b7c"      # 不填色 → 与"恢复满"的浅色实心格形状不同
             stroke = ' stroke="#8a99a8" stroke-width="1.2" stroke-dasharray="5 3"'
             cls, value = "is-unknown", "无记录"
-        out.append(f'<rect class="{cls}" x="{cx}" y="{cy}" width="{_CELL_W - 8}" '
-                   f'height="{_CELL_H - 8}" rx="6" fill="{fill}"{stroke}/>')
+        full = labels.get(muscle) or muscle
+        out.append(f'<rect class="{cls}" data-muscle="{_esc(muscle)}" x="{cx}" '
+                   f'y="{cy}" width="{_CELL_W - 8}" height="{_CELL_H - 8}" rx="6" '
+                   f'fill="{fill}"{stroke}><title>{_esc(full)}</title></rect>')
         out.append(f'<text class="{cls}-label" x="{cx + 10}" y="{cy + 21}" '
                    f'font-family="sans-serif" font-size="11" fill="{tcol}">'
-                   f'{_esc(muscle)}</text>')
+                   f'{_esc(display_name(full))}</text>')
         out.append(f'<text class="{cls}-value" x="{cx + 10}" y="{cy + 39}" '
                    f'font-family="sans-serif" font-size="14" font-weight="bold" '
                    f'fill="{tcol}">{_esc(value)}</text>')

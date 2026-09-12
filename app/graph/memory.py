@@ -86,6 +86,20 @@ def _norm_en_expr(col: str) -> str:
     return f"toLower(replace({col}, ' ', ''))"
 
 
+_PAREN_RE = re.compile(r"[（(][^）)]*[）)]")
+
+
+def _matches_literal(zh: str, nq: str) -> bool:
+    """去**括号补充**后再判定命中。
+
+    括号内容通常是**器械/姿势**描述而非动作本身，实测：
+      '反向腿弯举 (在引体向上 绳索 器械)' 含"引体向上"，却是练腘绳的腿弯举
+      '壶铃 土耳其起立 (深蹲 式)'        含"深蹲"，却是土耳其起立
+    不剔除就会把它们错挂进"引体向上/深蹲"的肌群里（实测导致臀肌 3%、腘绳肌 0% 的
+    荒谬恢复度）。影响面实测：引体向上 30→28、深蹲 72→71，卧推/硬拉/弯举 0 误伤。"""
+    return nq in "".join((_PAREN_RE.sub("", str(zh or ""))).split()).lower()
+
+
 def _validate_user_id(uid: str) -> None:
     if not uid or not isinstance(uid, str):
         raise ValueError("user_id 必须为非空字符串")
@@ -481,7 +495,8 @@ class MemoryStore:
                     "WITH e, coalesce(p.name, '') AS pat "
                     f"WHERE {_norm_zh_expr('e.name_zh')} CONTAINS $n "
                     f"   OR {_norm_en_expr('e.name_en')} CONTAINS $n "
-                    "RETURN pat AS p", n=nq)]
+                    "RETURN pat AS p, e.name_zh AS nm", n=nq)
+                    if _matches_literal(r["nm"], nq)]
         except Exception:
             diag.bump("memory.dominant_pattern")
             return None
@@ -510,8 +525,11 @@ class MemoryStore:
                         f"    OR {_norm_en_expr('e.name_en')} CONTAINS $n) "
                         "  AND ($pat IS NULL OR pat = $pat) "
                         "RETURN DISTINCT mm.name AS name, "
-                        "       coalesce(t.role, 'unknown') AS role, pat",
+                        "       coalesce(t.role, 'unknown') AS role, pat, "
+                        "       e.name_zh AS nm",
                         n=nq, pat=pattern):
+                    if not _matches_literal(r["nm"], nq):
+                        continue
                     pair = (str(r["name"]), str(r["role"]))
                     if pair not in seen:
                         seen.add(pair)

@@ -122,9 +122,26 @@ def recovery_of(muscle: str, loads: list[dict], now: datetime,
                 params: dict | None = None) -> float:
     """单肌群恢复度 ∈ [0,1]。`loads` = [{"at": datetime|ISO, "role":..., "sets":.., "reps":..}]。
 
-    无有效记录 → 1.0；未来时间点的记录被忽略（时钟异常不产生负疲劳）。
+    **替换口（单点）**：恢复**形式**按 `params["model"]` 从 `_FORMS` 选派；数据文件当前
+    声明 `"exponential-half-life"`。后续接入运动恢复模型时，只需在 `_FORMS` 注册一个
+    新形式（或在数据文件把 model 换成新名），调用方全部无感——`recovery_map` / `describe`
+    / qa 肌肉面板 / muscle_map 都只依赖本函数的**契约**（入参、返回 [0,1]），不依赖形式。
+    模型名未知 → 回落当前形式（不炸，宁可给旧口径也不给空值）。
+
+    契约：无有效记录 → 1.0；未来时间点被忽略（时钟异常不产生负疲劳）；
     **按训练日聚合**（见 `_per_session`）：同一天多次出现只算一次刺激。"""
     params = params or load_params()
+    form = _FORMS.get(str(params.get("model") or _DEFAULT_MODEL),
+                      _form_exponential)
+    return form(muscle, loads, now, params)
+
+
+def _form_exponential(muscle: str, loads: list[dict], now: datetime,
+                      params: dict) -> float:
+    """当前形式：指数半衰期。fatigue = Σ w·0.5^(Δt/半衰期)，recovery = 1-fatigue。
+
+    半衰期形式（而非线性）理由：衰减刚练完最快、尾部趋缓，符合主观体感；且**单调、
+    可叠加、天然落在 [0,1]**（clamp 只兜叠加溢出）。"""
     hl = _half_life_hours(muscle, params)
     if hl <= 0:
         return 1.0
@@ -139,6 +156,13 @@ def recovery_of(muscle: str, loads: list[dict], now: datetime,
             continue
         fatigue += _weight(load, params) * (0.5 ** (dt_h / hl))
     return max(0.0, min(1.0, 1.0 - fatigue))
+
+
+# 恢复**形式**注册表（替换口，见 recovery_of docstring）。
+# 新增运动恢复模型 = 写一个同签名的 `_form_xxx` + 在此注册 + 数据文件 `model` 改为该名。
+# 不预设更多抽象：等真的有了第二个形式再谈插件化（YAGNI）。
+_DEFAULT_MODEL = "exponential-half-life"
+_FORMS = {_DEFAULT_MODEL: _form_exponential}
 
 
 def recovery_map(loads_by_muscle: dict, now: datetime,

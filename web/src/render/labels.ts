@@ -166,6 +166,12 @@ export function createLabelLayer(
     elById.set(id, el)
   }
 
+  // 上一次 update 的相机指纹。**相机没动就整段跳过** ——
+  // 遮挡剔除要对 27 个肌群网格（共 7.6 万三角面）各打一条射线，
+  // 实测每帧最坏 210 万次三角面测试，而**静止时它一点产出都没有**：
+  // 锚点是静态的，相机不动则投影与遮挡都不变。这是本组件唯一的重开销。
+  let lastCamKey = ''
+
   const raycaster = new THREE.Raycaster()
   const projected = new THREE.Vector3() // 每次迭代复用：x/y = 屏幕像素，z = NDC z
   const dir = new THREE.Vector3()
@@ -213,6 +219,16 @@ export function createLabelLayer(
       if (el && idByEl.has(el)) el.blur()
     },
     update(camera, size): void {
+      // 指纹必须含**所有影响输出的输入**：相机 + 画布尺寸 + 悬停/聚焦态。
+      // 漏掉后两者会让"悬停提升""聚焦不淡化"这些在相机静止时失效
+      // —— 实测就是这么被测试抓到的（漏掉 hoveredId/focusedId → 两条断言红）。
+      const key = `${camera.position.x},${camera.position.y},${camera.position.z},` +
+                  `${camera.quaternion.x},${camera.quaternion.y},${camera.quaternion.z},` +
+                  `${camera.quaternion.w},${size.w},${size.h},${camera.fov}|` +
+                  `${hoveredId ?? ''}|${focusedId ?? ''}`
+      if (key === lastCamKey) return // 一切都没变 → 投影与遮挡都不变，白算
+      lastCamKey = key
+
       for (const it of items) {
         projectToScreen(it.anchor, camera, size, projected)
         it.el.style.transform =

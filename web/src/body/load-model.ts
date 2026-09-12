@@ -81,6 +81,10 @@ export function assembleBody(scene: THREE.Object3D): LoadedBody {
   })
 
   for (const mesh of meshes) {
+    // 模型里**只有 position**（构建期刻意去掉法线，好让顶点能焊接、减面才生效）。
+    // 这里补回来 —— 焊接后的共享顶点会得到平滑法线，正是肌肉该有的样子。
+    if (!mesh.geometry.attributes.normal) mesh.geometry.computeVertexNormals()
+
     if (mesh.name === 'shell') {
       shell = mesh
       continue // 外壳单独处理（见下），不进肌肉循环

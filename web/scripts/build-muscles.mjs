@@ -83,12 +83,17 @@ function collectGeometries(root, keep) {
     if (keep && !keep(o.name)) return
     const g = o.geometry.clone()
     g.applyMatrix4(o.matrixWorld)
-    // 只留 position + normal：uv / color / skin 等我们不用，留着白占体积
+    // **只留 position，连法线也不要。** tri 的 FBXLoader 输出是逐面顶点的
+    // 非索引几何，而 `weld()` 按**全属性**合并 —— 法线逐面不同就一个都合并不掉，
+    // 几何于是停在"三角形汤"上。后果实测有两处：
+    //   · `simplify` 在非索引/非流形输入上直接放弃 → obliques 从 ratio 0.01 到
+    //     0.003 **一点没减**（59k 面，占全模型 78%），而它正是每帧标签射线的最贵一项
+    //   · 顶点数 213k（2.7 顶点/面）→ glb 4.3MB 降不下来
+    // 丢掉法线后 weld 能按位置合并 → 变成正常索引网格 → simplify 才真正生效。
+    // 法线在加载时用 computeVertexNormals() 重算（见 load-model.ts）。
     for (const k of Object.keys(g.attributes)) {
-      if (k !== 'position' && k !== 'normal') g.deleteAttribute(k)
+      if (k !== 'position') g.deleteAttribute(k)
     }
-    if (!g.attributes.normal) g.computeVertexNormals()
-    if (g.index) g.toNonIndexed?.() // merge 要求属性一致；统一成非索引最省心
     out.push(g)
   })
   return out
@@ -171,13 +176,12 @@ function addMerged(name, geoms) {
   const merged = mergeFor(geoms)
   if (!merged) return null
   const pos = merged.attributes.position.array
-  const nrm = merged.attributes.normal.array
 
   const pAcc = doc.createAccessor().setType('VEC3').setArray(new Float32Array(pos)).setBuffer(buffer)
-  const nAcc = doc.createAccessor().setType('VEC3').setArray(new Float32Array(nrm)).setBuffer(buffer)
+  // **只写 POSITION，不写法线** —— 让 weld 能按位置合并（见 collectGeometries 的说明）。
+  // 法线在客户端加载时由 computeVertexNormals() 补。
   const prim = doc.createPrimitive()
     .setAttribute('POSITION', pAcc)
-    .setAttribute('NORMAL', nAcc)
     .setMaterial(material)
   const mesh = doc.createMesh(name).addPrimitive(prim)
   const node = doc.createNode(name).setMesh(mesh)

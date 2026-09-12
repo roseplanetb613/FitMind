@@ -26,3 +26,14 @@ export interface MuscleMapData {
 export function resolveLabel(labels: Record<string, string>, id: string): string {
   return labels[id] ?? id
 }
+
+/**
+ * 缺键与显式 null 都归一成 null——§5.4 的未知态不区分二者。
+ * 必要性：`Record<string, MuscleState | null>` 允许缺键，而 tsconfig 没开
+ * `noUncheckedIndexedAccess`，所以 `muscles[id]` 的类型是 `MuscleState | null`
+ * 但缺键时运行时是 `undefined` —— 不归一的话 `if (st === null)` 会把
+ * `undefined` 当成"有数值"走进 recovery 分支并抛 TypeError，而不是画成线框。
+ */
+export function muscleState(d: MuscleMapData, id: string): MuscleState | null {
+  return d.muscles[id] ?? null
+}

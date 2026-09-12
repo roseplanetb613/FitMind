@@ -67,3 +67,13 @@ html, body {
 .pick-role { font-size: 10px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
 .pick-role.is-target { background: #2b4a3a; color: #8fd6ad; }
 .pick-role.is-synergist { background: #33383f; color: #9aa6b2; }
+
+/* 标签显隐开关。「无记录」默认不勾 —— 实测 28 个肌群里 7 个无记录，
+   全显示会盖住模型、把有数值的那些挤掉。 */
+#toolbar .toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #1d242c; color: #e6ebf0; border: 1px solid #2f3944;
+  border-radius: 6px; padding: 6px 10px; cursor: pointer; user-select: none;
+}
+#toolbar .toggle:hover { background: #263039; }
+#toolbar .toggle input { accent-color: #4a90d9; cursor: pointer; }

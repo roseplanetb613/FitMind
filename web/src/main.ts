@@ -45,6 +45,21 @@ const labels = createLabelLayer(labelsEl, handle.body, (id) => names.resolve(id)
 /** 键盘遍历顺序 = 标签顺序（就是那 28 个 id） */
 const ids = labels.ids()
 
+// 标签显隐。两个开关独立：「全部」是总开关，「无记录」默认关 ——
+// 实测 28 个肌群里 7 个无记录，全显示会盖住模型、把有数值的那些挤掉。
+// 判据在 labels.ts 的 labelVisible（纯函数，有测试）。
+const toggleLabels = document.querySelector<HTMLInputElement>('#toggle-labels')!
+const toggleUnknown = document.querySelector<HTMLInputElement>('#toggle-unknown')!
+function applyLabelVisibility(): void {
+  labels.setVisibility({
+    layerVisible: toggleLabels.checked,
+    showUnknown: toggleUnknown.checked,
+  })
+}
+toggleLabels.addEventListener('change', applyLabelVisibility)
+toggleUnknown.addEventListener('change', applyLabelVisibility)
+applyLabelVisibility()
+
 // 指针坐标 → 命中的 muscleId。点选与悬停共用这一套换算，避免两份 NDC 公式漂移。
 // 射线判定本身在 scene.ts 的 pickMuscleId（**必须非递归**，理由与实测数字见那里）。
 //

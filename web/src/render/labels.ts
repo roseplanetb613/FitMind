@@ -81,6 +81,22 @@ export function projectToScreen(
   return out
 }
 
+/**
+ * 一条标签该不该显示。**纯函数，可单测** —— 显示与否是个决策，不是 DOM 细节。
+ *
+ * 未知态的默认值刻意是 false：实测样张里 28 个肌群只有 21 个有记录，
+ * 剩下 7 条"XX 无记录"会盖住模型、把有数值的那些挤掉。它们不是噪音
+ * （§5.4 要求未知可辨识，材质上的线框已经承担了那件事），但**不该默认抢视线**。
+ */
+export function labelVisible(
+  state: MuscleState | null,
+  opts: { layerVisible: boolean; showUnknown: boolean },
+): boolean {
+  if (!opts.layerVisible) return false
+  const known = !!state && state.has_record
+  return known ? true : opts.showUnknown
+}
+
 interface LabelItem {
   id: string
   el: HTMLElement
@@ -112,6 +128,8 @@ export interface LabelLayer {
    *  且 setFocused(null) 已把 tabindex=0 复位到第一条，两者**按代码推算**重合；
    *  这是从 DOM 顺序推出来的结论，没有实测证据。 */
   blurIfOwned(el: HTMLElement | null): void
+  /** 整层可见性 + 是否显示"无记录"的那些。两者独立：一个是开关，一个是默认折叠。 */
+  setVisibility(opts: { layerVisible: boolean; showUnknown: boolean }): void
   update(camera: THREE.PerspectiveCamera, size: { w: number; h: number }): void
   dispose(): void
 }
@@ -172,19 +190,46 @@ export function createLabelLayer(
   // 锚点是静态的，相机不动则投影与遮挡都不变。这是本组件唯一的重开销。
   let lastCamKey = ''
 
+  // 最近一次 setStates 的数据。可见性变化时要按它重算哪些该显示
+  // （否则先 setStates 后 setVisibility 时，隐藏/显示用的是旧数据）
+  let lastStates: Record<string, MuscleState | null> = {}
+
+  function applyVisibility(): void {
+    hidden.clear()
+    for (const it of items) {
+      const state = lastStates[it.id] ?? null
+      const show = labelVisible(state, vis)
+      if (!show) hidden.add(it.id)
+      it.el.style.display = show ? '' : 'none'
+    }
+    // 可见性变了 → 指纹作废，下一帧必须重算（否则要等到相机动才生效）
+    lastCamKey = ''
+  }
+
   const raycaster = new THREE.Raycaster()
   const projected = new THREE.Vector3() // 每次迭代复用：x/y = 屏幕像素，z = NDC z
   const dir = new THREE.Vector3()
   const origin = new THREE.Vector3()
 
   // 悬停/聚焦的 id。只用来在 update() 里让它们不被遮挡淡化（"提升"要看得见才算提升）。
+  // 可见性：整层开关 + 是否显示未知态。`hidden` 缓存每条当前该不该显示，
+  // update() 靠它跳过被隐藏的条目 —— 不只是省 DOM，更省掉那些条目的射线。
+  let vis = { layerVisible: true, showUnknown: false }
+  const hidden = new Set<string>()
+
   let hoveredId: string | null = null
   let focusedId: string | null = null
 
   return {
     ids: () => items.map((it) => it.id),
     idOf: (el) => idByEl.get(el) ?? null,
+    setVisibility(opts): void {
+      vis = opts
+      applyVisibility()
+    },
     setStates(states): void {
+      lastStates = states
+      applyVisibility()
       for (const it of items) {
         const state = states[it.id] ?? null
         const text = labelText(resolveName(it.id), state)

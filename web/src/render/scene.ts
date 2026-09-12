@@ -37,9 +37,13 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     const base = entry.opacity * MUSCLE_OPACITY
     // 线框态垫下限：见 WIREFRAME_OPACITY_FLOOR 的说明（§5.4 的硬要求，不是观感）
     // 非肌肉块乘在**同一个基数**上，才会始终比骨骼肌更透（§4.4 的区分）
-    mat.opacity = nonMuscle
+    let opacity = nonMuscle
       ? base * NON_MUSCLE_OPACITY_FACTOR
       : (wire ? Math.max(base, WIREFRAME_OPACITY_FLOOR) : base)
+    // 按"透明度"乘系数（不是不透明度）—— 见 TRANSPARENCY_SCALE 的说明
+    const tScale = TRANSPARENCY_SCALE[id]
+    if (tScale !== undefined) opacity = 1 - (1 - opacity) * tScale
+    mat.opacity = opacity
     mat.transparent = mat.opacity < 1
     mat.needsUpdate = true
   }
@@ -124,6 +128,21 @@ export const WIREFRAME_OPACITY_FLOOR = 0.18
  * 实测就是被 scene.test.ts 那条相对断言抓到的。
  */
 export const NON_MUSCLE_OPACITY_FACTOR = 0.45
+
+/**
+ * 特定肌群的**透明度**系数（不是不透明度）。
+ *
+ * `1` = 不变；`0.7` = 透明度变成原来的 70%，即**更不透明**。
+ * 换算：`opacity = 1 - (1 - base) * scale`。
+ * 例：base 0.30、scale 0.7 → 透明度 70%→49%、opacity 0.30→0.51。
+ *
+ * 为什么写成"透明度系数"而不是直接给 opacity：调用方说的是"透明度的 70%"，
+ * 直接改 opacity 会让语义在换算里丢失（且 opacity 与透明度的方向相反，容易改反）。
+ */
+export const TRANSPARENCY_SCALE: Record<string, number> = {
+  core: 0.7,
+  obliques: 0.7,
+}
 
 /**
  * 可交互的 mesh —— **只有 28 个肌群块**。

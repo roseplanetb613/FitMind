@@ -33,7 +33,13 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     // spec §4.4：心脏块用半透明外壳与骨骼肌在视觉上区分。
     // **必须在这里乘系数**——palette 对任何有限 recovery 都给 opacity: 1。
     const nonMuscle = child.userData.style === 'non-muscle'
-    mat.opacity = nonMuscle ? entry.opacity * 0.45 : entry.opacity
+    const wire = entry.style === 'wireframe'
+    const base = entry.opacity * MUSCLE_OPACITY
+    // 线框态垫下限：见 WIREFRAME_OPACITY_FLOOR 的说明（§5.4 的硬要求，不是观感）
+    // 非肌肉块乘在**同一个基数**上，才会始终比骨骼肌更透（§4.4 的区分）
+    mat.opacity = nonMuscle
+      ? base * NON_MUSCLE_OPACITY_FACTOR
+      : (wire ? Math.max(base, WIREFRAME_OPACITY_FLOOR) : base)
     mat.transparent = mat.opacity < 1
     mat.needsUpdate = true
   }
@@ -87,6 +93,35 @@ export function setHover(group: THREE.Group, id: string | null): void {
  * `raycaster` / `ndc` / `camera` 由调用方传入并复用：交互期本函数调用频繁，
  * 没必要每次新建三个对象。
  */
+/**
+ * 肌肉整体的不透明度（用户要的"30% 透明"）。
+ *
+ * 乘在 `palette` 给出的不透明度上，于是**各类状态之间的相对关系不变**——
+ * 只是整体更透，能透出内部的星点与解剖背景。
+ *
+ * ⚠ 它不改语义：`emissive` 仍是恢复度的编码通道，透明度只是观感层。
+ */
+export const MUSCLE_OPACITY = 0.3
+
+/**
+ * 线框态（无记录）的不透明度**下限**。
+ *
+ * 未知态本身是 `0.35`，直接乘 `MUSCLE_OPACITY` 会变成 `0.105` —— 几乎看不见，
+ * 于是它就不再"可辨识"了，而"未知必须与任何数值可区分"是 spec §5.4 的硬要求
+ * （不是审美偏好）。所以给线框态垫一个下限，让它始终读得出来。
+ */
+export const WIREFRAME_OPACITY_FLOOR = 0.18
+
+/**
+ * 非肌肉块（心脏）在**骨骼肌基数之上**再乘的系数。
+ *
+ * **必须乘在 `MUSCLE_OPACITY` 之后**，不能直接写绝对值。原先写的是 `* 0.45`
+ * （骨骼肌当年 opacit=1，0.45 < 1 所以更透）；而骨骼肌降到 0.3 之后，
+ * 0.45 反而**比骨骼肌更不透明** —— spec §4.4 要求的区分被反过来了。
+ * 实测就是被 scene.test.ts 那条相对断言抓到的。
+ */
+export const NON_MUSCLE_OPACITY_FACTOR = 0.45
+
 /**
  * 可交互的 mesh —— **只有 28 个肌群块**。
  *

@@ -36,6 +36,18 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
   }
 }
 
+/** 画布尺寸 → 渲染器尺寸与相机 aspect。抽出来是为了能在 node 里测（无需 GPU）。
+ *  零尺寸兜底为 1：否则 aspect = 0/0 = NaN，相机矩阵全废、画面全黑且无报错。 */
+export function viewportFor(width: number, height: number): {
+  width: number
+  height: number
+  aspect: number
+} {
+  const w = width || 1
+  const h = height || 1
+  return { width: w, height: h, aspect: w / h }
+}
+
 export interface SceneHandle {
   scene: THREE.Scene
   camera: THREE.PerspectiveCamera
@@ -81,10 +93,9 @@ export function createScene(canvas: HTMLCanvasElement): SceneHandle {
   controls.update()
 
   function resize(): void {
-    const w = canvas.clientWidth || 1
-    const h = canvas.clientHeight || 1
-    renderer.setSize(w, h, false)
-    camera.aspect = w / h
+    const vp = viewportFor(canvas.clientWidth, canvas.clientHeight)
+    renderer.setSize(vp.width, vp.height, false)
+    camera.aspect = vp.aspect
     camera.updateProjectionMatrix()
   }
   resize()

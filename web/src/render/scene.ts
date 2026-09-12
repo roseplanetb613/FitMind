@@ -18,8 +18,9 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     const id = child.userData.muscleId as string | undefined
     if (!id) continue
     const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial
-    // 走 muscleState 而不是 data.muscles[id] —— 缺键与显式 null 都要归一成 null，
-    // 否则缺键的 undefined 会被当成"有数值"走进 recovery 分支（见 types.ts 的说明）
+    // 统一走 muscleState（types.ts 的单源归一入口），使"缺键 / 显式 null / 有记录"
+    // 三种情形只有一个判据。注意：本行的 `&&` 短路已经能兜住缺键的 undefined，
+    // 所以这里不是非它不可——不依赖那个巧合才是理由。
     const state = muscleState(data, id)
     const entry = palette(state && state.has_record ? state.recovery : null)
 
@@ -48,6 +49,22 @@ export function viewportFor(width: number, height: number): {
   return { width: w, height: h, aspect: w / h }
 }
 
+/** 焦点（人体中心）。相机朝向由 OrbitControls 从 target 重推，
+ *  所以 lookAt 与 controls.target 必须用同一个值——这就是它被提取的原因。 */
+export const BODY_FOCUS: [number, number, number] = [0, 0.95, 0]
+
+/** 正/背面取景。纯函数，可在 node 里断言；Task 9 的"正面/背面"按钮走它，
+ *  保证点"正面"回到的正是场景加载时的姿态。 */
+export function framingFor(view: 'front' | 'back'): {
+  position: [number, number, number]
+  target: [number, number, number]
+} {
+  return {
+    position: [0, 1.5, view === 'back' ? -2.6 : 2.6],
+    target: [...BODY_FOCUS],
+  }
+}
+
 export interface SceneHandle {
   scene: THREE.Scene
   camera: THREE.PerspectiveCamera
@@ -62,9 +79,10 @@ export function createScene(canvas: HTMLCanvasElement): SceneHandle {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color('#0f1419')
 
+  const initial = framingFor('front')
   const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
-  camera.position.set(0.9, 1.5, 2.6)
-  camera.lookAt(0, 0.95, 0)
+  camera.position.set(...initial.position)
+  camera.lookAt(...initial.target)
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -86,7 +104,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneHandle {
   scene.add(grid)
 
   const controls = new OrbitControls(camera, renderer.domElement)
-  controls.target.set(0, 0.95, 0)
+  controls.target.set(...initial.target)
   controls.enableDamping = true
   controls.minDistance = 1.2
   controls.maxDistance = 6

@@ -3,8 +3,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
 import { buildStarField } from './star-field'
+import { buildHeartGlow } from './glow'
 import { muscleState, type MuscleMapData } from '../data/types'
-import { BASE_COLOR, HOVER_COLOR, palette } from './palette'
+import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
 
 /** 只建场景图，不建 renderer —— 使 node 里可测（无 WebGL 上下文）。 */
 export function buildBodyGroup(): THREE.Group {
@@ -129,29 +130,10 @@ export const MUSCLE_OPACITY = 0.3
  */
 export const WIREFRAME_OPACITY_FLOOR = 0.18
 
-/**
- * 非骨骼肌块（心脏）的呈现：**固定红 + 固定不透明度**，完全不参与恢复度色轴。
- *
- * 为什么不再让它跟骨骼肌走同一条路（旧做法是乘一个 `NON_MUSCLE_OPACITY_FACTOR`）：
- * 后端对 `cardio_system` 给的是 `null`（没有"心脏恢复度"这种东西），于是
- * `palette(null)` → **线框态**，再加上 `0.35 × 0.3 × 0.45 ≈ 0.047` 的不透明度 ——
- * 实测效果是**根本看不见**，用户报的就是这个。
- *
- * 语义上也确实是两条路：线框态的含义是"这块肌肉**恢复度未知**"，
- * 而心脏不是一个恢复度未知的骨骼肌，它是一个形态与含义都不同的器官。
- * 所以给它一套自己的固定呈现，spec §4.4「必须与骨骼肌可区分」由**色相**满足
- * （原先靠"更透明"，几乎等于没有区分度）。
- *
- * ⚠ 取舍：红偏离了原设计"避开红绿"的色觉友好原则（见 palette.ts）。心脏与
- * 恢复度色轴（蓝 ↔ 金）的色相差足够大，且还有标签与位置两条冗余线索，
- * 故接受。这是用户在看过实际效果后明确要求的。
- */
-export const NON_MUSCLE_COLOR = '#d93a2b'
-/** 心脏的自发光：暗红，让它在透明肌肉里透出来（与整体自发光风格一致）。 */
-export const NON_MUSCLE_EMISSIVE = '#6e1008'
 export const NON_MUSCLE_EMISSIVE_INTENSITY = 0.85
-/** 心脏的不透明度。**不能是 1** —— 用户要的是"带不透明度"，要能透出它在胸腔里。 */
-export const NON_MUSCLE_OPACITY = 0.85
+/** 心脏的不透明度。**不能是 1** —— 用户要的是"带不透明度"，要能透出它在胸腔里。
+ *  0.85 → 0.425：用户要求再减半（配合新增的辉光，露出内部的暗红更有层次）。 */
+export const NON_MUSCLE_OPACITY = 0.425
 
 /**
  * 一块肌肉的**基色**。
@@ -337,6 +319,15 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 只在加载时建一次；数据变化只改 drawRange/尺寸/不透明度，不重建几何。
   const stars = buildStarField(body)
   scene.add(stars)
+
+  // 心脏辉光。**加在 scene 上而不是 body.children 里** —— 与星场同一个理由：
+  // applyStates / setHover / interactiveMeshes / buildStarField 都会遍历
+  // body.children，多一个 Sprite 进去就得逐处加过滤，且点选射线可能打到它。
+  const heart = body.children.find((c) => c.userData.muscleId === 'cardio_system')
+  if (heart) {
+    const glow = buildHeartGlow(heart)
+    if (glow) scene.add(glow)
+  }
 
   // 地面参考——给体积感一个锚，否则模型飘在虚空里
   const grid = new THREE.GridHelper(6, 24, 0x2a323c, 0x1c232b)

@@ -42,6 +42,22 @@ const BASE = BASE_COLOR
  *    线框块画的边线取自同一份材质，基色变亮它就变亮。 */
 export const HOVER_COLOR = '#e6eef7'
 
+/**
+ * 非骨骼肌块（心脏）的固定色。**不参与恢复度色轴** —— 后端对 `cardio_system`
+ * 给的是 `null`（没有"心脏恢复度"这种东西），走 palette(null) 会得到线框 + 极低
+ * 不透明度，实测根本看不见（用户报过）。
+ *
+ * 放在 palette.ts 而不是 scene.ts：它就是一个颜色，这是颜色的家；而且
+ * `glow.ts`（心脏辉光）也要用它，放在 scene.ts 会形成 scene ⇄ glow 的循环 import。
+ *
+ * ⚠ 取舍：红偏离了原设计"避开红绿"的色觉友好原则。心脏与恢复度色轴（蓝↔金）
+ * 色相差足够大，加上标签与位置两条冗余线索，故接受 —— 这是看过实际效果后
+ * 明确要求的。
+ */
+export const NON_MUSCLE_COLOR = '#d93a2b'
+/** 心脏的自发光：暗红，让它在半透明肌肉后面透出来。 */
+export const NON_MUSCLE_EMISSIVE = '#6e1008'
+
 function hslToHex(h: number, s: number, l: number): string {
   const sn = s / 100
   const ln = l / 100

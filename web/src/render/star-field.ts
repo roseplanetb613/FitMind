@@ -39,7 +39,7 @@ function hashSeed(text: string): number {
 }
 
 /**
- * 在 mesh 表面采样 `MAX_STARS` 个点（局部坐标，已含 mesh 自身变换）。
+ * 在 mesh 表面采样 `MAX_STARS` 个点，坐标是 **world 空间**。
  *
  * 直接跳着取顶点 —— 减面后的肌群网格顶点数远多于 MAX_STARS，
  * 均匀步长采样就足够散开，不需要真的做面积加权。
@@ -59,7 +59,11 @@ export function sampleSurface(mesh: THREE.Mesh, maxCount = MAX_STARS): Float32Ar
     v.x += (jitter() - 0.5) * 0.004
     v.y += (jitter() - 0.5) * 0.004
     v.z += (jitter() - 0.5) * 0.004
-    v.applyMatrix4(mesh.matrix)
+    // **必须用 matrixWorld，不能用 matrix。** 星场是 body 的**兄弟**节点，
+    // 而 `normalizeToBodyHeight` 把缩放加在 body 上 —— 用局部坐标采样的话，
+    // 星点会比渲染出来的人体大 95 倍、整个飞出画面（实测：肌肉 World y 0~1.785，
+    // 星点 0~170）。用 world 空间采样，星场放在原点就与人体对齐。
+    v.applyMatrix4(mesh.matrixWorld)
     out[i * 3] = v.x
     out[i * 3 + 1] = v.y
     out[i * 3 + 2] = v.z

@@ -17,7 +17,9 @@ export const MAX_STARS = 256
 export interface StarSpec {
   /** 实际渲染的星数（0..maxCount）。**这是单调通道** */
   count: number
-  /** 星点尺寸（像素） */
+  /** 星点尺寸，**世界单位**（`PointsMaterial.sizeAttenuation: true`）。
+   *  相机 fov 38°、距离 ~2.6 时，1 世界单位 ≈ 450 px —— 所以 1~6 px 的星
+   *  对应 0.004~0.013。写大了会变成一团白斑。 */
   size: number
   /** 不透明度（0..1） */
   opacity: number
@@ -47,7 +49,7 @@ export function starSpec(recovery: number | null, maxCount: number = MAX_STARS):
 
   // 尺寸与不透明度也随恢复度走，让单调性在**三个维度上冗余成立** ——
   // 即便将来有人把 count 的曲线改平，size/opacity 仍能读出方向
-  const size = 1.2 + 3.3 * r
+  const size = 0.004 + 0.010 * r
   const opacity = 0.35 + 0.65 * r
 
   return { count, size, opacity }

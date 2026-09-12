@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { interactiveMeshes } from './scene'
 import type { MuscleState } from '../data/types'
 
 /** 标签文案（纯函数，可单测）。星号 = 按次数估算，图例里解释。 */
@@ -229,7 +230,9 @@ export function createLabelLayer(
         dir.copy(it.anchor).sub(origin)
         raycaster.far = Math.max(dir.length() - 0.02, 0)
         raycaster.set(origin, dir.normalize())
-        const hits = raycaster.intersectObjects(body.children, false)
+        // **只打可交互 mesh**：`other` 与外壳若参与，会被下面的 `!== it.id`
+        // 判成遮挡物，于是所有标签一起变暗。见 scene.ts 的 interactiveMeshes。
+        const hits = raycaster.intersectObjects(interactiveMeshes(body), false)
         const occluded = hits.some((h) => h.object.userData.muscleId !== it.id)
         // 悬停/聚焦的标签"提升"：不被遮挡淡化。它是用户此刻指着/选着的那一块，
         // 被压在 0.28 里就等于没有提升（28 条锚点全在中轴，重叠是常态）。

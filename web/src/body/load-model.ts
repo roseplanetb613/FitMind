@@ -29,6 +29,12 @@ export function muscleIdOf(name: string): string | null {
 export const BODY_HEIGHT = 1.8
 
 /**
+ * 背景组织（`other`）的颜色。**刻意远离恢复度色轴**（`palette` 的基色是 `#8a8f96`，
+ * 冷端偏青、暖端偏金）。用一块压暗的中性灰，读起来像"背景"，不像一个恢复度数值。
+ */
+export const OTHER_TISSUE_COLOR = 0x2f3439
+
+/**
  * 把任意来源的模型缩放到 `BODY_HEIGHT` 并落到地面（min.y = 0）。
  *
  * **这一步不可省。** 实测 Z-Anatomy 的 FBX 是**厘米单位**（bbox y 跨度 170.65），
@@ -84,7 +90,7 @@ export function assembleBody(scene: THREE.Object3D): LoadedBody {
     // 每个 mesh **独立材质** —— applyStates 逐块改色，共享材质会让"改一块"变成"改全部"。
     // glb 里所有 primitive 共用一份材质，所以这里必须克隆。
     mesh.material = new THREE.MeshStandardMaterial({
-      color: 0x8a8f96,
+      color: OTHER_TISSUE_COLOR,
       emissive: 0x000000,
       emissiveIntensity: 0,
       roughness: 0.55,
@@ -93,8 +99,27 @@ export function assembleBody(scene: THREE.Object3D): LoadedBody {
       opacity: 1,
     })
     mesh.userData.muscleId = id ?? undefined
-    // other 是"其余全部肌肉/筋膜"合并成的中性网格：看得见、但不可交互
     mesh.userData.style = id ? 'muscle' : 'other'
+
+    if (!id) {
+      // `other` = 其余 478 个网格（筋膜/滑囊/**肋间肌/髂胫束**…）合并成的背景组织。
+      //
+      // 两处必须特殊处理：
+      //  1. **不写深度、且先画**（renderOrder -1）。因为其中有些结构在解剖上就**在我们
+      //     着色的肌肉外面**——髂胫束包着 quadriceps、肋间肌盖着 pectorals。
+      //     正常写深度的话它们会**盖住**那些肌肉，表现就是"穿模 / 肌肉看不见也选不中"。
+      //     关掉深度写入后，肌肉永远画在它们之上；没有肌肉的地方才露出它们。
+      //  2. **颜色必须离恢复度色轴远远的**（见 OTHER_TISSUE_COLOR）。原先用 0x8a8f96，
+      //     那恰好是 palette(0.5) 的基色 —— 一块灰组织挨着一块彩肌，**看起来就像
+      //     那块肌肉恢复到 50%**，直接违反 spec §5.4「未知不得与任何数值混淆」。
+      mesh.material.depthWrite = false
+      mesh.renderOrder = -1
+      // **必须留在不透明批次**（transparent: false）。transparent 会把它排到
+      // 透明批次 —— 而透明批次跑在已知肌肉的**不透明批次之后**，于是它靠着深度测试
+      // 仍会盖住位于它后面的肌肉，白改一场。不透明 + 不写深度 + 排最前，
+      // 才是"肌肉永远画在它之上"的完整条件。
+      mesh.material.transparent = false
+    }
     group.add(mesh)
   }
 
@@ -113,7 +138,7 @@ export function assembleBody(scene: THREE.Object3D): LoadedBody {
     })
     s.userData.style = 'shell'
     s.userData.muscleId = undefined
-    s.renderOrder = -1 // 先画，让肌肉盖在上面
+    s.renderOrder = -2 // 最先画；不写深度所以不会挡住肌肉（见 other 的同类处理）
     s.name = 'shell'
     group.add(s)
   }

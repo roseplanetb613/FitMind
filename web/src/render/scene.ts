@@ -86,6 +86,20 @@ export function setHover(group: THREE.Group, id: string | null): void {
  * `raycaster` / `ndc` / `camera` 由调用方传入并复用：交互期本函数调用频繁，
  * 没必要每次新建三个对象。
  */
+/**
+ * 可交互的 mesh —— **只有 28 个肌群块**。
+ *
+ * `other`（478 个筋膜/滑囊/肋间肌合并的中性网格）与外壳**必须排除**：
+ *   · 点选拿到的若是个没有 `muscleId` 的东西，会被当作"点了空白"而清掉选中
+ *     —— 表现就是"肌肉选不中了"
+ *   · 标签的遮挡判定 `hits.some(h => h.object.userData.muscleId !== it.id)`
+ *     会把它们当成遮挡物，于是**所有标签一起被判成被遮挡、整屏变暗**
+ * 这两处正是引入真实模型后新出现的失效面。
+ */
+export function interactiveMeshes(body: THREE.Group): THREE.Mesh[] {
+  return body.children.filter((c) => c.userData.muscleId) as THREE.Mesh[]
+}
+
 export function pickMuscleId(
   body: THREE.Group,
   raycaster: THREE.Raycaster,
@@ -93,7 +107,9 @@ export function pickMuscleId(
   camera: THREE.Camera,
 ): string | null {
   raycaster.setFromCamera(ndc, camera)
-  const hit = raycaster.intersectObjects(body.children, false)[0]
+  // 非递归（第三个参数 false）**且只打可交互 mesh** —— 两个条件都不可省，
+  // 理由分别见本函数上方与 scenery.ts / load-model.ts 的模块注释。
+  const hit = raycaster.intersectObjects(interactiveMeshes(body), false)[0]
   return (hit?.object.userData.muscleId as string | undefined) ?? null
 }
 

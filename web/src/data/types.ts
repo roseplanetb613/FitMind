@@ -41,3 +41,19 @@ export function resolveLabel(labels: Record<string, string>, id: string): string
 export function muscleState(d: MuscleMapData, id: string): MuscleState | null {
   return d.muscles[id] ?? null
 }
+
+/**
+ * 全未知地图：`muscles` 里**每个 id 都缺键**（不是显式的 null 值）→ muscleState
+ * 一律归一成 null → palette(null) → 线框 + 半透明（spec §5.4）。
+ *
+ * 它是加载失败路径的输入（见 data/load.ts）。少了它，applyStates 就没有数据可喂，
+ * 50 块会停在 build() 的初始材质上——而那与 palette(0.5) 视觉等价
+ * （同基色 BASE_COLOR、emissiveIntensity 同为 0、同为实心、opacity 同为 1），
+ * 整屏看起来像"所有肌群恰好恢复 50%"，正是 §5.4 要排除的混淆。
+ *
+ * `generated_at` 是空串：没有生成过任何数据，不编造时间戳。`days` 原样带上，
+ * 保持 MuscleMapData 的字段完整（消费方只读 muscles/labels）。
+ */
+export function emptyMap(days: number): MuscleMapData {
+  return { generated_at: '', days, labels: {}, muscles: {} }
+}

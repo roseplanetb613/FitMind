@@ -82,7 +82,20 @@ interface LabelItem {
 }
 
 export interface LabelLayer {
+  /** 标签顺序（= 键盘 Tab 遍历顺序），与 groupByMuscleId 的分组顺序一致 */
+  ids(): string[]
+  /** 元素 → muscle_id。键盘事件里拿 `document.activeElement` 反查用；
+   *  不是本层的标签返回 null（按对象同一性判定，不做属性猜测）。 */
+  idOf(el: HTMLElement): string | null
   setStates(states: Record<string, MuscleState | null>): void
+  /** 悬停高亮：命中的那条加 `is-hovered`，其余去掉（幂等，不残留上一条） */
+  setHovered(id: string | null): void
+  /** 当前聚焦/选中的肌群。它同时是 roving tabindex 的拥有者——**只有它 tabindex=0**，
+   *  于是 Tab 进出本层只有这一个焦点站。传 null 表示"没有聚焦"，此时把进入点复位到
+   *  第一条（键盘还得能再进来）。点选也复用它：'当前是哪一块'只留一个概念。 */
+  setFocused(id: string | null): void
+  /** 把真实键盘焦点移到该 id 的标签上（只动焦点，不动 roving 状态） */
+  focusElement(id: string): void
   update(camera: THREE.PerspectiveCamera, size: { w: number; h: number }): void
   dispose(): void
 }
@@ -98,6 +111,10 @@ export function createLabelLayer(
 ): LabelLayer {
   const root = document.createElement('div')
   root.className = 'label-layer'
+  // 无障碍语义（spec §6.2 的键盘交互）：标签是一个可键盘遍历的列表。
+  // role/aria 挂在**属性**上，供读屏与测试取用（样式与行为不依赖它们）。
+  root.setAttribute('role', 'list')
+  root.setAttribute('aria-label', '肌群恢复状态')
   container.appendChild(root)
 
   // 每个 muscle_id 只挂一条标签，锚在该 id 所有 mesh 的中心——
@@ -105,11 +122,19 @@ export function createLabelLayer(
   const byId = groupByMuscleId(body)
 
   const items: LabelItem[] = []
+  const idByEl = new Map<HTMLElement, string>()
+  const elById = new Map<string, HTMLElement>()
   for (const [id, meshes] of byId) {
     const el = document.createElement('div')
     el.className = 'muscle-label'
+    el.setAttribute('role', 'listitem')
+    // roving tabindex 的**进入点**：没有它，整层一个可 Tab 元素都没有，
+    // 键盘用户永远进不来。默认落在第一条，setFocused 负责之后跟着焦点走。
+    el.setAttribute('tabindex', items.length === 0 ? '0' : '-1')
     root.appendChild(el)
     items.push({ id, el, anchor: anchorFor(meshes) })
+    idByEl.set(el, id)
+    elById.set(id, el)
   }
 
   const raycaster = new THREE.Raycaster()
@@ -117,13 +142,39 @@ export function createLabelLayer(
   const dir = new THREE.Vector3()
   const origin = new THREE.Vector3()
 
+  // 悬停/聚焦的 id。只用来在 update() 里让它们不被遮挡淡化（"提升"要看得见才算提升）。
+  let hoveredId: string | null = null
+  let focusedId: string | null = null
+
   return {
+    ids: () => items.map((it) => it.id),
+    idOf: (el) => idByEl.get(el) ?? null,
     setStates(states): void {
       for (const it of items) {
         const state = states[it.id] ?? null
-        it.el.textContent = labelText(resolveName(it.id), state)
+        const text = labelText(resolveName(it.id), state)
+        it.el.textContent = text
+        // 读屏读到的 == 眼睛看到的（同一份文案，不另拼一套说法）
+        it.el.setAttribute('aria-label', text)
         it.el.classList.toggle('is-unknown', !state || !state.has_record)
       }
+    },
+    setHovered(id): void {
+      hoveredId = id
+      // 逐条与 id 比对而非"记住上一条再撤销"：幂等，切来切去也不会残留两条
+      for (const it of items) it.el.classList.toggle('is-hovered', it.id === id)
+    },
+    setFocused(id): void {
+      focusedId = id
+      // roving tabindex 的进入点：没有聚焦时回到第一条，键盘才能再次进来
+      const entry = id ?? items[0]?.id ?? null
+      for (const it of items) {
+        it.el.classList.toggle('is-focused', it.id === id)
+        it.el.setAttribute('tabindex', it.id === entry ? '0' : '-1')
+      }
+    },
+    focusElement(id): void {
+      elById.get(id)?.focus()
     },
     update(camera, size): void {
       for (const it of items) {
@@ -156,7 +207,11 @@ export function createLabelLayer(
         raycaster.set(origin, dir.normalize())
         const hits = raycaster.intersectObjects(body.children, false)
         const occluded = hits.some((h) => h.object.userData.muscleId !== it.id)
-        it.el.style.opacity = occluded ? '0.28' : '1'
+        // 悬停/聚焦的标签"提升"：不被遮挡淡化。它是用户此刻指着/选着的那一块，
+        // 被压在 0.28 里就等于没有提升（28 条锚点全在中轴，重叠是常态）。
+        // 注：出画（上面 z > 1 的分支）仍然压成 0——那时它不在画面上，没什么可提升的。
+        const raised = it.id === hoveredId || it.id === focusedId
+        it.el.style.opacity = occluded && !raised ? '0.28' : '1'
       }
     },
     dispose(): void {

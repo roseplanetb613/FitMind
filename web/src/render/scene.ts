@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { muscleState, type MuscleMapData } from '../data/types'
-import { palette } from './palette'
+import { BASE_COLOR, HOVER_COLOR, palette } from './palette'
 
 /** 只建场景图，不建 renderer —— 使 node 里可测（无 WebGL 上下文）。 */
 export function buildBodyGroup(): THREE.Group {
@@ -34,6 +34,36 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     mat.opacity = nonMuscle ? entry.opacity * 0.45 : entry.opacity
     mat.transparent = mat.opacity < 1
     mat.needsUpdate = true
+  }
+}
+
+/**
+ * 悬停高亮：把 `id` 那一块的**基色**换成 HOVER_COLOR，其余写回 BASE_COLOR；
+ * `id === null` 即全部写回 BASE_COLOR（移开指针 / 离开画布）。
+ *
+ * 为什么是基色，而不是"把自发光乘个系数"（spec §5 把语义放在自发光上）：
+ *  1. 未知态的 `emissiveIntensity` 恒为 0（palette(null)），乘任何系数仍是 0——
+ *     线框块会"高亮"得毫无变化。基色则对所有状态都是同一个常量，
+ *     所以**未知态与已知态用同一条路径高亮**，没有特例。
+ *     （线框块画的边线取自同一份材质：受光基色 + 自发光×强度，基色变亮 → 边线变亮。）
+ *  2. 基色恒定（palette 三个分支都返回 BASE_COLOR）⇒ 还原不需要快照/基线字段，
+ *     `setHover(group, null)` 直接写回常量即可。于是"悬停 → 移开 → applyStates"
+ *     与"直接 applyStates"逐字段相同：本函数只碰 color，绝不碰
+ *     emissive / emissiveIntensity / opacity / wireframe / transparent
+ *     ——那些是 applyStates 的语义通道。
+ *  3. spec §5.2 明确基色"不参与语义"，把交互反馈放在这里不会与恢复度混淆。
+ *
+ * 与 applyStates 一样**只改材质、不重建**。整组重算（幂等），不保留"上一个悬停"，
+ * 因此与调用顺序无关：applyStates 之后再调本函数、或反过来，结果都一样。
+ * 残留风险（无头环境测不到）：高亮期间那一块的基色变亮，理论上可能被读成
+ * "恢复度更高"；靠悬停态同时带来的标签加粗/上浮来消歧（见 labels.setHovered）。
+ */
+export function setHover(group: THREE.Group, id: string | null): void {
+  for (const child of group.children) {
+    const mid = child.userData.muscleId as string | undefined
+    if (!mid) continue // 装饰 Group 无 muscleId：不参与高亮，也不会被当成悬停目标
+    const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial
+    mat.color.set(mid === id ? HOVER_COLOR : BASE_COLOR)
   }
 }
 

@@ -25,9 +25,22 @@ export interface PaletteEntry {
   lightness: number
 }
 
-const BASE = '#8a8f96' // 中性灰蓝，固定
 const AMBER_HUE = 38
 const CYAN_HUE = 196
+
+/** 中性灰蓝，固定。**导出是给悬停高亮用的**：palette 的三个分支都返回它，
+ *  所以"还原"就是把它写回去，不需要为悬停保存任何快照。 */
+export const BASE_COLOR = '#8a8f96'
+const BASE = BASE_COLOR
+
+/** 悬停高亮的基色（实测 HSL ≈ 212°, 51%, 94%）。挑它的理由：
+ *  - 比 BASE（≈ 215°, 5%, 57%）亮得多，是同一色相上的一次"提亮"，不引入新语义；
+ *  - 与两支语义色都可区分：它们是明度 32%（冷 / CYAN 196°）～64%（暖 / AMBER 38°）
+ *    的高饱和彩度色，色相也都不在 212°；
+ *  - 在**未知态**上也看得见——高亮走基色这一路，不走自发光，因为未知态
+ *    的 emissiveIntensity 恒为 0（palette(null)），"乘个系数"高亮不了线框块；
+ *    线框块画的边线取自同一份材质，基色变亮它就变亮。 */
+export const HOVER_COLOR = '#e6eef7'
 
 function hslToHex(h: number, s: number, l: number): string {
   const sn = s / 100

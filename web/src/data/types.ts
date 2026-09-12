@@ -57,3 +57,45 @@ export function muscleState(d: MuscleMapData, id: string): MuscleState | null {
 export function emptyMap(days: number): MuscleMapData {
   return { generated_at: '', days, labels: {}, muscles: {} }
 }
+
+// ———————————————————————————————————————————————— 对话（/v1/chat）——
+
+/**
+ * `structured.data` —— **形状随意图而变，不能假设有 items**。
+ *
+ * 后端 `build_structured` 只是个信封，不按分支派发；实测这些情况都没有 items：
+ *   · `guard` / `clarify` 两种 mode 的 structured **连 data 键都没有**
+ *   · `smalltalk` 的 data 是 `{message, topic}`
+ *   · 失败时是 `error` 而不是 `data`
+ * 所以消费方一律逐级容忍，缺什么就当没有。
+ */
+export interface StructuredData {
+  items?: StructuredItem[]
+  [k: string]: unknown
+}
+
+export interface StructuredItem {
+  name?: string
+  value?: string
+  /** `teach` 分支独有：**canonical 肌肉 id**（如 `quadriceps`），用来联动 3D 视图。
+   *  其它分支没有这个字段 —— 见 `muscleIdInItem` 的兜底策略。 */
+  target?: string
+  [k: string]: unknown
+}
+
+export interface Structured {
+  title?: string
+  sources?: string[]
+  data?: StructuredData
+  /** 技能失败时的原因（此时没有 data） */
+  error?: string
+  memory_ack?: string[]
+}
+
+/** 风险拦截负载。后端 `ChatResponse.guard` 一直算着，此前只是没序列化。 */
+export interface GuardPayload {
+  blocked?: boolean
+  level_label?: string
+  advice?: string
+  blocks?: unknown[]
+}

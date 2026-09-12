@@ -18,6 +18,10 @@
       <label class="toggle"><input type="checkbox" id="toggle-labels" checked />标签</label>
       <label class="toggle"><input type="checkbox" id="toggle-unknown" />无记录</label>
     </div>
+    <!-- 对话面板。放在 #app 最后 —— 本仓不用 z-index，DOM 顺序就是层叠顺序，
+         放最后才压在画布与其它面板之上。内部结构由 ui/chat-panel.ts 建。 -->
+    <section id="chat" class="chat-panel" aria-label="与教练对话"></section>
+    <button id="chat-toggle" class="chat-toggle" type="button" aria-controls="chat">对话</button>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

@@ -17,6 +17,10 @@ import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
 import { createDetailFlow } from './ui/detail-flow'
+import { MUSCLE_IDS } from './body/load-model'
+import { streamChat } from './data/chat'
+import { createChatFlow } from './ui/chat-flow'
+import { createChatPanel } from './ui/chat-panel'
 import { hideDetail } from './ui/detail'
 
 const params = new URLSearchParams(location.search)
@@ -237,3 +241,48 @@ const tick = (): void => {
   labels.update(handle.camera, { w: canvas.clientWidth, h: canvas.clientHeight })
 }
 tick()
+
+// ── 与教练对话（agent）──────────────────────────────────────────────
+// 逻辑全在 ui/chat-flow.ts（可单测），这里只做三件装配的事：
+// 把 DOM 交给面板、把网络交给 data/chat、把"点卡片"接到已有的 select()。
+
+const SESSION_KEY = 'fitmind.chat.session'
+const chatEl = document.querySelector<HTMLElement>('#chat')!
+const chatToggleEl = document.querySelector<HTMLButtonElement>('#chat-toggle')!
+
+const chatPanel = createChatPanel({
+  root: chatEl,
+  // 28 个 id 的**单源**就是 load-model 的 MUSCLE_IDS —— 卡片里扫肌肉名时用它比对，
+  // 不另写一份列表（另写一份必然与后端漂移）
+  muscleIds: MUSCLE_IDS,
+  // 点卡片 → 走已有的 select()，于是高亮 / 标签提亮 / 详情浮层 / 推荐动作
+  // 整套链路自动生效，这里不需要知道其中任何一件
+  onMuscleClick: (id) => {
+    select(id)
+    chatPanel.setOpen(false) // 让出屏幕，否则面板正好盖住要看的模型
+  },
+  onSubmit: (text) => void chatFlow.send(text),
+})
+
+const chatFlow = createChatFlow({
+  send: (req, onStage) => streamChat(req, onStage),
+  onChange: (state) => chatPanel.render(state),
+  loadSession: () => {
+    try {
+      return localStorage.getItem(SESSION_KEY)
+    } catch {
+      return null // 隐私模式下 localStorage 会抛，别让它带挂整个页面
+    }
+  },
+  saveSession: (id) => {
+    try {
+      localStorage.setItem(SESSION_KEY, id)
+    } catch {
+      /* 存不下就算了：只是丢了跨刷新的上下文，不影响本次对话 */
+    }
+  },
+  userId: uid,
+})
+
+chatToggleEl.addEventListener('click', () => chatPanel.setOpen(true))
+chatPanel.render(chatFlow.state()) // 首帧：显示欢迎语而不是空面板

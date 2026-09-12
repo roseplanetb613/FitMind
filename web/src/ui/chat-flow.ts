@@ -1,0 +1,167 @@
+/**
+ * 对话的状态机。**所有会出错的东西都在这里，且全部可单测。**
+ *
+ * 为什么抽出来：本仓的约定是 `main.ts` 无法测试（要 DOM + WebGL），所以
+ * "逻辑留在 main.ts 等于没有守卫"（见 `detail-flow.ts` 的模块注释，那里记着
+ * 两个真实回归的代价）。对话有会话 id、竞态、流式回调、错误恢复四件易错事，
+ * 一件都不该留在 `main.ts`。
+ *
+ * 状态全在闭包里，依赖全部注入 —— 于是测试可以塞一个假 send、记下调用序列，
+ * 不需要 DOM，也不需要网络。
+ */
+
+import type { ChatRequest, ChatResponse } from '../data/chat'
+import type { GuardPayload, Structured, StructuredItem } from '../data/types'
+
+/** 后端阶段值 → 中文文案。**未知阶段原样显示**，不编一个好听的说法。 */
+export const STAGE_TEXT: Record<string, string> = {
+  received: '已收到，正在分析',
+  understand: '正在理解你的问题',
+  work: '正在查询动作库与训练记录',
+  render: '正在生成回答',
+}
+
+export function stageText(stage: string): string {
+  return STAGE_TEXT[stage] ?? stage
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+  /** 助手消息才有：结构化卡片 */
+  structured?: Structured
+  /** 助手消息才有：风险拦截负载 */
+  guard?: GuardPayload | null
+  mode?: string
+}
+
+export interface ChatState {
+  messages: ChatMessage[]
+  /** 正在等回复。composer 据此禁用，避免连点发出一堆并发请求 */
+  pending: boolean
+  /** 当前阶段文案；不在等回复时为 null */
+  stage: string | null
+  /** 最近一次错误；成功后清空 */
+  error: string | null
+}
+
+export interface ChatFlowDeps {
+  send: (
+    req: ChatRequest,
+    onStage: (stage: string) => void,
+  ) => Promise<ChatResponse>
+  /** 状态变化时回调（渲染）。**不传就只更新内部状态**，便于纯逻辑测试。 */
+  onChange?: (state: ChatState) => void
+  /** 会话 id 的读写。注入是为了让"跨刷新保留会话"这件事可测且不依赖 localStorage。 */
+  loadSession?: () => string | null
+  saveSession?: (id: string) => void
+  /** 消息里的用户 id（后端记忆图谱归属） */
+  userId?: string
+}
+
+export interface ChatFlow {
+  state: () => ChatState
+  /** 发一条消息。返回一个 promise，测试可以 await 它。 */
+  send: (text: string) => Promise<void>
+  /** 清空消息与错误（**不清会话 id**：那是和 agent 的上下文，清掉就断片了） */
+  clear: () => void
+}
+
+export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
+  const messages: ChatMessage[] = []
+  let sessionId: string | null = deps.loadSession?.() ?? null
+  let pending = false
+  let stage: string | null = null
+  let error: string | null = null
+  // 竞态守卫：每次发送领一个号，回来时号对不上就丢弃。
+  // 触发场景：用户发了 A，等不及又发了 B；A 的响应后到，不能覆盖 B。
+  let seq = 0
+
+  const snapshot = (): ChatState => ({ messages: [...messages], pending, stage, error })
+  const emit = (): void => deps.onChange?.(snapshot())
+
+  return {
+    state: snapshot,
+
+    async send(text: string): Promise<void> {
+      const trimmed = text.trim()
+      if (!trimmed || pending) return // 空消息与连点都直接吞掉
+
+      const mine = ++seq
+      messages.push({ role: 'user', text: trimmed })
+      pending = true
+      stage = null
+      error = null
+      emit()
+
+      try {
+        const req: ChatRequest = { message: trimmed, session_id: sessionId }
+        if (deps.userId) req.user_id = deps.userId
+
+        const resp = await deps.send(req, (s) => {
+          // 迟到的阶段不能污染新一轮
+          if (mine !== seq) return
+          stage = s
+          emit()
+        })
+
+        if (mine !== seq) return // 已被更新的请求取代，这个响应作废
+        // **会话 id 必须存下来**：后端是无状态的，不带上它下一轮就没有上下文
+        // （历史、档案全丢）。而且后端在缺省时会新生成一个返回给我们。
+        if (resp.session_id) {
+          sessionId = resp.session_id
+          deps.saveSession?.(resp.session_id)
+        }
+        messages.push({
+          role: 'assistant',
+          text: resp.reply,
+          ...(resp.structured ? { structured: resp.structured } : {}),
+          guard: resp.guard ?? null,
+          ...(resp.mode_used ? { mode: resp.mode_used } : {}),
+        })
+        pending = false
+        stage = null
+        emit()
+      } catch (e) {
+        if (mine !== seq) return
+        pending = false
+        stage = null
+        // 失败必须**可见**：不把错误吞掉、也不留一个永远转圈的 pending
+        error = e instanceof Error ? e.message : String(e)
+        emit()
+      }
+    },
+
+    clear(): void {
+      seq++ // 让在途响应作废，否则清空后会被一条迟到的回复重新填上
+      messages.length = 0
+      pending = false
+      stage = null
+      error = null
+      emit()
+    },
+  }
+}
+
+/**
+ * 从一条结构化条目里找出它指的是哪块肌肉，找不到返回 null。
+ *
+ * **优先 `target`**（`teach` 分支直接给的 canonical id）；否则在展示串里扫 ——
+ * `qa#muscle_panel` 那种分支把 id 嵌在名字里（`"腿（quadriceps）面板"`）。
+ *
+ * 扫的时候拿 `ids`（= 28 个 canonical id 的**单源**）去比对，**而不是写正则猜**：
+ * 猜出来的东西会随着 id 增删而腐化，而且猜错就会点亮一块无关的肌肉。
+ * **扫不到就不给链接**，不猜。
+ */
+export function muscleIdInItem(item: StructuredItem, ids: readonly string[]): string | null {
+  if (typeof item.target === 'string' && ids.includes(item.target)) return item.target
+  const hay = `${item.name ?? ''} ${item.value ?? ''}`
+  // **取最长的那个命中，不是第一个。** 当前 28 个 id 恰好互不为子串，但
+  // `core` / `core_stabilizers` 这类关系一出现，按数组顺序取的写法就会稳定地点亮
+  // 错的那一块（而且看起来"能用"，很难发现）。多花一次比较换掉这个雷。
+  let best: string | null = null
+  for (const id of ids) {
+    if (hay.includes(id) && (best === null || id.length > best.length)) best = id
+  }
+  return best
+}

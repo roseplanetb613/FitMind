@@ -36,8 +36,11 @@ html, body {
 /* 加载失败提示（幂等：同一个元素更新文本，见 ui/notice.ts） */
 .legend-note.legend-error { color: #e0a458; }
 
+/* 详情浮层移到**左列**。原先在 right:18px，与新增的右侧对话面板正面相撞
+   —— 两个面板都要右边缘，谁也读不了。左列自上而下是：工具栏 → 提示 → 详情，
+   底部留给图例；max-height 卡住不让它压到图例。 */
 #detail {
-  position: absolute; right: 18px; top: 18px; width: 280px;
+  position: absolute; left: 18px; top: 64px; width: 280px;
   background: rgba(20, 26, 33, .94); padding: 16px; border-radius: 8px;
   display: none;
 }
@@ -56,7 +59,9 @@ html, body {
 #toolbar button:hover { background: #263039; }
 
 /* ── 动作推荐 ─────────────────────────────────────────── */
-#detail { max-height: calc(100vh - 36px); overflow-y: auto; }
+/* 左列给详情留的高度：视口 - 顶部工具栏/提示 - 底部图例与边距。
+   不卡的话长内容会盖住图例（图例在左下角，是恢复度色轴唯一的解释）。 */
+#detail { max-height: calc(100vh - 300px); overflow-y: auto; }
 .picks { margin-top: 16px; border-top: 1px solid #2f3944; padding-top: 12px; }
 .picks h4 { margin: 0 0 10px; font-size: 13px; color: #9aa6b2; font-weight: 600; }
 .pick-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -78,10 +83,163 @@ html, body {
 #toolbar .toggle:hover { background: #263039; }
 #toolbar .toggle input { accent-color: #4a90d9; cursor: pointer; }
 
-/* “还压着 N 块更深的肌群，再点一下” —— 深层肌肉点不到的提示（见 main.ts） */
+/* “还压着 N 块更深的肌群，再点一下” —— 深层肌肉点不到的提示（见 main.ts）
+   移到底部居中：左上角让给 #detail 了，而它是瞬态提示，居中反而更显眼。 */
 .depth-hint {
-  position: absolute; left: 18px; top: 64px;
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px;
   background: rgba(20, 26, 33, .92); color: #9aa6b2;
   border: 1px solid #2f3944; border-radius: 6px;
   padding: 5px 10px; font-size: 11px; display: none;
+}
+
+/* ══════════════════════════════════════════════════════════
+   对话面板 —— 苹果式玻璃拟态（毛玻璃 + 蓝绿基调）
+
+   本仓此前没有任何 backdrop-filter / box-shadow（面板都是纯色 rgba 填充），
+   这一块是全新引入的视觉语言。
+
+   ⚠ 色相取舍：teal ≈ 175°，而恢复度冷端是 cyan 196°（palette.ts），两者相邻。
+   面板是**独立表面**、不参与恢复度编码，所以可接受；但面板内的强调色一律避开
+   196° 附近，免得被误读成一个低恢复度数值（spec §5.4）。
+   ══════════════════════════════════════════════════════════ */
+.chat-panel {
+  position: absolute; right: 18px; top: 18px; bottom: 18px; width: 380px;
+  display: flex; flex-direction: column;
+  border-radius: 20px;
+  background: linear-gradient(160deg, rgba(56, 189, 178, .16), rgba(18, 38, 46, .46));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(160, 240, 230, .18);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .14);
+  overflow: hidden;
+}
+/* 收起态：只留一个把手。窄屏下这是默认态（见 @media） */
+.chat-panel:not(.is-open) { display: none; }
+
+.chat-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid rgba(160, 240, 230, .14);
+}
+.chat-title { font-weight: 600; letter-spacing: .02em; }
+.chat-close {
+  background: transparent; color: #9aa6b2; border: 0; cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.chat-close:hover { background: rgba(255, 255, 255, .08); color: #e6ebf0; }
+
+.chat-list {
+  flex: 1; overflow-y: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.chat-empty { color: #9aa6b2; margin: 0; font-size: 12px; line-height: 1.7; }
+
+.chat-msg { display: flex; }
+.chat-msg.is-user { justify-content: flex-end; }
+.chat-bubble {
+  max-width: 88%; padding: 9px 12px; border-radius: 14px;
+  background: rgba(255, 255, 255, .07);
+  border: 1px solid rgba(160, 240, 230, .12);
+}
+/* 用户气泡用蓝绿实一点 —— 与助手气泡一眼可分 */
+.chat-msg.is-user .chat-bubble {
+  background: linear-gradient(160deg, rgba(56, 189, 178, .34), rgba(32, 122, 118, .3));
+  border-color: rgba(160, 240, 230, .26);
+}
+.chat-text { margin: 0; white-space: pre-wrap; word-break: break-word; }
+
+/* 结构化卡片。⚠ 强调色用 teal(#5fd4c4)，**不用 cyan 196° 那一带** */
+.chat-card {
+  margin-top: 9px; padding: 9px 10px; border-radius: 10px;
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid rgba(160, 240, 230, .13);
+}
+.chat-card-title { margin: 0 0 7px; font-size: 11px; color: #5fd4c4; font-weight: 600; }
+.chat-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.chat-item { display: flex; flex-direction: column; gap: 2px; }
+.chat-item-name { font-size: 12px; }
+.chat-item-value { font-size: 12px; color: #9aa6b2; }
+/* 可点进 3D 的肌肉名：用 button 保证键盘可达 */
+.chat-item-name.is-link {
+  align-self: flex-start; background: transparent; border: 0; padding: 0;
+  color: #5fd4c4; cursor: pointer; font: inherit; font-size: 12px;
+  border-bottom: 1px dashed rgba(95, 212, 196, .5);
+}
+.chat-item-name.is-link:hover { color: #8ff0e2; border-bottom-color: #8ff0e2; }
+
+/* 风险拦截：必须与普通回答显著不同（后端专门算好的负载，不该埋没在正文里） */
+.chat-guard {
+  margin-top: 9px; padding: 9px 10px; border-radius: 10px;
+  background: rgba(224, 164, 88, .14);
+  border: 1px solid rgba(224, 164, 88, .42);
+}
+.chat-guard-label { font-size: 11px; font-weight: 600; color: #e0a458; margin-bottom: 4px; }
+.chat-guard-advice { margin: 0; font-size: 12px; }
+.chat-error-line { margin: 6px 0 0; font-size: 12px; color: #e0a458; }
+
+/* 阶段进度：等回复时才有内容 */
+.chat-stage {
+  display: none; padding: 0 14px 8px; font-size: 11px; color: #5fd4c4;
+}
+.chat-stage.is-on { display: block; }
+/* 呼吸点：纯 CSS，不占 JS 一帧 */
+.chat-stage.is-on::after {
+  content: '…'; animation: chat-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chat-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+
+.chat-error {
+  display: none; padding: 0 14px 8px; font-size: 12px; color: #e0a458;
+}
+.chat-error.is-on { display: block; }
+
+.chat-form {
+  display: flex; gap: 8px; padding: 12px 14px 14px;
+  border-top: 1px solid rgba(160, 240, 230, .14);
+}
+.chat-input {
+  flex: 1; min-width: 0; padding: 9px 12px; border-radius: 12px;
+  background: rgba(0, 0, 0, .28); color: #e6ebf0;
+  border: 1px solid rgba(160, 240, 230, .2);
+  font: inherit; outline: none;
+}
+.chat-input:focus { border-color: rgba(95, 212, 196, .6); }
+.chat-input:disabled { opacity: .55; }
+.chat-send {
+  padding: 9px 16px; border-radius: 12px; cursor: pointer; font: inherit;
+  color: #04211f; font-weight: 600;
+  background: linear-gradient(160deg, #7fe6d6, #45bfb0);
+  border: 1px solid rgba(255, 255, 255, .3);
+}
+.chat-send:disabled { opacity: .5; cursor: default; }
+
+/* 打开对话的浮动按钮（面板收起时显示） */
+.chat-toggle {
+  position: absolute; right: 18px; bottom: 18px; z-index: 5;
+  padding: 10px 18px; border-radius: 999px; cursor: pointer; font: inherit;
+  color: #04211f; font-weight: 600;
+  background: linear-gradient(160deg, rgba(127, 230, 214, .92), rgba(69, 191, 176, .92));
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, .32);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .45);
+}
+.chat-panel.is-open ~ .chat-toggle { display: none; }
+
+/* ── 窄屏：本仓此前**零 @media**，移动端本来就是坏的（240px 图例 + 280px 详情
+   挤在 375px 屏上）。这里只处理对话面板与最挤的两块，不做完整响应式改版。 ── */
+@media (max-width: 720px) {
+  .chat-panel {
+    left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; height: 68vh;
+    border-radius: 20px 20px 0 0;
+  }
+  /* 详情占满宽度，并且只占上半屏，避免和底部抽屉打架 */
+  #detail {
+    left: 18px; right: 18px; width: auto; top: 64px;
+    max-height: calc(32vh - 80px);
+  }
+  /* 图例在窄屏挤不下，收成一条窄的贴在左上 */
+  #legend { width: auto; right: 18px; bottom: auto; top: 18px; left: auto; max-width: 40vw; }
+  #toolbar { flex-wrap: wrap; max-width: 55vw; }
+  .chat-toggle { bottom: calc(68vh + 12px); }
 }

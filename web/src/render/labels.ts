@@ -90,9 +90,16 @@ export function projectToScreen(
  */
 export function labelVisible(
   state: MuscleState | null,
-  opts: { layerVisible: boolean; showUnknown: boolean },
+  opts: { layerVisible: boolean; showUnknown: boolean; hovered?: boolean },
 ): boolean {
+  // 总开关优先：显式关掉就是关掉，悬停也不破例 —— 否则那个开关不成立
+  // （用户关它是为了让画面干净，悬停时又冒出来会让人以为开关坏了）
   if (!opts.layerVisible) return false
+
+  // **悬停即"用户点名要看这一块"。** 这是"无记录默认折叠"能成立的前提：
+  // 默认不抢视线，但你想看哪块就指哪块，不必先去勾开关。
+  if (opts.hovered) return true
+
   const known = !!state && state.has_record
   return known ? true : opts.showUnknown
 }
@@ -198,7 +205,7 @@ export function createLabelLayer(
     hidden.clear()
     for (const it of items) {
       const state = lastStates[it.id] ?? null
-      const show = labelVisible(state, vis)
+      const show = labelVisible(state, { ...vis, hovered: it.id === hoveredId })
       if (!show) hidden.add(it.id)
       it.el.style.display = show ? '' : 'none'
     }
@@ -240,7 +247,11 @@ export function createLabelLayer(
       }
     },
     setHovered(id): void {
+      if (id === hoveredId) return
       hoveredId = id
+      // 悬停会改变**谁该显示**（见 labelVisible 的 hovered 分支），
+      // 所以不能只切 CSS 类，得重算一次可见性
+      applyVisibility()
       // 逐条与 id 比对而非"记住上一条再撤销"：幂等，切来切去也不会残留两条
       for (const it of items) it.el.classList.toggle('is-hovered', it.id === id)
     },

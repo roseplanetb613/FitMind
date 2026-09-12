@@ -8,15 +8,16 @@ import './styles.css'
 import { ApiSource } from './data/api'
 import { loadInto, type LoadTarget } from './data/load'
 import type { MuscleMapSource } from './data/source'
-import { fetchPicks, type ExercisePick } from './data/exercises'
-import { muscleState, resolveLabel, type MuscleMapData } from './data/types'
+import { fetchPicks } from './data/exercises'
+import { type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
 import { createScene, framingFor, pickMuscleId, setHover } from './render/scene'
 import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
-import { hideDetail, renderPicks, showDetail } from './ui/detail'
+import { createDetailFlow } from './ui/detail-flow'
+import { hideDetail } from './ui/detail'
 
 const params = new URLSearchParams(location.search)
 const uid = params.get('user_id') ?? 'local'
@@ -54,12 +55,6 @@ const ids = labels.ids()
 const raycaster = new THREE.Raycaster()
 const ndc = new THREE.Vector2()
 
-/**
- * 当前选中的肌群。**用来丢弃过期响应** —— 快速点两块肌肉时，
- * 先发的请求可能后到，不过滤的话详情里会显示前一块的推荐。
- * 声明必须在点击处理器之前（`let` 有暂时性死区）。
- */
-let selectedId: string | null = null
 function pickAt(clientX: number, clientY: number): string | null {
   const rect = canvas.getBoundingClientRect()
   ndc.set(
@@ -69,49 +64,27 @@ function pickAt(clientX: number, clientY: number): string | null {
   return pickMuscleId(handle.body, raycaster, ndc, handle.camera)
 }
 
-/** 详情浮层：跟着 focused 走。数据未就绪（失败后 latest 为 null）就不展示。 */
-function showDetailFor(id: string | null): void {
-  if (!id || !latest) {
-    selectedId = null
-    hideDetail(detailEl)
-    return
-  }
-  // muscleState 而非 latest.muscles[id]：缺键与 null 都要归一（见 types.ts）
-  showDetail(detailEl, resolveLabel(latest.labels, id), muscleState(latest, id))
-
-  // 推荐动作。**注意 showDetail 会清空容器**，所以每次重绘后都要把推荐重新挂上——
-  // 否则 60 秒一轮的数据刷新会把推荐抹掉（`afterLabels` 也会走到这里）。
-  // 有缓存就直接重挂，避免每轮刷新都打一次后端。
-  const hit = picksCache.get(id)
-  if (hit) renderPicks(detailEl, hit.exercises, hit.fallback)
-  else void loadPicks(id)
-}
-
 /**
- * 推荐动作的缓存。**不只是省请求**：`showDetail` 每次会 `innerHTML = ''`，
- * 刷新一轮若不重挂，用户正看着的推荐会突然消失。
+ * 详情浮层 + 推荐动作的流程。逻辑在 `ui/detail-flow.ts`，**那里有测试** ——
+ * `main.ts` 依赖 DOM + WebGL，在 node 里跑不了，所以任何留在这里的状态机都等于没有守卫。
+ * 这个教训是实测付出来的：本模块里那段内联逻辑先后踩过两次
+ * （导入却没调用、selectedId 从未被赋值），两次都是 tsc 过 + 全量测试过。
  */
-const picksCache = new Map<string, { exercises: ExercisePick[]; fallback: boolean }>()
-
-async function loadPicks(id: string): Promise<void> {
-  try {
-    const r = await fetchPicks(id, 3)
-    if (selectedId !== id) return // 用户已经点了别的，这个响应作废（防竞态）
-    picksCache.set(id, { exercises: r.exercises, fallback: r.fallback })
-    renderPicks(detailEl, r.exercises, r.fallback)
-  } catch (err) {
-    if (selectedId !== id) return
-    console.warn('推荐动作加载失败', err)
-    renderPicks(detailEl, null, false, err)
-  }
-}
+const detailFlow = createDetailFlow({
+  container: detailEl,
+  // 每次现取：60 秒一轮刷新后必须读到新值，快照会读到上一轮
+  getLatest: () => latest,
+  // names.resolve 已经返回最终显示名（含 labels 降级回落），不要再套 resolveLabel
+  resolveName: (id) => names.resolve(id),
+  fetchPicks,
+})
 
 /** 选中/取消选中一块肌肉：标签提亮 + roving tabindex + 详情浮层，三处同步。
  *  点选与键盘都走这里，所以"当前是哪一块"只有一个来源。 */
 function select(id: string | null): void {
   focused = id
   labels.setFocused(id)
-  showDetailFor(id)
+  void detailFlow.showFor(id)
 }
 
 // 点选：只命中带 muscleId 的 mesh（点空处 = 取消选中）
@@ -198,7 +171,7 @@ const target: LoadTarget = createLoadTarget({
       select(null)
     }
   },
-  afterLabels: () => showDetailFor(focused), // 详情跟着同一轮新数据走，不留在上一轮的数值上
+  afterLabels: () => void detailFlow.showFor(focused), // 详情跟着同一轮新数据走，不留在上一轮的数值上
 })
 
 const source: MuscleMapSource = new ApiSource(uid, days)

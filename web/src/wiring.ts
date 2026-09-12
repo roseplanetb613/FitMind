@@ -3,6 +3,7 @@ import type { LoadTarget } from './data/load'
 import { resolveLabel, type MuscleMapData, type MuscleState } from './data/types'
 import type { LoadErrorNotice } from './ui/notice'
 import { applyStates, setHover } from './render/scene'
+import { applyStars } from './render/star-field'
 
 /**
  * `LoadTarget` 的真实装配：把一次加载的结果接到 场景材质 / 标签 / 失败提示 / 数据缓存。
@@ -19,6 +20,8 @@ import { applyStates, setHover } from './render/scene'
 export interface LoadTargetDeps {
   /** 场景里那 50 块肌肉的 Group */
   body: THREE.Group
+  /** 星场（`buildStarField` 的产物）；没有则不画星 */
+  stars?: THREE.Group | null
   labels: { setStates(states: Record<string, MuscleState | null>): void }
   notice: LoadErrorNotice
   /** 当前悬停的 muscleId（没有则 null）。每次重放时读取 */
@@ -59,6 +62,8 @@ export function createLoadTarget(deps: LoadTargetDeps): LoadTarget {
   return {
     applyStates: (data) => {
       applyStates(deps.body, data)
+      // 星点与材质同源同轮：同一条数据通道，不该出现"颜色是新的、星还是旧的"
+      applyStars(deps.stars ?? null, data)
       // 必须紧跟在 applyStates 之后：它刚把基色写成 palette 的常量，这里再按当前
       // 悬停重放一次高亮（见模块注释里"高亮回不来"的那段）。
       setHover(deps.body, deps.getHovered())

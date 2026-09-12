@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
+import { buildStarField } from './star-field'
 import { muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, palette } from './palette'
 
@@ -149,6 +150,8 @@ export interface SceneHandle {
   controls: OrbitControls
   /** 半透明外壳（只渲染背面）。模型加载失败回落到体块时为 null */
   shell: THREE.Object3D | null
+  /** 星场（每块肌肉表面的星点）。数据驱动它的 drawRange/尺寸/不透明度 */
+  stars: THREE.Group
   /** 几何是否来自真实肌肉模型（false = 回落到了代码生成的体块） */
   fromModel: boolean
   resize(): void
@@ -180,6 +183,10 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 所以这里不会因为 404 / 损坏而白屏。
   const { group: body, shell, fromModel } = await loadBody()
   scene.add(body)
+  // 星场：恢复度的第二条编码通道（补 emissive 在零线归零造成的非单调）。
+  // 只在加载时建一次；数据变化只改 drawRange/尺寸/不透明度，不重建几何。
+  const stars = buildStarField(body)
+  scene.add(stars)
 
   // 地面参考——给体积感一个锚，否则模型飘在虚空里
   const grid = new THREE.GridHelper(6, 24, 0x2a323c, 0x1c232b)
@@ -217,6 +224,7 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
     renderer,
     controls,
     shell,
+    stars,
     fromModel,
     resize,
     dispose(): void {

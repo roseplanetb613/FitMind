@@ -158,6 +158,7 @@ document.querySelectorAll<HTMLButtonElement>('#toolbar button').forEach((b) => {
 // 因此成功与失败两条路径都能在 node 里断言（main.ts 依赖 DOM + WebGL，自己测不到）。
 const target: LoadTarget = createLoadTarget({
   body: handle.body,
+  stars: handle.stars,
   labels,
   notice,
   // getter：重放高亮时要读"此刻"的悬停，不是装配时的快照

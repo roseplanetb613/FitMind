@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
 import { buildStarField } from './star-field'
-import { buildHeartGlow } from './glow'
+import { buildHeartGlow, prefersReducedMotion, pulseGlow } from './glow'
 import { muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
 
@@ -324,10 +324,10 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // applyStates / setHover / interactiveMeshes / buildStarField 都会遍历
   // body.children，多一个 Sprite 进去就得逐处加过滤，且点选射线可能打到它。
   const heart = body.children.find((c) => c.userData.muscleId === 'cardio_system')
-  if (heart) {
-    const glow = buildHeartGlow(heart)
-    if (glow) scene.add(glow)
-  }
+  const glow = heart ? buildHeartGlow(heart) : null
+  if (glow) scene.add(glow)
+  // 用户在系统里开了"减少动效"就不呼吸，只留静态辉光
+  const breathe = glow !== null && !prefersReducedMotion()
 
   // 地面参考——给体积感一个锚，否则模型飘在虚空里
   const grid = new THREE.GridHelper(6, 24, 0x2a323c, 0x1c232b)
@@ -353,6 +353,8 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   let raf = 0
   const loop = (): void => {
     raf = requestAnimationFrame(loop)
+    // 呼吸：一次 set + 一次改 opacity，成本可忽略
+    if (breathe) pulseGlow(glow!, performance.now())
     controls.update()
     renderer.render(scene, camera)
   }

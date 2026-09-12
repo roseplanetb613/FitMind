@@ -122,6 +122,25 @@ def _is_question(text: str) -> bool:
     return any(k in text for k in _QUESTION)
 
 
+def _occurred_at(occurred: str) -> str:
+    """补录时间戳：**今天**的打卡用记录时刻，其余（昨天及更早）用当天 00:00 UTC。
+
+    缺陷（2026-09-12 实测）：原先一律拼 `T00:00:00+00:00`——那是**本地早上 8 点**
+    （UTC+8），于是"练完就打卡"的人 Δt 被凭空多算十几小时，恢复度**系统性高估**：
+    晚间 22:00 打完卡算出恢复 19%，按实际训练时刻应约 3%。
+
+    改为"今天 → 记录时刻"的理由：
+      1. 多数人是**练完就打卡**，记录时刻是对"何时练的"最好的免费估计
+      2. 万一错（"今天早上练的"晚上才补录），偏的方向是**更疲劳 → 更保守**，
+         比现在偏"已恢复"安全
+    日期部分不变（都是今天），故按日期查询（"我啥时候练的核心"）不受影响。
+    更好的是从话里抽时间（"今天早上/晚上"），属文本抽取新工作，暂不做。"""
+    today = datetime.now(timezone.utc).date().isoformat()
+    if occurred == today:
+        return datetime.now(timezone.utc).isoformat()
+    return f"{occurred}T00:00:00+00:00"
+
+
 def _norm_exercise(text: str):
     """动作回归一：search_zh 命中返回名称；无命中 None（宁缺毋滥）。"""
     try:
@@ -591,7 +610,7 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                     user_id, "checkin",
                     {"about": cmd["about"] or "", "verb": cmd["verb"],
                      "items": cmd.get("items", [])},
-                    occurred_at=f"{cmd['occurred']}T00:00:00+00:00",
+                    occurred_at=_occurred_at(cmd["occurred"]),
                     muscles=m.muscles_of_exercises(names) if names else None,
                     # 角色随边落库（2026-09-11）：per-muscle 负荷加权需要区分
                     # 主动肌与协同肌，否则"练了卧推"会把胸/三头/三角等权记账

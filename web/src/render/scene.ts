@@ -20,6 +20,20 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     const id = child.userData.muscleId as string | undefined
     if (!id) continue
     const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial
+    // 非骨骼肌块（心脏）走**自己的一套固定呈现**，不参与恢复度色轴。
+    // 理由见 NON_MUSCLE_COLOR 的说明 —— 后端给它的是 null，走 palette(null)
+    // 会得到"线框 + 0.047 不透明度"，实际上完全看不见。
+    if (child.userData.style === 'non-muscle') {
+      mat.color.set(NON_MUSCLE_COLOR)
+      mat.emissive.set(NON_MUSCLE_EMISSIVE)
+      mat.emissiveIntensity = NON_MUSCLE_EMISSIVE_INTENSITY
+      mat.wireframe = false // **必须显式关掉**：recovery=null 会让它看起来"未知"
+      mat.opacity = NON_MUSCLE_OPACITY
+      mat.transparent = NON_MUSCLE_OPACITY < 1
+      mat.needsUpdate = true
+      continue
+    }
+
     // 统一走 muscleState（types.ts 的单源归一入口），使"缺键 / 显式 null / 有记录"
     // 三种情形只有一个判据。注意：本行的 `&&` 短路已经能兜住缺键的 undefined，
     // 所以这里不是非它不可——不依赖那个巧合才是理由。
@@ -30,16 +44,10 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     mat.emissive.set(entry.emissive)
     mat.emissiveIntensity = entry.emissiveIntensity
     mat.wireframe = entry.style === 'wireframe'
-    // spec §4.4：心脏块用半透明外壳与骨骼肌在视觉上区分。
-    // **必须在这里乘系数**——palette 对任何有限 recovery 都给 opacity: 1。
-    const nonMuscle = child.userData.style === 'non-muscle'
     const wire = entry.style === 'wireframe'
     const base = entry.opacity * MUSCLE_OPACITY
     // 线框态垫下限：见 WIREFRAME_OPACITY_FLOOR 的说明（§5.4 的硬要求，不是观感）
-    // 非肌肉块乘在**同一个基数**上，才会始终比骨骼肌更透（§4.4 的区分）
-    let opacity = nonMuscle
-      ? base * NON_MUSCLE_OPACITY_FACTOR
-      : (wire ? Math.max(base, WIREFRAME_OPACITY_FLOOR) : base)
+    let opacity = wire ? Math.max(base, WIREFRAME_OPACITY_FLOOR) : base
     // 按**不透明度**乘系数 —— 见 OPACITY_SCALE 的说明（方向别搞反）
     const oScale = OPACITY_SCALE[id]
     if (oScale !== undefined) opacity *= oScale
@@ -80,7 +88,9 @@ export function setHover(group: THREE.Group, id: string | null): void {
     const mid = child.userData.muscleId as string | undefined
     if (!mid) continue // 装饰 Group 无 muscleId：不参与高亮，也不会被当成悬停目标
     const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial
-    mat.color.set(mid === id ? HOVER_COLOR : BASE_COLOR)
+    // 还原必须写回**该块自己的**基色，不能写死 BASE_COLOR ——
+    // 否则悬停任意一块肌肉都会把心脏的红抹成灰（心脏的基色不是 BASE_COLOR）。
+    mat.color.set(mid === id ? HOVER_COLOR : blockColor(child.userData.style))
   }
 }
 
@@ -120,14 +130,38 @@ export const MUSCLE_OPACITY = 0.3
 export const WIREFRAME_OPACITY_FLOOR = 0.18
 
 /**
- * 非肌肉块（心脏）在**骨骼肌基数之上**再乘的系数。
+ * 非骨骼肌块（心脏）的呈现：**固定红 + 固定不透明度**，完全不参与恢复度色轴。
  *
- * **必须乘在 `MUSCLE_OPACITY` 之后**，不能直接写绝对值。原先写的是 `* 0.45`
- * （骨骼肌当年 opacit=1，0.45 < 1 所以更透）；而骨骼肌降到 0.3 之后，
- * 0.45 反而**比骨骼肌更不透明** —— spec §4.4 要求的区分被反过来了。
- * 实测就是被 scene.test.ts 那条相对断言抓到的。
+ * 为什么不再让它跟骨骼肌走同一条路（旧做法是乘一个 `NON_MUSCLE_OPACITY_FACTOR`）：
+ * 后端对 `cardio_system` 给的是 `null`（没有"心脏恢复度"这种东西），于是
+ * `palette(null)` → **线框态**，再加上 `0.35 × 0.3 × 0.45 ≈ 0.047` 的不透明度 ——
+ * 实测效果是**根本看不见**，用户报的就是这个。
+ *
+ * 语义上也确实是两条路：线框态的含义是"这块肌肉**恢复度未知**"，
+ * 而心脏不是一个恢复度未知的骨骼肌，它是一个形态与含义都不同的器官。
+ * 所以给它一套自己的固定呈现，spec §4.4「必须与骨骼肌可区分」由**色相**满足
+ * （原先靠"更透明"，几乎等于没有区分度）。
+ *
+ * ⚠ 取舍：红偏离了原设计"避开红绿"的色觉友好原则（见 palette.ts）。心脏与
+ * 恢复度色轴（蓝 ↔ 金）的色相差足够大，且还有标签与位置两条冗余线索，
+ * 故接受。这是用户在看过实际效果后明确要求的。
  */
-export const NON_MUSCLE_OPACITY_FACTOR = 0.45
+export const NON_MUSCLE_COLOR = '#d93a2b'
+/** 心脏的自发光：暗红，让它在透明肌肉里透出来（与整体自发光风格一致）。 */
+export const NON_MUSCLE_EMISSIVE = '#6e1008'
+export const NON_MUSCLE_EMISSIVE_INTENSITY = 0.85
+/** 心脏的不透明度。**不能是 1** —— 用户要的是"带不透明度"，要能透出它在胸腔里。 */
+export const NON_MUSCLE_OPACITY = 0.85
+
+/**
+ * 一块肌肉的**基色**。
+ *
+ * `applyStates` 与 `setHover` 都必须走这里。`setHover` 会把所有**未被悬停**的块
+ * 写回"基色"——那里若写死 `BASE_COLOR`，悬停任意一块肌肉都会把心脏的红抹成灰。
+ */
+export function blockColor(style: string | undefined): string {
+  return style === 'non-muscle' ? NON_MUSCLE_COLOR : BASE_COLOR
+}
 
 /**
  * 特定肌群的**不透明度**系数。

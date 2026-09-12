@@ -55,8 +55,13 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
  *
  * 与 applyStates 一样**只改材质、不重建**。整组重算（幂等），不保留"上一个悬停"，
  * 因此与调用顺序无关：applyStates 之后再调本函数、或反过来，结果都一样。
- * 残留风险（无头环境测不到）：高亮期间那一块的基色变亮，理论上可能被读成
- * "恢复度更高"；靠悬停态同时带来的标签加粗/上浮来消歧（见 labels.setHovered）。
+ * 残留风险（无头环境测不到，属设计取舍）：
+ *  (a) 高亮期间那一块的基色变亮，理论上可能被读成"恢复度更高"；靠悬停态同时带来的
+ *      标签加粗/上浮来消歧（见 labels.setHovered）。
+ *  (b) **自发光强的块上悬停反馈可能偏弱**：|t| 大时渲染亮度主要来自自发光
+ *      （emissive × emissiveIntensity），基色那点提亮在总亮度里占比变小，
+ *      于是"未知块（自发光恒 0、全靠基色）"上的高亮反而最明显。基色是唯一能同时
+ *      照亮已知/未知两种状态的通道，这是走这条路的已知代价，不是可以顺手修掉的 bug。
  */
 export function setHover(group: THREE.Group, id: string | null): void {
   for (const child of group.children) {
@@ -65,6 +70,30 @@ export function setHover(group: THREE.Group, id: string | null): void {
     const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial
     mat.color.set(mid === id ? HOVER_COLOR : BASE_COLOR)
   }
+}
+
+/**
+ * NDC + 相机 → 命中的 muscleId（点选与悬停共用同一套判定）。
+ *
+ * **第三个参数必须是 `false`（非递归）。** body.children 里除了 50 块肌肉还有一个
+ * scenery 装饰 Group，它内部的 mesh **没有** muscleId。递归遍历时首个命中往往就是
+ * 这类装饰块 → `userData.muscleId` 是 undefined → 这里返回 null → 悬停/点选在
+ * 被装饰块挡住的方向上**静默失效**（改一个字符就能复现，见 tests/pick.test.ts 的
+ * 逐格实测：俯视机位改判 24%，正面只有 0.7%——正/背面人工验收看不出来）。
+ * 这与 labels.update 里那条遮挡剔除的非递归要求同源，理由都写在 scenery.ts 的模块注释。
+ *
+ * `raycaster` / `ndc` / `camera` 由调用方传入并复用：交互期本函数调用频繁，
+ * 没必要每次新建三个对象。
+ */
+export function pickMuscleId(
+  body: THREE.Group,
+  raycaster: THREE.Raycaster,
+  ndc: THREE.Vector2,
+  camera: THREE.Camera,
+): string | null {
+  raycaster.setFromCamera(ndc, camera)
+  const hit = raycaster.intersectObjects(body.children, false)[0]
+  return (hit?.object.userData.muscleId as string | undefined) ?? null
 }
 
 /** 画布尺寸 → 渲染器尺寸与相机 aspect。抽出来是为了能在 node 里测（无需 GPU）。

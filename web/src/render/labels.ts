@@ -96,6 +96,9 @@ export interface LabelLayer {
   setFocused(id: string | null): void
   /** 把真实键盘焦点移到该 id 的标签上（只动焦点，不动 roving 状态） */
   focusElement(id: string): void
+  /** el 是本层的标签时才 blur 它。焦点已经不在本层时（例如用户 Tab 到了工具栏按钮）
+   *  必须什么都不做——blur() 会把键盘焦点丢回 body，焦点环消失，读屏用户丢失位置。 */
+  blurIfOwned(el: HTMLElement | null): void
   update(camera: THREE.PerspectiveCamera, size: { w: number; h: number }): void
   dispose(): void
 }
@@ -113,6 +116,14 @@ export function createLabelLayer(
   root.className = 'label-layer'
   // 无障碍语义（spec §6.2 的键盘交互）：标签是一个可键盘遍历的列表。
   // role/aria 挂在**属性**上，供读屏与测试取用（样式与行为不依赖它们）。
+  //
+  // 为什么是 list/listitem 而不是 listbox/option：复合控件（listbox/grid）才自带
+  // "方向键在内移动、Tab 整体离开"的约定，而本组件的遍历键是 Tab（spec §6.2 明写）。
+  // 用 listbox 会让"用 Tab 在项间走"与角色承诺的交互互相矛盾；list/listitem 是**结构**
+  // 角色、不承诺任何键盘交互，所以与 Tab 遍历不冲突。选中项另外用 aria-current 暴露
+  // （见 setFocused），不让"当前是哪一块"只活在 CSS 类里。
+  // 若将来要改成真正的复合控件，那就是"方向键移动 + Tab 离开 + role=listbox/option"，
+  // 与本轮的 Tab 遍历语义互斥，需要连 spec §6.2 一起改。
   root.setAttribute('role', 'list')
   root.setAttribute('aria-label', '肌群恢复状态')
   container.appendChild(root)
@@ -171,10 +182,17 @@ export function createLabelLayer(
       for (const it of items) {
         it.el.classList.toggle('is-focused', it.id === id)
         it.el.setAttribute('tabindex', it.id === entry ? '0' : '-1')
+        // 选中态不能只活在 CSS 里：读屏用户听不出"焦点在这条"与"选中了这条"的差别。
+        // 用 aria-current（aria-selected 在 listitem 上无效），"false" 是它的标准
+        // 非当前值，比 removeAttribute 少一条分支。
+        it.el.setAttribute('aria-current', it.id === id ? 'true' : 'false')
       }
     },
     focusElement(id): void {
       elById.get(id)?.focus()
+    },
+    blurIfOwned(el): void {
+      if (el && idByEl.has(el)) el.blur()
     },
     update(camera, size): void {
       for (const it of items) {

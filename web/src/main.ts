@@ -1,7 +1,7 @@
 // `vite/client` 声明 `*.css` 等副作用导入模块。tsconfig 未设 `types`（那会顺带
 // 关掉其它自动 @types 收录），故在此就地引一次——否则 `import './styles.css'`
-// 报 TS2882 "Cannot find module ... for side-effect import"。没有它就得新增
-// src/vite-env.d.ts，而本任务的交付面刻意只有 3 个 web 文件。
+// 报 TS2882 "Cannot find module ... for side-effect import"；没有它就得新增一个
+// src/vite-env.d.ts 来承担同一件事。
 /// <reference types="vite/client" />
 import * as THREE from 'three'
 import './styles.css'
@@ -10,7 +10,8 @@ import { loadInto, type LoadTarget } from './data/load'
 import type { MuscleMapSource } from './data/source'
 import { muscleState, resolveLabel, type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
-import { applyStates, createScene, framingFor, setHover } from './render/scene'
+import { createScene, framingFor, pickMuscleId, setHover } from './render/scene'
+import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
@@ -28,24 +29,22 @@ const labelsEl = document.querySelector<HTMLElement>('#labels')!
 createLegend(legendEl)
 const notice = createLoadErrorNotice(legendEl)
 
-// 标签名走 resolveLabel：labels 降级成 {} 时回落显示 id，不丢块（spec §3.3）
 let latest: MuscleMapData | null = null
+// 名称与数值分开：latest 是数值（失败必须作废），names 是名称（失败保留，
+// 于是失败态的标签仍是中文名 + "无记录"，见 wiring.ts 的 createLabelNames）
+const names = createLabelNames()
 // "当前是哪一块肌肉"的两个瞬时维度，都只影响"看哪一块"，不参与材质里的恢复语义：
 //   hovered —— 指针指着的那块（悬停高亮）
 //   focused —— 键盘 Tab / 点选选中的那块（详情浮层 + roving tabindex 跟着它）
 let hovered: string | null = null
 let focused: string | null = null
-const labels = createLabelLayer(
-  labelsEl,
-  handle.body,
-  (id) => (latest ? resolveLabel(latest.labels, id) : id),
-)
+const labels = createLabelLayer(labelsEl, handle.body, (id) => names.resolve(id))
 /** 键盘遍历顺序 = 标签顺序（就是那 28 个 id） */
 const ids = labels.ids()
 
 // 指针坐标 → 命中的 muscleId。点选与悬停共用这一套换算，避免两份 NDC 公式漂移。
+// 射线判定本身在 scene.ts 的 pickMuscleId（**必须非递归**，理由与实测数字见那里）。
 //
-// **非递归遍历（第三个参数 false）是硬性要求**，理由见 scenery.ts 模块注释。
 // 另注：Raycaster 依赖 matrixWorld，而 build() 返回的 Group 在加入场景并渲染前
 // 不会自动更新矩阵。这里没有问题（用户交互时渲染循环已跑过多帧），但若将来
 // 改成"首帧渲染前就做射线判定"，必须先 updateMatrixWorld(true)，否则所有 mesh
@@ -58,9 +57,7 @@ function pickAt(clientX: number, clientY: number): string | null {
     ((clientX - rect.left) / rect.width) * 2 - 1,
     -((clientY - rect.top) / rect.height) * 2 + 1,
   )
-  raycaster.setFromCamera(ndc, handle.camera)
-  const hit = raycaster.intersectObjects(handle.body.children, false)[0]
-  return (hit?.object.userData.muscleId as string | undefined) ?? null
+  return pickMuscleId(handle.body, raycaster, ndc, handle.camera)
 }
 
 /** 详情浮层：跟着 focused 走。数据未就绪（失败后 latest 为 null）就不展示。 */
@@ -125,7 +122,9 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return
   if (focused !== null) {
     select(null)
-    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    // blurIfOwned：焦点已经不在标签层里（Tab 到工具栏按钮后按 Esc 就会这样——
+    // 那时 atEdge 已经放手、focused 却还留着）时不许动它，否则键盘焦点被丢回 body。
+    labels.blurIfOwned(document.activeElement as HTMLElement | null)
   }
   hideDetail(detailEl)
 })
@@ -146,30 +145,25 @@ document.querySelectorAll<HTMLButtonElement>('#toolbar button').forEach((b) => {
 
 // loader 以 **MuscleMapSource 接口**为形参（不是具体的 ApiSource）——
 // 这是那个接口唯一的兑现点：测试/故事书可以注入假实现而无需 stub fetch。
-// 加载逻辑本身在 data/load.ts，它只认下面这个 LoadTarget，因此失败路径能在
-// node 里断言（main.ts 依赖 DOM + WebGL，自己测不到）。
-const target: LoadTarget = {
-  applyStates: (data) => {
-    applyStates(handle.body, data)
-    // applyStates 把基色写回 palette 的常量，会抹掉悬停高亮；每 60s 一次的刷新
-    // 之后重放当前悬停，否则鼠标不动的话高亮要等下一次 pointermove 才回来。
-    setHover(handle.body, hovered)
-  },
-  setLabels: (states) => {
-    labels.setStates(states)
-    showDetailFor(focused) // 详情跟着新数据走，不留在上一轮的数值上
-  },
-  showError: (message) => notice.show(message),
-  clearError: () => notice.clear(),
+// 加载流程在 data/load.ts、它的下游装配在 wiring.ts，两者都只认接口/依赖对象，
+// 因此成功与失败两条路径都能在 node 里断言（main.ts 依赖 DOM + WebGL，自己测不到）。
+const target: LoadTarget = createLoadTarget({
+  body: handle.body,
+  labels,
+  notice,
+  // getter：重放高亮时要读"此刻"的悬停，不是装配时的快照
+  getHovered: () => hovered,
   setLatest: (data) => {
     latest = data
+    names.update(data) // 名称：失败保留、成功替换（见 createLabelNames）
     if (data === null) {
       // 数据作废 → 已打开的详情浮层同步撤下并清掉选中态。不清的话浮层还挂着
       // 上一轮的数值，与刚置为未知的材质/标签在同一屏上互相打架。
       select(null)
     }
   },
-}
+  afterLabels: () => showDetailFor(focused), // 详情跟着同一轮新数据走，不留在上一轮的数值上
+})
 
 const source: MuscleMapSource = new ApiSource(uid, days)
 setInterval(() => void loadInto(source, days, target), 60_000)

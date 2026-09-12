@@ -40,10 +40,11 @@ export interface LoadTarget {
  *
  * `emptyMap` 给的是**缺键**而非 null 值，muscleState 把两者一并归一（见 types.ts）。
  *
- * 顺序是有意的：先 `setLatest(null)`，下游（main.ts）会在那一刻撤下已打开的详情浮层
- * 并清掉"当前选中"。这样随后 applyStates/setLabels 再跑时，选中已经是空的——
- * 否则 setLabels 会拿"还没清掉的选中 + 还没作废的 latest"把浮层又填回旧数值，
- * 再被 setLatest(null) 关掉（一帧的闪烁）。
+ * 失败分支里 `setLatest(null)` 必须排在最前：下游（main.ts）会在那一刻撤下已打开的
+ * 详情浮层并清掉"当前选中"，于是随后 applyStates/setLabels 跑的时候选中已经是空的，
+ * 不会拿"还没清掉的选中 + 还没作废的 latest"把浮层又按旧数值重画一遍。
+ * 注意这不是"可见闪烁"——这四行在同一个同步任务里，中间不会有绘制帧；要避免的是
+ * 那次**中间态 DOM 写入**本身（load.test.ts 的 seq 断言把它钉住）。
  */
 export async function loadInto(
   source: MuscleMapSource,

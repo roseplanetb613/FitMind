@@ -13,6 +13,10 @@ export function labelText(name: string, state: MuscleState | null): string {
  * 按 muscle_id 聚合体块：成对肌群（quadriceps 有 L/R 两块）合成一组，
  * 否则 28 组会变成 50 条标签（两块同色同值，重复标签只是噪声）。
  * 无 muscleId 的子节点（scenery 装饰 Group）被剔除——它们不参与肌群语义。
+ *
+ * **只遍历 `body.children`（单层）**，与 `update()` 里的非递归判定无关：
+ * 即便把 scenery 的 6 个装饰 mesh 平铺进 body（去掉那层 Group），本函数
+ * 仍然只给出 28 组——"scenery 必须是 Group"是 `intersectObjects` 的约束，不是这里的。
  */
 export function groupByMuscleId(body: THREE.Group): Map<string, THREE.Mesh[]> {
   const byId = new Map<string, THREE.Mesh[]>()
@@ -30,6 +34,10 @@ export function groupByMuscleId(body: THREE.Group): Map<string, THREE.Mesh[]> {
  * 所以当前局部坐标 == 世界坐标；将来若给 body 加位移/缩放，这里要改读
  * `getWorldPosition()`，否则标签会错位。
  * 返回新向量（不与任何 mesh.position 别名——那向量是几何真源，原地改写会挪动模型）。
+ *
+ * 前提：`meshes` 非空。空数组会走 `divideScalar(0)` 得到 NaN 锚点（静默：标签
+ * 只是投影到 NaN、挪出画面）。当前唯一调用方 `groupByMuscleId` 的每组至少 1 块，
+ * 故不可达——本函数不做兜底，避免让"空组"这条真错误被一个默认值掩盖。
  */
 export function anchorFor(meshes: THREE.Mesh[]): THREE.Vector3 {
   const anchor = new THREE.Vector3()
@@ -105,10 +113,13 @@ export function createLabelLayer(
         // `muscleId`——但"没有 muscleId"**并不足以**让它们不被命中：递归遍历会命中它们，
         // 于是下面这行 `muscleId !== it.id`（undefined !== 'quadriceps'）恒为 true，
         // **所有标签会一起被判为被遮挡、整屏变暗**。见 scenery.ts 的模块注释。
+        // 这个后果是**相机相关**的（实测把 false 改成 true）：俯视 (0,5,0.001) 最明显
+        // ——28/28 全暗；背面 (0,1,-3) 只差 1 条（{1:10,0.28:18} → {1:9,0.28:19}）；
+        // 正面 (0,1,3) **零差异**（都是 {1:17,0.28:11}）。即正/背面人工验收看不出这个回归
+        // ——tests/label-layer.test.ts 用俯视那条把它钉住。
         //
-        // 另注：`hits.some(...)` 里"命中物不是自己"就当作遮挡，这对同 id 的
-        // 左右两块（quadriceps 的 L/R）也成立——即看左腿时右腿会挡住左腿的标签。
-        // 当前可接受（两块同色同值，读哪个都一样），但若将来改成分侧数据需要重新审视。
+        // 另注：同 id 的命中已被上面的 `!==` 排除，所以成对肌群的左右两块
+        // **不会**互相遮挡；锚点落在两块中间，遮挡只可能来自**其它** id 的块。
         origin.copy(camera.position)
         dir.copy(it.anchor).sub(origin)
         raycaster.far = Math.max(dir.length() - 0.02, 0)

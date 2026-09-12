@@ -4,9 +4,8 @@ import type { MuscleState } from '../data/types'
 /** 标签文案（纯函数，可单测）。星号 = 按次数估算，图例里解释。 */
 export function labelText(name: string, state: MuscleState | null): string {
   if (!state || !state.has_record) return `${name} 无记录`
-  const pct = Math.round(state.recovery * 100)
   const star = state.confidence === 'low' ? '*' : ''
-  return `${name} ${pct}%${star}`
+  return `${name} ${state.pct}%${star}`
 }
 
 /**

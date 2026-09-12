@@ -55,6 +55,7 @@ def create_app() -> FastAPI:
         契约与 `web/src/data/types.ts` **一一对应**（改一处须改两处）：
           · `muscles` 为**定长 28 项**，无记录显式 `null`（**不是缺键**）
           · `describe` 由后端 `recovery.describe` 算好（措辞单源，前端只显示）
+          · `pct` 也由后端算好，且与 `describe` **同口径**（下方注释）
           · 降级（图谱不可用）→ **200 + degraded=true + 全 null**，不是错误——
             前端据此画未知态，与"没有记录"同样处理
           · `labels` 降级时可为 {}，前端回落显示 muscle_id（不得因缺标签丢块）
@@ -79,7 +80,19 @@ def create_app() -> FastAPI:
             raw = recovery.recovery_map(m.muscle_load_map(user_id, days=days), now)
             # describe 由后端算好（措辞单源：含"约"与非精确口吻、低置信标注），
             # 前端只显示——契约 web/src/data/types.ts 明确要求该字段
-            states = {mid: {**st, "describe": recovery.describe(mid, st)}
+            #
+            # pct 同理，也由后端算好（整数百分比的**单源**）：下面这行必须与
+            # `recovery.describe()` 里那行**逐字同口径**——Python 的 round() 是
+            # half-even、JS 的 Math.round 是 half-up，0.245 会得出 24 vs 25。
+            # 前端标签此前自己 Math.round，导致同一屏上标签 25% 而详情 24%
+            # （实测 0.245 命中的正是 latissimus_dorsi / trapezius / upper_back）。
+            # tests/test_muscle_map_api.py 把两者钉在一起：
+            # test_pct_matches_describe（一般值）+ test_pct_tie_is_half_even（平局值
+            # 0.245 → 24；上面那条对非平局值恒真，只有这条能发现口径漂移）。
+            # 前端 labels.test.ts 的"平局值不漂"那条守着另一侧。
+            states = {mid: {**st,
+                            "pct": int(round(float(st.get("recovery", 1.0)) * 100)),
+                            "describe": recovery.describe(mid, st)}
                       for mid, st in raw.items()}
         except Exception:
             return {**base, "muscles": {mid: None for mid in ids},

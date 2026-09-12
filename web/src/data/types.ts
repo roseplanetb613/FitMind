@@ -7,6 +7,10 @@ export interface MuscleState {
   has_record: boolean
   /** 措辞单源：后端用 recovery.describe() 算好，前端只显示（spec §5.3） */
   describe: string
+  /** 整数百分比，**由后端算好**（与 describe 同口径）。
+   *  前端**不得**自己 Math.round —— Python 的 round() 是 half-even、JS 是 half-up，
+   *  0.245 会得出 24 vs 25，导致同一屏上标签与详情矛盾。 */
+  pct: number
 }
 
 export interface MuscleMapData {

@@ -2,8 +2,11 @@
 //
 // 语义（spec §5）：基色固定中性、不参与语义；语义走自发光。
 // 以 0.5 为零线沿 蓝↔琥珀 轴发散——这条轴与红绿轴不重叠，红绿色盲（最常见色觉障碍）仍可区分。
-// 亮度跨整条轴单调不减（32 → 50 → 64），所以即使完全丢色相（极端色盲、黑白截图），
-// 信息也不丢：亮 = 恢复好，与 2D 图同向。
+// 亮度**字段**（lightness）跨整条轴单调不减（32 → 50 → 64），是叠在色相上的冗余通道。
+// 注意：实际渲染亮度 = 受光基色 + emissive×emissiveIntensity，后者随 |t| 增长、
+// **在零线归零**，故整条轴上的渲染亮度并非单调（1.0 > 0.0 > 0.5）。
+// 也就是说：黑白截图**不能**用来排序恢复度——这是本设计的已知性质，不是缺陷。
+// 对红绿色盲的有效性由蓝↔琥珀轴承担，不依赖亮度单调。
 //
 // 暴露 hue/saturation/lightness 是为了让 tests/palette.test.ts 能精确断言，
 // 而不是去解析 hex 字符串。
@@ -15,6 +18,8 @@ export interface PaletteEntry {
   emissiveIntensity: number
   opacity: number
   style: 'solid' | 'wireframe'
+  /** 未知态（style === 'wireframe'）时下面三个轴字段无意义——
+   *  消费方必须检查 style 或 hue === null，不得直接读 lightness 做色阶。 */
   hue: number | null
   saturation: number
   lightness: number

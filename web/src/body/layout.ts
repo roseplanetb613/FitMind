@@ -4,7 +4,8 @@
 // 真实身高差异不进几何——这是可视化，不是人体测量。
 //
 // 摆位值是**设计判断**（让图好读），不是解剖学测量值；调整它们是正常的。
-// tests/layout.test.ts 的包围盒断言只负责防止手滑打错数量级。
+// tests/layout.test.ts 的包围盒断言分两层：全局 min/max 只防「放大 / 位置飞出人体」；
+// 逐块自查另防非正尺寸与单块越界。但「体块单纯缩小、仍留在人体包络内」两层都抓不到。
 
 export type Side = 'L' | 'R' | 'C'
 export type Shape = 'capsule' | 'ellipsoid' | 'box'
@@ -15,7 +16,9 @@ export interface PartSpec {
   shape: Shape
   pos: Vec3
   rot?: Vec3
-  /** 半尺寸：盒体取全宽/2，胶囊取半径，椭球取三轴半径 */
+  /** 半尺寸：pos ± scale 即该体块的 AABB。
+   *  box: 三轴半边长；ellipsoid: 三轴半径；capsule: x/z 为半径、y 为含端帽的半高
+   *  （故圆柱段长度 = 2*(scale.y - scale.x)）。 */
   scale: Vec3
   /** 'non-muscle' 用半透明外壳，与骨骼肌在视觉上区分（spec §4.4） */
   style?: 'muscle' | 'non-muscle'
@@ -61,13 +64,19 @@ export const MIDLINE: PartSpec[] = [
   { id: 'upper_back', shape: 'box', pos: [0, 1.4, -0.09], scale: [0.115, 0.11, 0.04] },
   { id: 'core', shape: 'box', pos: [0, 1.12, 0.0], scale: [0.1, 0.14, 0.085] },
   { id: 'rectus_abdominis', shape: 'box', pos: [0, 1.14, 0.055], scale: [0.075, 0.13, 0.035] },
-  // 心脏在躯干内部，靠 scene.ts 的 depthWrite:false + renderOrder 透出来（spec §4.4）
+  // 心脏在躯干内部，由非肌肉材质透出（spec §4.4）
   { id: 'cardio_system', shape: 'ellipsoid', pos: [0, 1.37, 0.02], scale: [0.055, 0.06, 0.05], style: 'non-muscle' },
 ]
 
-/** 左侧 → 右侧：X 取反，其余不变。 */
+/** 左侧 → 右侧：x → −x；rot 欧拉角按 (x, −y, −z) 镜像（与 three.js 默认 XYZ 序一致）。
+ *  反射 x→−x 即 S·R·S⁻¹（S = diag(−1,1,1)），故 rx 不变、ry/rz 取反；
+ *  该映射对欧拉顺序不敏感（XYZ 与 ZYX 序均已数值验证）。 */
 export function mirror(p: PartSpec): PartSpec {
-  return { ...p, pos: [-p.pos[0], p.pos[1], p.pos[2]] as Vec3 }
+  return {
+    ...p,
+    pos: [-p.pos[0], p.pos[1], p.pos[2]] as Vec3,
+    ...(p.rot ? { rot: [p.rot[0], -p.rot[1], -p.rot[2]] as Vec3 } : {}),
+  }
 }
 
 /** 22 成对 × 2 + 6 中轴 = 50 个体块。 */

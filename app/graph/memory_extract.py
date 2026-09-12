@@ -10,7 +10,7 @@ injury 新建/失效/续期由 guard_skill 承接（EX-01/02，见 test_memory_g
 from __future__ import annotations
 import re
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from lib.negation import has_negation, negated_at, negated_prefix  # 否定原语单源
 from lib.parts import PART_CHARS as _PART_CHARS, PART_WORDS as _PART_WORDS
@@ -29,6 +29,14 @@ _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六
                ("昨天", 1), ("前天", 2), ("上个月", 30), ("上周", 7),
                ("今天", 0))
 _EVENT_VERB = ("练了", "练", "做了", "跑了", "练过")
+# 力量动作的**完成态**动词（2026-09-12）：系统自己的核心词汇就是推/拉/腿，而原表只有
+# 练/做/跑 → "拉了引体向上"/"推了卧推"/"蹲了深蹲"/"举了杠铃" 被**整句静默丢弃**
+# （用户认真打卡、系统当没看见，图上毫无变化）。实测用户原句
+# "我昨天晚上六点拉了4x8的引体向上" → extract() == []。
+# 取两字完成态而非裸"拉/推"：裸单字太宽（"拉肚子"/"推不开"），完成态安全得多。
+# 残余风险（"昨天拉了一天肚子"含"拉了"）由下方**严格护栏**兜住：这类动词要求
+# 至少一个条目能检索命中动作，否则整句不记（宁缺毋滥）。
+_EVENT_VERB_STRICT = ("拉了", "推了", "蹲了", "举了", "划了", "跳了", "游了", "骑了")
 # 否定否决（2026-09-11）："不练三头"里含"练"，此前与"练了三头"抽出**完全相同**的
 # checkin → 否定句被记成正向训练记录 → 48h 疲劳联动据此给推日减量（假减量）。
 # 词表与判定原语已下沉 lib/negation.py（单源）——本处只用"动词前短窗口"语义。
@@ -122,23 +130,59 @@ def _is_question(text: str) -> bool:
     return any(k in text for k in _QUESTION)
 
 
-def _occurred_at(occurred: str) -> str:
-    """补录时间戳：**今天**的打卡用记录时刻，其余（昨天及更早）用当天 00:00 UTC。
+# 时段词 →（代表小时，本地）。"晚" 不单独收（"晚会""晚点"易误伤）
+_TIME_PERIOD = (("凌晨", 5), ("清晨", 6), ("早上", 7), ("早晨", 7), ("上午", 10),
+                ("中午", 12), ("下午", 15), ("傍晚", 18), ("晚上", 19), ("夜里", 21))
+_CN_HOUR = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+            "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12}
+_HOUR_RE = re.compile(r"(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[点時时]")
 
-    缺陷（2026-09-12 实测）：原先一律拼 `T00:00:00+00:00`——那是**本地早上 8 点**
-    （UTC+8），于是"练完就打卡"的人 Δt 被凭空多算十几小时，恢复度**系统性高估**：
-    晚间 22:00 打完卡算出恢复 19%，按实际训练时刻应约 3%。
 
-    改为"今天 → 记录时刻"的理由：
-      1. 多数人是**练完就打卡**，记录时刻是对"何时练的"最好的免费估计
-      2. 万一错（"今天早上练的"晚上才补录），偏的方向是**更疲劳 → 更保守**，
-         比现在偏"已恢复"安全
-    日期部分不变（都是今天），故按日期查询（"我啥时候练的核心"）不受影响。
-    更好的是从话里抽时间（"今天早上/晚上"），属文本抽取新工作，暂不做。"""
+def _time_of_day(text: str) -> tuple[int, int] | None:
+    """从话里抽时间点：'晚上六点'→(18,0)、'下午3点半'→(15,30)、'早上'→(7,0)。
+
+    抽不到 → None（调用方用默认值）。**只抽明确说出的时间**，不猜。"""
+    t = text or ""
+    period = next(((h) for kw, h in _TIME_PERIOD if kw in t), None)
+    m = _HOUR_RE.search(t)
+    if m:
+        raw = m.group(1)
+        h = int(raw) if raw.isdigit() else _CN_HOUR.get(raw)
+        if h is not None and 0 <= h <= 24:
+            # 下午/晚上 + 12 以内 → 加 12（"晚上六点"→18；"中午十二点"保持 12）
+            if period is not None and period >= 12 and h < 12:
+                h += 12
+            return (h % 24, 30 if "半" in t else 0)
+    return (period, 0) if period is not None else None
+
+
+def _occurred_at(occurred: str, text: str = "") -> str:
+    """补录时间戳：**今天**用记录时刻；其余用话里的时间点，没有则用**当地正午**。
+
+    缺陷史（2026-09-12 实测）：
+      ① 原先一律拼 `T00:00:00+00:00`——那是**本地早上 8 点**（UTC+8），"练完就打卡"
+         的人 Δt 被凭空多算十几小时 → 恢复度**系统性高估**（22:00 打卡算出 19%，
+         按实际应约 3%）；
+      ② "昨天晚上六点拉了4x8的引体向上" 里的**时间点被完全忽略**——按 18:00 算背阔肌
+         13% 恢复，按 00:00Z 算 33%，**差 20 个点**。
+
+    今天 → 记录时刻：多数人练完就打卡，记录时刻是最好的免费估计；万一错（早上练的
+    晚上补录）偏的方向是**更疲劳 → 更保守**，比偏"已恢复"安全。
+    昨天及更早 → 话里的时间点（_time_of_day）；**没写时间时用当地正午**而非 00:00Z：
+    正午把"最坏偏差"从约 13 小时压到约 9 小时（实际训练多集中在晨/午/晚，正午到两端
+    各约 6-9h，而 08:00 到晚间训练差 10-13h）。
+    日期部分不变，故按日期查询（"我啥时候练的核心"）不受影响。"""
     today = datetime.now(timezone.utc).date().isoformat()
     if occurred == today:
         return datetime.now(timezone.utc).isoformat()
-    return f"{occurred}T00:00:00+00:00"
+    hh, mm = _time_of_day(text) or (12, 0)
+    try:
+        d = date.fromisoformat(occurred)
+    except ValueError:
+        return f"{occurred}T00:00:00+00:00"
+    local = datetime.now().astimezone().tzinfo or timezone.utc
+    return datetime(d.year, d.month, d.day, hh, mm,
+                    tzinfo=local).astimezone(timezone.utc).isoformat()
 
 
 def _norm_exercise(text: str):
@@ -335,7 +379,7 @@ def _event(text: str) -> dict | None:
     注：search_zh 对绝大多数输入返回带空格复合名（如 '腿'→'摆臂 悬垂 屈膝 腿'），
     存 raw 更保真；仅当归一为无空格单一名时才存 name。"""
     verb_hit = None
-    for v in _EVENT_VERB:
+    for v in _EVENT_VERB + _EVENT_VERB_STRICT:
         idx = text.find(v)
         if idx < 0:
             continue
@@ -346,11 +390,15 @@ def _event(text: str) -> dict | None:
         break
     if verb_hit is None:
         return None
+    # 严格护栏（仅新动词）：宽动词必须"至少一个条目检索命中动作"才记
+    # （拦"昨天拉了一天肚子"这类误抽；旧动词行为不变，向后兼容）
+    strict = verb_hit in _EVENT_VERB_STRICT
     time_hit = next(((n, d) for n, d in _EVENT_HINT if n in text), None)
     if time_hit is None:
         return None
     seg = text.split(verb_hit)[-1]
     items: list[dict] = []
+    resolved = False          # 是否有条目检索命中动作（严格护栏判据）
     for part in _EVENT_SPLIT.split(seg):
         part = part.strip(" 的了。，")
         if not part:
@@ -364,6 +412,8 @@ def _event(text: str) -> dict | None:
             continue
         it: dict = {}
         norm = _norm_exercise(namepart)
+        if norm:
+            resolved = True                # 检索命中（即使归一为带空格复合名也算）
         if norm and " " not in norm:
             it["name"] = norm              # 无空格干净归一名
         else:
@@ -373,6 +423,8 @@ def _event(text: str) -> dict | None:
         items.append(it)
     if not items:
         return None
+    if strict and not resolved:
+        return None      # 宽动词 + 无一条目命中动作 → 判为误抽，整句不记
     about = next((i["name"] for i in items if i.get("name")), None)
     today = datetime.now(timezone.utc).date()
     occurred = (today - timedelta(days=time_hit[1])).isoformat()
@@ -610,7 +662,7 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                     user_id, "checkin",
                     {"about": cmd["about"] or "", "verb": cmd["verb"],
                      "items": cmd.get("items", [])},
-                    occurred_at=_occurred_at(cmd["occurred"]),
+                    occurred_at=_occurred_at(cmd["occurred"], text),
                     muscles=m.muscles_of_exercises(names) if names else None,
                     # 角色随边落库（2026-09-11）：per-muscle 负荷加权需要区分
                     # 主动肌与协同肌，否则"练了卧推"会把胸/三头/三角等权记账

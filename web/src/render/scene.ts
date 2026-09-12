@@ -40,9 +40,9 @@ export function applyStates(group: THREE.Group, data: MuscleMapData): void {
     let opacity = nonMuscle
       ? base * NON_MUSCLE_OPACITY_FACTOR
       : (wire ? Math.max(base, WIREFRAME_OPACITY_FLOOR) : base)
-    // 按"透明度"乘系数（不是不透明度）—— 见 TRANSPARENCY_SCALE 的说明
-    const tScale = TRANSPARENCY_SCALE[id]
-    if (tScale !== undefined) opacity = 1 - (1 - opacity) * tScale
+    // 按**不透明度**乘系数 —— 见 OPACITY_SCALE 的说明（方向别搞反）
+    const oScale = OPACITY_SCALE[id]
+    if (oScale !== undefined) opacity *= oScale
     mat.opacity = opacity
     mat.transparent = mat.opacity < 1
     mat.needsUpdate = true
@@ -130,16 +130,17 @@ export const WIREFRAME_OPACITY_FLOOR = 0.18
 export const NON_MUSCLE_OPACITY_FACTOR = 0.45
 
 /**
- * 特定肌群的**透明度**系数（不是不透明度）。
+ * 特定肌群的**不透明度**系数。
  *
- * `1` = 不变；`0.7` = 透明度变成原来的 70%，即**更不透明**。
- * 换算：`opacity = 1 - (1 - base) * scale`。
- * 例：base 0.30、scale 0.7 → 透明度 70%→49%、opacity 0.30→0.51。
+ * `1` = 不变；`0.7` = 不透明度变成原来的 70%，即**更透**。
+ * 例：base 0.30 × 0.7 = 0.21。
  *
- * 为什么写成"透明度系数"而不是直接给 opacity：调用方说的是"透明度的 70%"，
- * 直接改 opacity 会让语义在换算里丢失（且 opacity 与透明度的方向相反，容易改反）。
+ * ⚠ 命名：初版叫 `TRANSPARENCY_SCALE` 并写成 `1-(1-base)*scale`（按"透明度"
+ * 算），方向是反的 —— 0.3 会变成 0.51（更实）而不是 0.21（更透）。
+ * 用户要的是**不透明度**乘系数。名字留"transparency"会让人继续踩这个反向坑，
+ * 故改名为 OPACITY_SCALE 并直接乘。
  */
-export const TRANSPARENCY_SCALE: Record<string, number> = {
+export const OPACITY_SCALE: Record<string, number> = {
   core: 0.7,
   obliques: 0.7,
 }

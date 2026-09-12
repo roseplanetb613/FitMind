@@ -165,11 +165,65 @@ export function pickMuscleId(
   ndc: THREE.Vector2,
   camera: THREE.Camera,
 ): string | null {
+  return musclesUnderCursor(body, raycaster, ndc, camera)[0] ?? null
+}
+
+/**
+ * 射线沿线上**所有**肌群，按由近及远去重。
+ *
+ * 为什么要它：真实解剖是**分层**的，深层肌肉被浅层盖住，射线永远只打得到最前面那块。
+ * 实测腹直肌就是这种情况 —— 腹外斜肌的**腱膜**（腹直肌鞘前层）在解剖上就覆盖在它前面，
+ * 所以从正面点肚子拿到的全是 `obliques`（x 扫描 9 个采样点里 8 个如此，中线那个是 `core`）。
+ * 这不是 bug，是"深层结构点不到"。配合 `nextPickIndex` 让同一点重复点击依次深入。
+ */
+export function musclesUnderCursor(
+  body: THREE.Group,
+  raycaster: THREE.Raycaster,
+  ndc: THREE.Vector2,
+  camera: THREE.Camera,
+): string[] {
   raycaster.setFromCamera(ndc, camera)
   // 非递归（第三个参数 false）**且只打可交互 mesh** —— 两个条件都不可省，
   // 理由分别见本函数上方与 scenery.ts / load-model.ts 的模块注释。
-  const hit = raycaster.intersectObjects(interactiveMeshes(body), false)[0]
-  return (hit?.object.userData.muscleId as string | undefined) ?? null
+  const hits = raycaster.intersectObjects(interactiveMeshes(body), false)
+  const out: string[] = []
+  for (const h of hits) {
+    const id = h.object.userData.muscleId as string | undefined
+    if (id && !out.includes(id)) out.push(id) // 同一 id 的多个面只算一次
+  }
+  return out
+}
+
+/** 上一次点选的位置与列表。**原地再点一下 = 往深一层。** */
+export interface PickState {
+  x: number
+  y: number
+  ids: string[]
+  index: number
+}
+
+/**
+ * 「再点一下往深一层」的决策（纯函数，可单测）。
+ *
+ * 同一个屏幕位置、同一串候选 → 序号 +1 并回绕；否则重新从最前面那块开始。
+ * 位置容差是因为人手不可能点在同**一个**像素上。
+ */
+export function nextPickIndex(
+  prev: PickState | null,
+  x: number,
+  y: number,
+  ids: string[],
+  tol = 6,
+): PickState {
+  if (!ids.length) return { x, y, ids, index: -1 }
+  const same =
+    prev !== null &&
+    Math.abs(prev.x - x) <= tol &&
+    Math.abs(prev.y - y) <= tol &&
+    prev.ids.length === ids.length &&
+    prev.ids.every((v, i) => v === ids[i])
+  const index = same ? (prev!.index + 1) % ids.length : 0
+  return { x, y, ids, index }
 }
 
 /** 画布尺寸 → 渲染器尺寸与相机 aspect。抽出来是为了能在 node 里测（无需 GPU）。

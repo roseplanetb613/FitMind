@@ -77,3 +77,11 @@ html, body {
 }
 #toolbar .toggle:hover { background: #263039; }
 #toolbar .toggle input { accent-color: #4a90d9; cursor: pointer; }
+
+/* “还压着 N 块更深的肌群，再点一下” —— 深层肌肉点不到的提示（见 main.ts） */
+.depth-hint {
+  position: absolute; left: 18px; top: 64px;
+  background: rgba(20, 26, 33, .92); color: #9aa6b2;
+  border: 1px solid #2f3944; border-radius: 6px;
+  padding: 5px 10px; font-size: 11px; display: none;
+}

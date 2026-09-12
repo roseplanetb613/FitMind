@@ -11,7 +11,7 @@ import type { MuscleMapSource } from './data/source'
 import { fetchPicks } from './data/exercises'
 import { type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
-import { createScene, framingFor, pickMuscleId, setHover } from './render/scene'
+import { createScene, framingFor, musclesUnderCursor, nextPickIndex, pickMuscleId, setHover, type PickState } from './render/scene'
 import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
@@ -70,12 +70,16 @@ applyLabelVisibility()
 const raycaster = new THREE.Raycaster()
 const ndc = new THREE.Vector2()
 
-function pickAt(clientX: number, clientY: number): string | null {
+function ndcFor(clientX: number, clientY: number): void {
   const rect = canvas.getBoundingClientRect()
   ndc.set(
     ((clientX - rect.left) / rect.width) * 2 - 1,
     -((clientY - rect.top) / rect.height) * 2 + 1,
   )
+}
+
+function pickAt(clientX: number, clientY: number): string | null {
+  ndcFor(clientX, clientY)
   return pickMuscleId(handle.body, raycaster, ndc, handle.camera)
 }
 
@@ -95,15 +99,48 @@ const detailFlow = createDetailFlow({
 })
 
 /** 选中/取消选中一块肌肉：标签提亮 + roving tabindex + 详情浮层，三处同步。
- *  点选与键盘都走这里，所以"当前是哪一块"只有一个来源。 */
-function select(id: string | null): void {
+ *  点选与键盘都走这里，所以"当前是哪一块"只有一个来源。
+ *
+ *  `deeper` 是"这块肌肉后面还压着几块"（只有画布点选知道）。放在这里而不是
+ *  调用点，是因为**提示必须跟选中同生共死** —— 从标签、Tab、Esc 进来的路径
+ *  不经过画布点击，提示留在屏幕上就成了一句和当前选中无关的假话。 */
+function select(id: string | null, deeper = 0): void {
   focused = id
   labels.setFocused(id)
   void detailFlow.showFor(id)
+  showDepthHint(id === null ? 0 : deeper)
 }
 
-// 点选：只命中带 muscleId 的 mesh（点空处 = 取消选中）
-canvas.addEventListener('click', (ev) => select(pickAt(ev.clientX, ev.clientY)))
+// 点选：只命中带 muscleId 的 mesh（点空处 = 取消选中）。
+//
+// **同一点重复点击沿射线依次深入** —— 真实解剖是分层的，深层肌肉被浅层的腱膜盖住
+// （实测腹直肌就被腹外斜肌的腱膜挡着），不这么做它们永远选不到。
+let pickState: PickState | null = null
+canvas.addEventListener('click', (ev) => {
+  ndcFor(ev.clientX, ev.clientY)
+  const ids = musclesUnderCursor(handle.body, raycaster, ndc, handle.camera)
+  pickState = nextPickIndex(pickState, ev.clientX, ev.clientY, ids)
+  const id = pickState.index >= 0 ? ids[pickState.index] : null
+  if (!id) {
+    pickState = null
+    select(null)
+    return
+  }
+  select(id, ids.length - 1 - pickState.index)
+})
+
+/**
+ * "还压着 N 块更深的肌群，再点一下"。
+ *
+ * **这条提示是必需的**，不是锦上添花：腹直肌被腹外斜肌腱膜盖住（解剖如此），
+ * 不做提示的话用户只会觉得"腹直肌点不到"，而不知道"原地再点一下"这个操作存在。
+ */
+function showDepthHint(deeper: number): void {
+  const el = document.querySelector<HTMLElement>('#depth-hint')
+  if (!el) return
+  el.textContent = deeper > 0 ? `还压着 ${deeper} 块更深的肌群 —— 再点一下` : ''
+  el.style.display = deeper > 0 ? '' : 'none'
+}
 
 // 悬停高亮（spec §6.2）+ 标签提升。pointermove 触发频率很高，先比对再动材质/DOM。
 function setHovered(id: string | null): void {

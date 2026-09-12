@@ -55,7 +55,16 @@ if (!SRC || !existsSync(SRC)) {
 
 // —— 映射表：数据源是仓库里的 json，不在这里硬编码 ——
 const MAP_PATH = resolve(WEB, 'src/body/muscle-map.json')
-const MAP_DOC = JSON.parse(readFileSync(MAP_PATH, 'utf8'))
+let MAP_DOC
+try {
+  MAP_DOC = JSON.parse(readFileSync(MAP_PATH, 'utf8'))
+} catch (e) {
+  // JSON 不支持注释。写错了就在这里明确报出来 —— 否则只会看到一条
+  // "Unexpected token '/'" 的语法错，位置还指向文件里的中文，很难一眼看出是注释问题。
+  console.error(`✗ ${MAP_PATH} 不是合法 JSON：${e.message}`)
+  console.error('  提示：JSON 不支持 // 注释，说明请写进 note 数组。')
+  process.exit(1)
+}
 const MAP = MAP_DOC.map
 // 外壳与 other 不进映射表（它们不是 28 个 id 之一）
 const IDS = Object.keys(MAP)

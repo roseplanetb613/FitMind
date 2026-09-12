@@ -42,6 +42,11 @@ export const OTHER_TISSUE_COLOR = 0x2f3439
  * 而且**不会有任何报错**（几何本身是好的）。
  *
  * 返回缩放系数，供测试断言。
+ *
+ * **幂等**：按"当前还需要缩放多少倍"来乘，而不是把 scale 设成那个倍数。
+ * 用 `setScalar` 的话第二遍量到的 h 已是 1.8、s = 1，于是把上一遍的缩放**重置掉** ——
+ * 模型悄悄变回 172 单位（厘米原尺寸），画面近乎全黑且不报错。
+ * （本函数目前只在 `assembleBody` 末尾调一次，但静默失败代价太高，值得挡住。）
  */
 export function normalizeToBodyHeight(root: THREE.Object3D, target = BODY_HEIGHT): number {
   root.updateMatrixWorld(true)
@@ -49,7 +54,8 @@ export function normalizeToBodyHeight(root: THREE.Object3D, target = BODY_HEIGHT
   const h = box.max.y - box.min.y
   if (!Number.isFinite(h) || h <= 0) return 1
   const s = target / h
-  root.scale.setScalar(s)
+  // 乘而非设：见上方"幂等"。装配出的 group 初始 scale 为 1，故生产路径上两者等价。
+  root.scale.multiplyScalar(s)
   // 落到地面：缩放后重新量一次，把 min.y 平移到 0
   root.updateMatrixWorld(true)
   const box2 = new THREE.Box3().setFromObject(root)

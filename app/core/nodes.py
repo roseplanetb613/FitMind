@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, timedelta
+from app.core import progress
 from app.core.render_util import training_lines
 from app.core.router import Mode, RouteClassifier, route
 from app.skills.base import ExecutionContext, SkillResult
@@ -197,6 +198,9 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     # ---------------- classify（意图 + 模式，尊重调用方预置） ----------------
     def classify(state: dict) -> dict:
+        # 阶段进度（见 progress.py）：理解意图是这一轮最耗时的一段（L1 语义召回 +
+        # L2 LLM 兜底 + 低置信时再来一次意图归一），前端就靠它填住这段死屏。
+        progress.emit(progress.STAGE_UNDERSTAND)
         if state.get("intent") and state.get("mode_used"):
             return {}
         # 上下文消解优先：肯定应答承接上轮提议（audit 留痕 raw_text 保原词）
@@ -218,6 +222,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         return out
 
     def mode_route(state: dict) -> str:
+        # 已经知道要干什么了，接下来是查数据/编排计划——具体走哪个分支用户不关心
+        progress.emit(progress.STAGE_WORK)
         m = state.get("mode_used", "direct")
         return "clarify" if m == "clarify" else m
 
@@ -369,6 +375,9 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         return {"outcome": validator.check(outcome, intent)}
 
     def render(state: dict) -> dict:
+        # 最后一段：LLM 生成（+ 后置护栏可能整条改写）。**只报阶段，不流字**——
+        # 理由见 progress.py 的模块注释（护栏会在渲染后整条丢弃 reply）。
+        progress.emit(progress.STAGE_RENDER)
         from app.core.graph import build_structured
         # structured 单源组装（标题中文映射+失败原因透传+无 items 死键）；
         # W1：用户原话与最近对话一并注入，渲染才能承接态度/追问

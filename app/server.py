@@ -133,13 +133,89 @@ def create_app() -> FastAPI:
         return {"muscle": muscle, "count": len(out),
                 "fallback": r["fallback"], "exercises": out}
 
-    @app.post("/v1/chat")
-    def chat(req: ChatRequest):
-        resp = agent.run(req.message, req.session_id, user_id=req.user_id)
-        # structured 由 build_structured 单源组装：失败原因已透传 error 字段
+    def _payload(resp) -> dict:
+        # structured 由 build_structured 单源组装：失败原因已透传 error 字段。
+        # guard 有史以来算好了却没序列化（agent.py:83），于是前端拿不到结构化的
+        # 风险负载（level_label / advice / blocks），"不建议练"只能退化成一段
+        # 和普通回答长得一样的文字。补上。
         return {"session_id": resp.session_id, "reply": resp.reply,
                 "mode_used": resp.mode_used, "provenance": resp.provenance,
-                "structured": dict(resp.structured)}
+                "structured": dict(resp.structured),
+                "guard": resp.guard}
+
+    @app.post("/v1/chat")
+    def chat(req: ChatRequest):
+        return _payload(agent.run(req.message, req.session_id, user_id=req.user_id))
+
+    @app.post("/v1/chat/stream")
+    async def chat_stream(req: ChatRequest):
+        """阶段进度 + 最终整包。
+
+        **只流阶段，不流 token。** 后置护栏会在 LLM 渲染之后整条丢弃并替换 reply
+        （见 progress.py 的模块注释），按 token 流出去等于先把编造的数字给用户看一遍。
+
+        SSE 规范上 EventSource 只支持 GET，所以这里是 POST —— 前端用
+        fetch + res.body.getReader() 手动解帧，不能用 EventSource。
+
+        ⚠ **端点与生成器都必须是 `async def`，不能写成同步生成器。**
+        实测（Windows + uvicorn 0.52，h11 与 httptools 都一样）：同步生成器会被
+        Starlette 走 `iterate_in_threadpool` 那条路，**整个响应被缓冲到结束才发出去**
+        —— 生成器明明在 +0.001s 就 yield 了，客户端却要等到 ~1.5s（全跑完）才见到
+        第一个字节，阶段流等于白做。改 async 之后 TTFB 从 1.5s 掉到 0.000s。
+        排查时用最小复现对照过：同样的后台线程 + queue 结构，只把生成器换成同步的
+        就复现，换回 async 就好。**不要"顺手"把它改回同步生成器。**
+
+        ⚠ **已知残留：第一个字节仍会晚 ~2s**（实测与工作量无关，恒定）。原因是工人
+        线程里 agent.run 的**前置 CPU 密集段**（记忆抽取 + 分类）长时间持有 GIL，
+        事件循环拿不到执行权去 `send()`，于是前三段阶段事件堆在一起、等工人线程撞上
+        第一次网络等待时才一次性发出。已排除：uvicorn 的 h11/httptools、同步生成器、
+        纯 sleep 的工人线程（这三样单独都能流到 TTFB≈2ms）。真要消掉得把 agent 挪到
+        独立进程，代价与本次改动不成比例 —— 现状下用户仍是"2s 后开始有反馈"，
+        而不是"全程空白到 7s"。
+        """
+        import json as _json
+        import queue as _queue
+        import threading as _threading
+        from fastapi.responses import StreamingResponse
+        from app.core import progress
+
+        q: _queue.Queue = _queue.Queue()
+        # 立刻给一条"已收到"：认清意图之前还有 ~1.4s 死区（记忆抽取 + guard），
+        # 不先反馈的话用户面对的是一个毫无反应的输入框。
+        q.put(("stage", {"stage": progress.STAGE_RECEIVED}))
+
+        def worker() -> None:
+            # contextvar 在本线程内注册，agent.run 的整条同步调用链都看得见
+            # —— 于是 agent.py / 各节点签名一行都不用改。
+            progress.set_emitter(lambda stage: q.put(("stage", {"stage": stage})))
+            try:
+                resp = agent.run(req.message, req.session_id, user_id=req.user_id)
+                q.put(("done", _payload(resp)))
+            except Exception as e:                      # noqa: BLE001
+                # 端点本身不抛：异常要作为一条事件送达前端，否则连接静默断开，
+                # 前端只能看到一个没有任何解释的空白。
+                q.put(("error", {"message": f"{type(e).__name__}: {e}"}))
+            finally:
+                progress.clear()
+                q.put(("__end__", {}))
+
+        _threading.Thread(target=worker, daemon=True).start()
+
+        async def gen():
+            import asyncio as _aio
+            while True:
+                kind, payload = await _aio.to_thread(q.get)
+                if kind == "__end__":
+                    break
+                data = {"type": kind}
+                data.update(payload)
+                yield f"data: {_json.dumps(data, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(gen(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache",
+            # 反代（nginx 等）默认会缓冲整个响应，那样"流式"就白做了
+            "X-Accel-Buffering": "no",
+        })
 
     @app.post("/v1/profile")
     def set_profile(req: ProfileRequest):

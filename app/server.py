@@ -99,6 +99,40 @@ def create_app() -> FastAPI:
                     "degraded": True}
         return {**base, "muscles": {mid: states.get(mid) for mid in ids}}
 
+    @app.get("/v1/muscle-exercises")
+    def muscle_exercises(muscle: str, limit: int = 3):
+        """练这块肌肉的推荐动作（供 3D 视图"点肌肉 → 看该练什么"）。
+
+        **复用 `ExerciseRepo.recommend`**，不另写推荐逻辑 —— 它已有变体族去重
+        （避免推荐 3 个深蹲变体）、主目标优先、逐级放宽条件。
+
+        `count` 不足是常态，不是异常：实测 tibialis_anterior 全库只有 1 个动作、
+        levator_scapulae 2 个。响应里的 `fallback=true` 就表示"放宽过条件"
+        （含最后一步放开拉伸类）。**不要给空位补占位**。
+        """
+        from app.runtime.repos import exercise_repo
+
+        ex = exercise_repo()
+        r = ex.recommend(muscle, count=max(1, min(int(limit), 20)))
+        out = []
+        for x in r["recommendations"]:
+            out.append({
+                "id": x.get("id"),
+                "name": x.get("name"),
+                "name_zh": x.get("name_zh"),
+                # 媒体路径是相对 data/exercises-dataset/ 的；前端拼 /media 前缀。
+                # ⚠ 版权：素材 © Gym visual，商用需另行取授权（见 docs/HANDOVER.md）。
+                "gif_url": x.get("gif_url"),
+                "image": x.get("image"),
+                "exercise_type": x.get("exercise_type"),
+                "difficulty": x.get("difficulty"),
+                # 该动作对这块肌肉的角色：主练 or 协同 —— 前端据此标注
+                "role": ("target" if x["muscles_canonical"]["target"] == ex._norm_muscle(muscle)
+                         else "synergist"),
+            })
+        return {"muscle": muscle, "count": len(out),
+                "fallback": r["fallback"], "exercises": out}
+
     @app.post("/v1/chat")
     def chat(req: ChatRequest):
         resp = agent.run(req.message, req.session_id, user_id=req.user_id)
@@ -126,6 +160,14 @@ def create_app() -> FastAPI:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "会话不存在"})
         return {"session_id": session_id, "profile": profile}
+
+    # 动作演示媒体（GIF/图片）。⚠ 版权：素材 © Gym visual，商用需另行取授权
+    # （见 data/exercises-dataset/docs/HANDOVER.md）。当前仅用于非商业演示。
+    # 只在目录存在时挂载，不阻断启动。
+    _media = ROOT / "data" / "exercises-dataset"
+    if _media.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/media", StaticFiles(directory=str(_media)), name="media")
 
     # 3D 视图静态资源；dist 不存在（未构建）时静默跳过，不阻断后端启动
     _dist = ROOT / "web" / "dist"

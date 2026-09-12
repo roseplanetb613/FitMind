@@ -483,7 +483,11 @@ class MemoryStore:
         计数必须按动作而非去重后的肌肉行：肌肉行去重后"深蹲"只剩 ~10 squat vs 3 pull
         （77%），会掉到阈值下把过滤整个跳过——而按动作计是 69 vs 3（96%）。"""
         import exercise_repo
-        nq = exercise_repo.norm_zh(str(name or ""))
+        # 与 search_zh 同口径：**先 expand_aliases 再归一**。只说口语别名（"夹腿"）时，
+        # 图谱里存的是库内名（"杠杆机 坐姿 髋内收"），不展开就永远 CONTAINS 不上，
+        # 表现为"抽取成功但挂不到任何肌群"→ 恢复度为空（实测用户原句）
+        nq = exercise_repo.norm_zh(
+            exercise_repo.expand_aliases(str(name or "")))
         if not nq:
             return None
         try:
@@ -510,7 +514,11 @@ class MemoryStore:
         """单动作词 → [(肌群, role, movement_pattern)]（只读；异常/无命中 → []）。
         pattern 非空 → 只取该模式的动作（剔复合名噪声）。"""
         import exercise_repo
-        nq = exercise_repo.norm_zh(str(name or ""))
+        # 与 search_zh 同口径：**先 expand_aliases 再归一**。只说口语别名（"夹腿"）时，
+        # 图谱里存的是库内名（"杠杆机 坐姿 髋内收"），不展开就永远 CONTAINS 不上，
+        # 表现为"抽取成功但挂不到任何肌群"→ 恢复度为空（实测用户原句）
+        nq = exercise_repo.norm_zh(
+            exercise_repo.expand_aliases(str(name or "")))
         if not nq:
             return []
         rows: list[tuple[str, str, str]] = []

@@ -54,3 +54,16 @@ html, body {
   border-radius: 6px; padding: 6px 14px; cursor: pointer;
 }
 #toolbar button:hover { background: #263039; }
+
+/* ── 动作推荐 ─────────────────────────────────────────── */
+#detail { max-height: calc(100vh - 36px); overflow-y: auto; }
+.picks { margin-top: 16px; border-top: 1px solid #2f3944; padding-top: 12px; }
+.picks h4 { margin: 0 0 10px; font-size: 13px; color: #9aa6b2; font-weight: 600; }
+.pick-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pick { background: #171d24; border-radius: 6px; padding: 8px; }
+.pick img { width: 100%; border-radius: 4px; display: block; background: #0f1419; }
+.pick-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.pick-name { font-size: 12px; }
+.pick-role { font-size: 10px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+.pick-role.is-target { background: #2b4a3a; color: #8fd6ad; }
+.pick-role.is-synergist { background: #33383f; color: #9aa6b2; }

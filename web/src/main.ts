@@ -8,6 +8,7 @@ import './styles.css'
 import { ApiSource } from './data/api'
 import { loadInto, type LoadTarget } from './data/load'
 import type { MuscleMapSource } from './data/source'
+import { fetchPicks } from './data/exercises'
 import { muscleState, resolveLabel, type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
 import { createScene, framingFor, pickMuscleId, setHover } from './render/scene'
@@ -15,7 +16,7 @@ import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
-import { hideDetail, showDetail } from './ui/detail'
+import { hideDetail, renderPicks, showDetail } from './ui/detail'
 
 const params = new URLSearchParams(location.search)
 const uid = params.get('user_id') ?? 'local'
@@ -52,6 +53,13 @@ const ids = labels.ids()
 // 都被当作落在原点，命中的是完全错误的目标。
 const raycaster = new THREE.Raycaster()
 const ndc = new THREE.Vector2()
+
+/**
+ * 当前选中的肌群。**用来丢弃过期响应** —— 快速点两块肌肉时，
+ * 先发的请求可能后到，不过滤的话详情里会显示前一块的推荐。
+ * 声明必须在点击处理器之前（`let` 有暂时性死区）。
+ */
+let selectedId: string | null = null
 function pickAt(clientX: number, clientY: number): string | null {
   const rect = canvas.getBoundingClientRect()
   ndc.set(
@@ -64,6 +72,7 @@ function pickAt(clientX: number, clientY: number): string | null {
 /** 详情浮层：跟着 focused 走。数据未就绪（失败后 latest 为 null）就不展示。 */
 function showDetailFor(id: string | null): void {
   if (!id || !latest) {
+    selectedId = null
     hideDetail(detailEl)
     return
   }

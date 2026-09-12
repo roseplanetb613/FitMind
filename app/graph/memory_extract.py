@@ -27,7 +27,11 @@ _DISLIKE = ("讨厌", "不喜欢", "不想", "排斥")
 _EVENT_HINT = (("上周三", 9), ("上周四", 8), ("上周五", 7), ("上周六", 6),
                ("上周日", 5), ("上周一", 4), ("上周二", 3),
                ("昨天", 1), ("前天", 2), ("上个月", 30), ("上周", 7),
-               ("今天", 0))
+               ("今天", 0),
+               # "昨晚/前晚/今晚" 不含"昨天/前天/今天"——此前整句因**缺时间锚**被丢
+               # （实测："我昨晚七点练了夹腿4x15 60kg" 在补了动作别名后**仍然**返回 []，
+               #   就是卡在这里；与动作别名是两个独立的阻断点）
+               ("昨晚", 1), ("前晚", 2), ("今晚", 0))
 _EVENT_VERB = ("练了", "练", "做了", "跑了", "练过")
 # 力量动作的**完成态**动词（2026-09-12）：系统自己的核心词汇就是推/拉/腿，而原表只有
 # 练/做/跑 → "拉了引体向上"/"推了卧推"/"蹲了深蹲"/"举了杠铃" 被**整句静默丢弃**
@@ -43,6 +47,10 @@ _EVENT_VERB_STRICT = ("拉了", "推了", "蹲了", "举了", "划了", "跳了"
 
 _EVENT_SPLIT = re.compile(r"[+，、和,\s]+")
 _SETS_RE = re.compile(r"(\d{1,2})\s*[xX×*]\s*(\d{1,3})")
+# 纯重量段（"60kg"/"60公斤"/"120斤"）→ 记到相邻动作的 weight_kg，**不单独成条目**。
+# 实测："我昨晚七点练了夹腿4x15 60kg" 曾被抽成
+# [{'raw':'夹腿','sets':4,'reps':15}, {'raw':'60kg'}] —— 第二个是伪动作条目。
+_WEIGHT_SEG_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(kg|KG|公斤|千克|斤)$")
 
 
 _QUESTION = ("怎么", "吗", "?", "？", "啥", "为什么", "能不能", "可以吗",
@@ -132,7 +140,10 @@ def _is_question(text: str) -> bool:
 
 # 时段词 →（代表小时，本地）。"晚" 不单独收（"晚会""晚点"易误伤）
 _TIME_PERIOD = (("凌晨", 5), ("清晨", 6), ("早上", 7), ("早晨", 7), ("上午", 10),
-                ("中午", 12), ("下午", 15), ("傍晚", 18), ("晚上", 19), ("夜里", 21))
+                ("中午", 12), ("下午", 15), ("傍晚", 18), ("晚上", 19), ("夜里", 21),
+                # "昨晚/今晚/前晚" 不含"晚上"，此前漏匹配 → "昨晚七点" 被当成早上 7 点
+                # （实测：`_time_of_day('我昨晚七点练了夹腿4x15 60kg')` → (7,0)，差 12 小时）
+                ("昨晚", 19), ("前晚", 19), ("今晚", 19))
 _CN_HOUR = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
             "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12}
 _HOUR_RE = re.compile(r"(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*[点時时]")
@@ -399,6 +410,7 @@ def _event(text: str) -> dict | None:
     seg = text.split(verb_hit)[-1]
     items: list[dict] = []
     resolved = False          # 是否有条目检索命中动作（严格护栏判据）
+    pending_kg = None         # 重量出现在动作之前时暂存，挂给下一个动作
     for part in _EVENT_SPLIT.split(seg):
         part = part.strip(" 的了。，")
         if not part:
@@ -406,11 +418,28 @@ def _event(text: str) -> dict | None:
         # 段级否定否决："练了腿，没练胸" → "没练胸" 段不得入记录
         if negated_prefix(part):
             continue
+        # 纯重量段 → 挂到相邻动作（前一个优先；只有重量在前时留给下一个），不单独成条目
+        wm = _WEIGHT_SEG_RE.match(part.strip())
+        if wm:
+            kg = float(wm.group(1)) / (2 if wm.group(2) == "斤" else 1)
+            if items:
+                items[-1]["weight_kg"] = round(kg, 1)
+            else:
+                pending_kg = round(kg, 1)
+            continue
         m = _SETS_RE.search(part)
         namepart = _SETS_RE.sub("", part).strip(" 的了。")
         if not namepart:
+            # 纯组次段（"卧推 60kg 4x8" 里的 "4x8"）→ 挂到前一个**尚无组次**的条目上
+            # （此前直接 continue → 组次静默丢失，实测该句式退化为 [{'raw':'卧推'}]
+            #   加重量的模样，看不出组次没了）
+            if m and items and "sets" not in items[-1]:
+                items[-1]["sets"] = int(m.group(1))
+                items[-1]["reps"] = int(m.group(2))
             continue
         it: dict = {}
+        if pending_kg is not None:
+            it["weight_kg"], pending_kg = pending_kg, None
         norm = _norm_exercise(namepart)
         if norm:
             resolved = True                # 检索命中（即使归一为带空格复合名也算）

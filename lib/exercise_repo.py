@@ -42,6 +42,17 @@ NAME_ALIASES = {
     # W1：口语"肩推举"库内无整词（有"肩推"/"推举"拆分），归一为"肩推"
     #（压测 #76 '练肩推举和飞鸟哪个先' 空结果根因）
     "肩推举": "肩推",
+    # 2026-09-12 健身房口语（用户实测 "夹腿" 整句被丢）：库内用解剖学名
+    #（内收/外展/飞鸟/下拉/推举），用户说器械俗称。每条都已核过目标词在库内存在：
+    #   夹腿 6 个（'杠杆机 坐姿 髋内收' 等）· 开腿 5 个 · 飞鸟 38 个
+    #   下拉 27 个 · 胸部推举（'器械 内侧 胸部推举'）
+    "夹腿": "内收",      # 髋内收器械
+    "开腿": "外展",      # 髋外展器械
+    "夹胸": "飞鸟",      # 蝴蝶机/绳索夹胸 ≈ 飞鸟
+    "拉背": "下拉",      # 高位下拉俗称
+    "推胸": "胸部推举",   # 器械推胸
+    # 注：**腿屈伸（leg extension）库内无对应动作**（只有'椅子 腿 伸展 拉伸'这个拉伸）
+    # ——属数据集缺口，不是别名缺口，不能硬造映射。已记于 spec。
 }
 
 
@@ -315,6 +326,12 @@ class ExerciseRepo:
                          "自重": "body weight"}.get(equipment.strip().lower(),
                                                     equipment.strip().lower())
         canonical = self._norm_muscle(muscle) if muscle else None
+        # **归一失败时必须返回空，不能"静默地不筛"。**
+        # 旧写法只在 `canonical is not None` 时才过滤，于是拼错的肌肉名（或压根不存在的）
+        # 会被当成"不过滤" —— `filter(muscle="no_such_muscle_xyz")` 返回**全部 1324 个**，
+        # 而不是空。这会让任何按肌肉取数的地方把"查不到"误当成"全都要"。
+        if muscle and canonical is None:
+            return []
 
         out = []
         for r in self.by_id.values():
@@ -351,22 +368,34 @@ class ExerciseRepo:
         返回 {recommendations: [...], fallback: bool}，fallback=True 表示放宽过条件。
         """
         blacklist = set(exclude or [])
+        # **每一步都必须带 `muscle`。** 这里曾漏传，于是候选集是**全部 1324 个动作**，
+        # 只在排序里把命中该肌肉的排前面 —— 命中数 ≥ count 时看着正常，**不足时就用
+        # 不相干的动作凑数**（实测 tibialis_anterior 只有 1 个命中，却返回
+        # 「3/4 仰卧起坐 / 45° 体侧屈 / 空中蹬车」），而且因为第一步就凑够了数量，
+        # 直接返回并报 `fallback=False`（谎报没放宽过条件）。
+        # 下面每行的注释本来写的就是"只按肌肉"——意图是对的，只是漏了参数。
+        # 每一步是 (过滤条件, 是否允许拉伸类)，按"从严到宽"排列。
         steps = [
-            dict(equipment=equipment, difficulty=difficulty),   # 全条件
-            dict(difficulty=difficulty),                        # 放宽器械
-            dict(equipment=None, difficulty=None),              # 只按肌肉
-            {},                                                 # 最后：任意难度空手兜底
+            (dict(muscle=muscle, equipment=equipment, difficulty=difficulty), include_stretch),
+            (dict(muscle=muscle, difficulty=difficulty), include_stretch),      # 放宽器械
+            (dict(muscle=muscle, equipment=None, difficulty=None), include_stretch),  # 只按肌肉
+            (dict(muscle=muscle), include_stretch),                             # 任意难度
+            # 最后**连拉伸也放开**：有些肌肉全库就只有拉伸类动作
+            # （实测 levator_scapulae / sternocleidomastoid 各 2 条，全是 stretch_mobility），
+            # 不放宽的话它们一条推荐都没有 —— 而"这块肌肉该拉伸"本身是有用的建议。
+            (dict(muscle=muscle), True),
         ]
-        for idx, kw in enumerate(steps):
+        best: list[dict] = []
+        target_id = self._norm_muscle(muscle)
+        for idx, (kw, allow_stretch) in enumerate(steps):
             cands = [r for r in self.filter(**kw)
                      if r["id"] not in blacklist
-                     and (include_stretch or r["exercise_type"] != "stretch_mobility")]
-            if len(cands) < count:
+                     and (allow_stretch or r["exercise_type"] != "stretch_mobility")]
+            if not cands:
                 continue
             # 变体去重（family 优先，无 family 用去括号后的动作名）+ 主目标优先 + 难度升序
             seen_fam: set[str] = set()
             picked = []
-            target_id = self._norm_muscle(muscle)
             for r in sorted(cands, key=lambda x: (0 if x["muscles_canonical"]["target"] ==
                             target_id else 1, x["difficulty"])):
                 key = r["family"] or self._strip_variant(r["name"])
@@ -379,9 +408,16 @@ class ExerciseRepo:
             if len(picked) >= count:
                 return {"recommendations": picked,
                         "fallback": idx > 0}   # 只有放宽过条件才标记 fallback
+            # 这一步凑不够 count —— 记下它，继续放宽。
+            # **不要在这里 `continue` 掉**：旧写法要求每一步都必须凑够 count，
+            # 于是"全库只有 1~2 个动作"的肌肉（tibialis_anterior / levator_scapulae）
+            # 所有 step 都过不了这道门，最后返回**空**——一块肌肉一个推荐都没有。
+            if len(picked) > len(best):
+                best = picked
             blacklist.update(r["id"] for r in picked)
-        # 理论不可达：数据量充足
-        return {"recommendations": [], "fallback": True}
+        # 放宽到底仍不足 count —— **有多少给多少**。不掺假（不拿不相干的凑数），
+        # 也不清空（那不是"宁缺毋滥"，是"什么都不给"）。
+        return {"recommendations": best, "fallback": True}
 
     @staticmethod
     def _strip_variant(name: str) -> str:

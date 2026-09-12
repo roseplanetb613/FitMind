@@ -48,6 +48,44 @@ def create_app() -> FastAPI:
                 # 这里的异常摘要才从"4 个断言莫名失败"定位到 MemoryError
                 "degraded_detail": _degd()}
 
+    @app.get("/v1/muscle-map")
+    def muscle_map(user_id: str = "local", days: int = 7):
+        """肌群恢复状态（3D 视图数据源）。
+
+        契约与 `web/src/data/types.ts` **一一对应**（改一处须改两处）：
+          · `muscles` 为**定长 28 项**，无记录显式 `null`（**不是缺键**）
+          · `describe` 由后端 `recovery.describe` 算好（措辞单源，前端只显示）
+          · 降级（图谱不可用）→ **200 + degraded=true + 全 null**，不是错误——
+            前端据此画未知态，与"没有记录"同样处理
+          · `labels` 降级时可为 {}，前端回落显示 muscle_id（不得因缺标签丢块）
+        """
+        import recovery
+        import muscle_map as _mm      # 注意别名：本路由函数同名，直接 import 会遮蔽自己
+        from datetime import datetime, timezone
+        # 注意别写 `days or 7`：显式传 0 是 falsy 会被静默吞成默认值（实测踩过）
+        try:
+            days = max(1, min(int(days), 90))
+        except (TypeError, ValueError):
+            days = 7
+        now = datetime.now(timezone.utc)
+        ids = recovery.muscle_ids()                 # 不依赖图谱的定长枚举
+        base = {"generated_at": now.isoformat(), "days": days,
+                "labels": _mm.labels_from_repo()}
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                raise RuntimeError("记忆图谱不可用")
+            raw = recovery.recovery_map(m.muscle_load_map(user_id, days=days), now)
+            # describe 由后端算好（措辞单源：含"约"与非精确口吻、低置信标注），
+            # 前端只显示——契约 web/src/data/types.ts 明确要求该字段
+            states = {mid: {**st, "describe": recovery.describe(mid, st)}
+                      for mid, st in raw.items()}
+        except Exception:
+            return {**base, "muscles": {mid: None for mid in ids},
+                    "degraded": True}
+        return {**base, "muscles": {mid: states.get(mid) for mid in ids}}
+
     @app.post("/v1/chat")
     def chat(req: ChatRequest):
         resp = agent.run(req.message, req.session_id, user_id=req.user_id)

@@ -49,6 +49,15 @@ def load_params() -> dict:
     return dict(_FALLBACK)
 
 
+def muscle_ids() -> list[str]:
+    """28 个肌群 id（**数据包为单源**，不依赖图谱/检索仓）。
+
+    用途：`/v1/muscle-map` 的"定长"契约——即使图谱不可用（降级）也必须给出完整键集，
+    前端才能把无记录的肌群画成未知态。取检索仓的 ontology 在降级时也拿不到，故用
+    参数表（两者已由 test_recovery_data_invariants 断言一致）。"""
+    return sorted((load_params().get("half_life_hours") or {}).keys())
+
+
 def _half_life_hours(muscle: str, params: dict) -> float:
     return float((params.get("half_life_hours") or {}).get(
         muscle, params.get("default_half_life_hours", 36)))

@@ -31,3 +31,6 @@ storage_output/
 
 # 密钥（绝不入 git）
 .env
+# Node（根目录这层原本没写，`web/` 下由 web/.gitignore 覆盖；
+# 根目录的 node_modules 是工具顺手生成的缓存，不该入库）
+node_modules/

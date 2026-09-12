@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
+import { loadBody } from '../body/load-model'
 import { muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, palette } from './palette'
 
@@ -130,11 +131,15 @@ export interface SceneHandle {
   body: THREE.Group
   renderer: THREE.WebGLRenderer
   controls: OrbitControls
+  /** 半透明外壳（只渲染背面）。模型加载失败回落到体块时为 null */
+  shell: THREE.Object3D | null
+  /** 几何是否来自真实肌肉模型（false = 回落到了代码生成的体块） */
+  fromModel: boolean
   resize(): void
   dispose(): void
 }
 
-export function createScene(canvas: HTMLCanvasElement): SceneHandle {
+export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandle> {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color('#0f1419')
 
@@ -155,7 +160,9 @@ export function createScene(canvas: HTMLCanvasElement): SceneHandle {
   rim.position.set(0, 2.6, -2.2)
   scene.add(key, fill, rim, new THREE.AmbientLight(0x404a56, 1.2))
 
-  const body = buildBodyGroup()
+  // 真实肌肉模型（Z-Anatomy, CC BY-SA 4.0）。失败会回落到代码生成的体块，
+  // 所以这里不会因为 404 / 损坏而白屏。
+  const { group: body, shell, fromModel } = await loadBody()
   scene.add(body)
 
   // 地面参考——给体积感一个锚，否则模型飘在虚空里
@@ -193,6 +200,8 @@ export function createScene(canvas: HTMLCanvasElement): SceneHandle {
     body,
     renderer,
     controls,
+    shell,
+    fromModel,
     resize,
     dispose(): void {
       cancelAnimationFrame(raf)

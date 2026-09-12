@@ -22,7 +22,8 @@ const uid = params.get('user_id') ?? 'local'
 const days = Number(params.get('days') ?? 7)
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
-const handle = createScene(canvas)
+// 顶层 await：createScene 现在要异步加载 4MB 的肌肉模型
+const handle = await createScene(canvas)
 const detailEl = document.querySelector<HTMLElement>('#detail')!
 const legendEl = document.querySelector<HTMLElement>('#legend')!
 const labelsEl = document.querySelector<HTMLElement>('#labels')!

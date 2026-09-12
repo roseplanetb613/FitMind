@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "source": "Z-Anatomy MuscularSystem100.fbx",
+  "license": "CC BY-SA 4.0",
+  "attribution": "Lluís Vinent Juanico / Z-Anatomy project (CC BY-SA 4.0)",
+  "note": [
+    "网格名 → muscle_id 的映射。**分区语义**：按本表顺序依次认领，",
+    "已被认领的网格后面的 id 拿不到。所以区域概念（upper_back / core / spine…）",
+    "必须排在具体肌肉之后。",
+    "",
+    "模式是对**真实 FBX 网格名**的正则，那些名字有两处反直觉的地方：",
+    "  1. 下划线分隔，不是空格：`Vastus_medialis_muscle`（不是 `Vastus medialis muscle`）",
+    "  2. **侧别是直接追在末尾的 l/r，无分隔符**：`Vastus_medialis_musclel` / `...muscler`",
+    "所以模式一律不要锚定 `$`；例如 /vastus_/ 同时命中左右两侧（我们本来就同色）。",
+    "",
+    "空数组 = 该 id 不在这个文件里（cardio_system 在 CardioVascular41.fbx）。",
+    "这两者必须区分：**非空却一个都没匹配上 = 映射表有洞，构建脚本会拒绝产出**，",
+    "否则那块肌肉永远不亮且无人发现。"
+  ],
+  "map": {
+    "deltoids": ["deltoid_muscle"],
+    "rotator_cuff": ["^Supraspinatus", "^Infraspinatus", "^Teres_minor", "^Subscapularis"],
+    "pectorals": ["pectoralis_major_muscle"],
+    "serratus_anterior": ["^Serratus_anterior"],
+    "trapezius": ["trapezius_muscle"],
+    "levator_scapulae": ["^Levator_scapulae"],
+    "rhomboids": ["^Rhomboid"],
+    "latissimus_dorsi": ["^Latissimus_dorsi"],
+    "biceps": ["biceps_brachii"],
+    "triceps": ["triceps_brachii"],
+    "forearms": [
+      "^Brachioradialis", "^Anconeus", "^Flexor_carpi", "^Extensor_carpi",
+      "^Flexor_digitorum", "^Extensor_digitorum", "^Flexor_pollicis",
+      "^Extensor_pollicis", "^Pronator_", "^Supinator", "^Palmaris_longus"
+    ],
+    "sternocleidomastoid": ["^Sternocleidomastoid"],
+    "quadriceps": ["^Rectus_femoris", "^Vastus_"],
+    "hamstrings": ["biceps_femoris", "^Semitendinosus", "^Semimembranosus"],
+    "glutes": ["^Gluteus_maximus"],
+    "abductors": ["^Gluteus_medius", "^Gluteus_minimus", "^Tensor_fasciae_latae"],
+    "adductors": ["^Adductor_", "^Pectineus", "^Gracilis"],
+    "hip_flexors": ["^Iliacus", "^Psoas_"],
+    "calves": ["^Gastrocnemius", "^Soleus"],
+    "tibialis_anterior": ["^Tibialis_anterior"],
+    "ankle_stabilizers": [
+      "^Tibialis_posterior", "^Fibularis_",
+      "^Flexor_hallucis_longus", "^Flexor_digitorum_longus"
+    ],
+    "rectus_abdominis": ["^Rectus_abdominis"],
+    "obliques": ["oblique_muscle"],
+    "core": ["^Transversus_abdominis", "^Diaphragm", "^Linea_alba", "^Transversalis_fascia"],
+
+    "lower_back": ["^Iliocostalis_lumborum", "^Longissimus_thoracis", "^Quadratus_lumborum"],
+    "upper_back": ["^Iliocostalis_", "^Longissimus_", "^Spinalis_", "^Semispinalis_", "^Splenius_"],
+    "spine": ["^Multifidus", "^Rotatores", "^Interspinales", "^Intertransversarii", "^Longus_"],
+
+    "cardio_system": []
+  }
+}

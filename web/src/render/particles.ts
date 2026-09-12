@@ -49,7 +49,7 @@ export function starSpec(recovery: number | null, maxCount: number = MAX_STARS):
 
   // 尺寸与不透明度也随恢复度走，让单调性在**三个维度上冗余成立** ——
   // 即便将来有人把 count 的曲线改平，size/opacity 仍能读出方向
-  const size = 0.004 + 0.010 * r
+  const size = 0.002 + 0.005 * r
   const opacity = 0.35 + 0.65 * r
 
   return { count, size, opacity }

@@ -53,7 +53,13 @@ export function groupByMuscleId(body: THREE.Group): Map<string, THREE.Mesh[]> {
  */
 export function anchorFor(meshes: THREE.Mesh[]): THREE.Vector3 {
   const anchor = new THREE.Vector3()
-  for (const m of meshes) anchor.add(m.position)
+  const tmp = new THREE.Vector3()
+  // **必须是 world 坐标。** `labels.update` 把这个锚点**直接当世界坐标**投影，
+  // 而 body 组是带变换的 —— 真实模型的归一化把缩放挂在那里（scale≈0.0106），
+  // 且各 mesh 的 `position` 是 glb 里的**厘米级**坐标。
+  // 用局部坐标的话 28 条标签会全部飞到头顶上方（实测 y≈134 vs 人体 0~1.8）。
+  // 代码体块时代 body 无变换、局部==世界，这个写法才碰巧成立。
+  for (const m of meshes) anchor.add(m.getWorldPosition(tmp))
   return anchor.divideScalar(meshes.length)
 }
 
@@ -134,6 +140,11 @@ export function createLabelLayer(
   root.setAttribute('role', 'list')
   root.setAttribute('aria-label', '肌群恢复状态')
   container.appendChild(root)
+
+  // anchorFor 读的是 **world** 坐标，所以先确保 matrixWorld 是最新的
+  // （否则 getWorldPosition 会返回上一次刷新的值）。body 是静态的，
+  // 建层时刷一次就够；若将来 body 会被移动，这里要挪到 update 里。
+  body.updateMatrixWorld(true)
 
   // 每个 muscle_id 只挂一条标签，锚在该 id 所有 mesh 的中心——
   // 成对肌群（quadriceps 有 L/R 两个 mesh）只出一个标签，否则 28 组会变成 50 条。

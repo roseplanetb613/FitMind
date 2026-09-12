@@ -97,7 +97,13 @@ export interface LabelLayer {
   /** 把真实键盘焦点移到该 id 的标签上（只动焦点，不动 roving 状态） */
   focusElement(id: string): void
   /** el 是本层的标签时才 blur 它。焦点已经不在本层时（例如用户 Tab 到了工具栏按钮）
-   *  必须什么都不做——blur() 会把键盘焦点丢回 body，焦点环消失，读屏用户丢失位置。 */
+   *  必须什么都不做——blur() 会把键盘焦点丢回 body，焦点环消失，读屏用户丢失位置。
+   *
+   *  **已知行为（未在真实浏览器验证过，属人工验收项）**：Escape 命中时确实会把焦点
+   *  blur 回 body，而不是"移回恰好某个标签"。之后下一次 Tab 由浏览器按文档顺序从头算，
+   *  落点是否等于 roving 进入点取决于 DOM 顺序——当前 `#labels` 在 `#toolbar` 之前、
+   *  且 setFocused(null) 已把 tabindex=0 复位到第一条，两者**按代码推算**重合；
+   *  这是从 DOM 顺序推出来的结论，没有实测证据。 */
   blurIfOwned(el: HTMLElement | null): void
   update(camera: THREE.PerspectiveCamera, size: { w: number; h: number }): void
   dispose(): void

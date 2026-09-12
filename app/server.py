@@ -114,6 +114,12 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=404, content={"error": "会话不存在"})
         return {"session_id": session_id, "profile": profile}
 
+    # 3D 视图静态资源；dist 不存在（未构建）时静默跳过，不阻断后端启动
+    _dist = ROOT / "web" / "dist"
+    if _dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/app", StaticFiles(directory=str(_dist), html=True), name="web")
+
     return app
 
 

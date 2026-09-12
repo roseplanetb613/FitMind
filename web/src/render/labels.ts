@@ -104,6 +104,14 @@ export function labelVisible(
   return known ? true : opts.showUnknown
 }
 
+/**
+ * 遮挡射线的节流窗口（毫秒）。
+ *
+ * 实测一趟 8.0ms（占 60fps 预算 48%），而遮挡只影响标签**淡化与否** ——
+ * 100ms（10Hz）在拖拽旋转时肉眼分辨不出，却把这块开销降到约 1/6。
+ */
+export const OCCLUSION_INTERVAL_MS = 100
+
 interface LabelItem {
   id: string
   el: HTMLElement
@@ -197,6 +205,15 @@ export function createLabelLayer(
   // 锚点是静态的，相机不动则投影与遮挡都不变。这是本组件唯一的重开销。
   let lastCamKey = ''
 
+  // 遮挡结果的缓存 + 节流时间戳。
+  //
+  // **实测**：28 条射线趟一遍 = **8.0 ms**，占 60fps 预算（16.7ms）的 **48%** ——
+  // 这就是卡顿的来源。而遮挡只是个"淡化/不淡化"的观感，10Hz 与 60Hz 肉眼无差，
+  // 所以把**每帧都要做的投影/transform**与**昂贵的射线**拆开：前者照常每帧跑
+  // （标签才跟得住模型），后者按时间节流。
+  let occludedCache = new Map<string, boolean>()
+  let lastOcclusionAt = 0
+
   // 最近一次 setStates 的数据。可见性变化时要按它重算哪些该显示
   // （否则先 setStates 后 setVisibility 时，隐藏/显示用的是旧数据）
   let lastStates: Record<string, MuscleState | null> = {}
@@ -285,6 +302,10 @@ export function createLabelLayer(
       if (key === lastCamKey) return // 一切都没变 → 投影与遮挡都不变，白算
       lastCamKey = key
 
+      const now = performance.now()
+      const doOcclusionPass = now - lastOcclusionAt >= OCCLUSION_INTERVAL_MS
+      if (doOcclusionPass) lastOcclusionAt = now
+
       for (const it of items) {
         projectToScreen(it.anchor, camera, size, projected)
         it.el.style.transform =
@@ -309,6 +330,17 @@ export function createLabelLayer(
         //
         // 另注：同 id 的命中已被上面的 `!==` 排除，所以成对肌群的左右两块
         // **不会**互相遮挡；锚点落在两块中间，遮挡只可能来自**其它** id 的块。
+        // 节流：窗口内直接复用上次结果，不做射线
+        const doOcclusion = doOcclusionPass
+        const cached = occludedCache.get(it.id)
+        if (!doOcclusion && cached !== undefined) {
+          // 复用缓存**也必须让 `raised` 生效** —— 悬停/聚焦能在相机不动时改变，
+          // 若这里直接写 cached 的结论，窗口内的悬停提升会失效
+          const raised = it.id === hoveredId || it.id === focusedId
+          it.el.style.opacity = cached && !raised ? '0.28' : '1'
+          continue
+        }
+
         origin.copy(camera.position)
         dir.copy(it.anchor).sub(origin)
         raycaster.far = Math.max(dir.length() - 0.02, 0)
@@ -317,6 +349,11 @@ export function createLabelLayer(
         // 判成遮挡物，于是所有标签一起变暗。见 scene.ts 的 interactiveMeshes。
         const hits = raycaster.intersectObjects(interactiveMeshes(body), false)
         const occluded = hits.some((h) => h.object.userData.muscleId !== it.id)
+        // **这行是节流能生效的前提。** 少了它缓存永远是空的，`cached !== undefined`
+        // 恒假 → 窗口内照样打满射线，"节流"变成空文（实测踩过：写这条时批量替换
+        // 静默失败，只有 test 的 spy 把它抓出来）。存的是**射线结论**，
+        // `raised`（悬停/聚焦）在缓存分支里另行叠加 —— 它能在相机不动时改变。
+        occludedCache.set(it.id, occluded)
         // 悬停/聚焦的标签"提升"：不被遮挡淡化。它是用户此刻指着/选着的那一块，
         // 被压在 0.28 里就等于没有提升（28 条锚点全在中轴，重叠是常态）。
         // 注：出画（上面 z > 1 的分支）仍然压成 0——那时它不在画面上，没什么可提升的。

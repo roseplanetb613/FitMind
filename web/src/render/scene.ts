@@ -93,6 +93,9 @@ export function setHover(group: THREE.Group, id: string | null): void {
  * `raycaster` / `ndc` / `camera` 由调用方传入并复用：交互期本函数调用频繁，
  * 没必要每次新建三个对象。
  */
+/** 渲染分辨率上限（见 createScene 里的说明）。调高更清晰、更吃帧。 */
+export const MAX_PIXEL_RATIO = 1.5
+
 /**
  * 肌肉整体的不透明度（用户要的"30% 透明"）。
  *
@@ -203,7 +206,11 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   camera.lookAt(...initial.target)
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  // **渲染分辨率上限。** 原先是 2，在 4K + 高 DPI 下 backing store 可达 3300 万像素；
+  // 而本场景有 shell / 背景组织 / 27 块半透明肌肉 / 星场好几层叠加 ——
+  // 半透明丢掉 early-z，每片元都要混合，片元开销随像素量线性上涨。
+  // 1.5 在视网膜屏上肉眼几乎无差（canvas 是 3D 内容，不是文字），像素量却砍掉一半多。
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
 
   // 三点布光：主光偏右前，补光偏左后，顶光提轮廓
   const key = new THREE.DirectionalLight(0xffffff, 2.0)

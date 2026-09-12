@@ -81,6 +81,20 @@ export function mirror(p: PartSpec): PartSpec {
   }
 }
 
+/**
+ * 某个 muscle_id 的视觉类别。**声明的唯一来源。**
+ *
+ * `build.ts`（代码体块路径）直接用 spec 上的 `style`，`assembleBody`（真实模型路径）
+ * 走这里 —— 两条路径共用同一份声明，避免各写一份然后漂移。
+ *
+ * 这个函数存在的直接原因：真实模型路径原先只写 `id ? 'muscle' : 'other'`，
+ * 于是 `'non-muscle'` 在那条路径上**永远不会出现**，spec §4.4「心脏必须与骨骼肌
+ * 在视觉上可区分」只对代码体块成立。之前看不出来，是因为心脏在真实模型里没有网格。
+ */
+export function styleOf(id: string): 'muscle' | 'non-muscle' {
+  return [...PAIRED, ...MIDLINE].find((p) => p.id === id)?.style ?? 'muscle'
+}
+
 /** 22 成对 × 2 + 6 中轴 = 50 个体块。 */
 export function buildLayout(): MusclePart[] {
   const out: MusclePart[] = []

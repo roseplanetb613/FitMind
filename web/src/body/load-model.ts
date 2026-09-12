@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { build } from './build'
+import { styleOf } from './layout'
 import MAP_DOC from './muscle-map.json'
 
 /**
@@ -109,7 +110,10 @@ export function assembleBody(scene: THREE.Object3D): LoadedBody {
       opacity: 1,
     })
     mesh.userData.muscleId = id ?? undefined
-    mesh.userData.style = id ? 'muscle' : 'other'
+    // **style 走 layout 的声明，而不是一律 'muscle'。** 原先写 `id ? 'muscle' : 'other'`，
+    // 于是 'non-muscle' 在这条路径上永不出现 —— 心脏（cardio_system）会与骨骼肌
+    // 渲染得一模一样，违反 spec §4.4。见 layout.ts 的 styleOf。
+    mesh.userData.style = id ? styleOf(id) : 'other'
 
     if (!id) {
       // `other` = 其余 478 个网格（筋膜/滑囊/**肋间肌/髂胫束**…）合并成的背景组织。

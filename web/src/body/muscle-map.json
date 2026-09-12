@@ -13,11 +13,18 @@
     "  2. **侧别是直接追在末尾的 l/r，无分隔符**：`Vastus_medialis_musclel` / `...muscler`",
     "所以模式一律不要锚定 `$`；例如 /vastus_/ 同时命中左右两侧（我们本来就同色）。",
     "",
-    "空数组 = 该 id 不在这个文件里（cardio_system 在 CardioVascular41.fbx）。",
-    "这两者必须区分：**非空却一个都没匹配上 = 映射表有洞，构建脚本会拒绝产出**，",
-    "否则那块肌肉永远不亮且无人发现。",
+    "**本表默认对应 MuscularSystem100.fbx**；不在那个文件里的 id 由 `source_of` 指明来源：",
+    "  spine         → SkeletalSystem100.fbx（椎骨，不是肌肉）",
+    "  cardio_system → CardioVascular41.fbx（心脏）",
+    "空数组 = 该 id 不在任何已接入的文件里（当前没有这种 id）。",
+    "要注意的是：**非空却一个都没匹配上 = 映射表有洞，构建脚本会拒绝产出**，",
+    "否则那块肌肉永远不亮且无人发现（构建脚本按源文件分别报洞）。",
     "ankle_stabilizers 的 digitorum 模式**必须限定 longus/brevis**：`^Flexor_digitorum_` 会连前臂的 Flexor_digitorum_profundus 一起抓走（实测它把 ankle_stabilizers 拉到了胸口高度）；两条 profundus 归 forearms。"
   ],
+  "source_of": {
+    "spine": "skeletal",
+    "cardio_system": "cardio"
+  },
   "map": {
     "deltoids": [
       "deltoid_muscle"
@@ -132,12 +139,41 @@
       "^Splenius_"
     ],
     "spine": [
-      "^Multifidus",
-      "^Rotatores",
-      "^Interspinales",
-      "^Intertransversarii",
-      "^Longus_"
+      "^Vertebra_[CTL]\\d",
+      "^Atlas_\\(C1\\)",
+      "^Axis_\\(C2\\)",
+      "^Sacrum$",
+      "^Coccyx"
     ],
-    "cardio_system": []
+    "cardio_system": [
+      "^Left_ventricle",
+      "^Right_ventricle",
+      "^Left_atrium",
+      "^Right_atrium",
+      "Papillary_muscle_of_(left|right)_ventricle",
+      "Atrioventricular_valve",
+      "Semilunar_leaflet",
+      "^Pulmonary_valve",
+      "^Aortic_valve",
+      "^Coronary_leaflet",
+      "Interatrial_septum",
+      "_surface_of_heart",
+      "_border_of_heart",
+      "Base_of_heart",
+      "Apex_of_heart",
+      "Notch_of_cardiac_apex",
+      "Coronary_sulcus",
+      "Valvular_complex_of_heart",
+      "Root_of_aorta",
+      "Root_of_pulmonary_trunk",
+      "Ascending_aorta",
+      "^Pulmonary_trunk",
+      "Bifurcation_of_pulmonary_trunk",
+      "Coronary_artery",
+      "Circumflex_artery_of_heart",
+      "Arteries_of_heart",
+      "Coronary_sinus",
+      "Inferior_vein_of_left_ventricle"
+    ]
   }
 }

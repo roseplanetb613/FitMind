@@ -69,6 +69,30 @@ const MAP = MAP_DOC.map
 // 外壳与 other 不进映射表（它们不是 28 个 id 之一）
 const IDS = Object.keys(MAP)
 
+// —— 源文件 ——
+// 28 个 id 中，多数在肌肉文件里；spine（椎骨）和 cardio_system（心脏）在别的文件。
+// 具体哪个 id 属于哪个源，由 muscle-map.json 的 `source_of` 决定 —— **不在这里硬编码**，
+// 和模式表同一个理由：那是数据，应该可 diff、可单测，而不是散在两个地方。
+const SOURCES = {
+  muscle: 'MuscularSystem100.fbx',
+  skeletal: 'SkeletalSystem100.fbx',
+  cardio: 'CardioVascular41.fbx',
+}
+const SOURCE_OF = MAP_DOC.source_of ?? {}
+/** 某个 id 的来源文件键；未在 source_of 里声明的默认肌肉文件。 */
+const sourceOf = (id) => SOURCE_OF[id] ?? 'muscle'
+const idsOfSource = (src) => IDS.filter((id) => sourceOf(id) === src)
+
+// 未知的源名要当场炸掉。不检查的话它会被当成"没有 id 属于这个源"而静默跳过，
+// 于是那个 id 永远不亮 —— 正是映射表想避免的那种无声失败。
+for (const [id, src] of Object.entries(SOURCE_OF)) {
+  if (!(src in SOURCES)) {
+    console.error(`\n✗ muscle-map.json 的 source_of["${id}"] = "${src}" 不是已知源`)
+    console.error(`  已知源：${Object.keys(SOURCES).join(', ')}`)
+    process.exit(1)
+  }
+}
+
 function loadFbx(file) {
   const p = join(SRC, file)
   if (!existsSync(p)) {
@@ -108,11 +132,18 @@ function collectGeometries(root, keep) {
   return out
 }
 
-/** 按映射表把网格名归到 id（分区，先到先得）。返回 { id: [name...] } 与未认领名单。 */
-function partition(names) {
+/** 按映射表把网格名归到 id（分区，先到先得）。返回 { id: [name...] } 与未认领名单。
+ *
+ *  `ids` 限定"本次要在这些 id 里认领"——**按源文件分开调用**。跨源共用一份 owner
+ *  的话，先处理的文件会替另一个文件认领（同名网格在不同 FBX 里完全可能重名），
+ *  后面那个源就拿不到东西了。
+ *
+ *  顺序仍由 IDS 的原始顺序决定（先到先得），所以"区域概念排在具体肌肉之后"这条
+ *  依然成立——idsOfSource 保留了 IDS 的相对顺序。 */
+function partition(names, ids) {
   const owner = new Map()
   const byId = {}
-  for (const id of IDS) {
+  for (const id of ids) {
     const pats = (MAP[id] ?? []).map((s) => new RegExp(s))
     const hit = names.filter((n) => !owner.has(n) && pats.some((p) => p.test(n)))
     hit.forEach((n) => owner.set(n, id))
@@ -120,6 +151,20 @@ function partition(names) {
   }
   const other = names.filter((n) => !owner.has(n))
   return { byId, other, owner }
+}
+
+/** 按需读入源 FBX 并缓存。心脏那个 62MB，只有真用得上时才付这个代价。 */
+const treeCache = new Map()
+function treeOf(src) {
+  if (!treeCache.has(src)) treeCache.set(src, loadFbx(SOURCES[src]))
+  return treeCache.get(src)
+}
+
+/** 某棵树里的全部 mesh 名。 */
+function namesOf(tree) {
+  const out = []
+  tree.traverse((o) => { if (o.isMesh) out.push(o.name) })
+  return out
 }
 
 function mergeFor(geoms) {
@@ -132,44 +177,67 @@ function mergeFor(geoms) {
 // ============ 主流程 ============
 console.log('构建肌群模型\n')
 
-const muscleTree = loadFbx('MuscularSystem100.fbx')
-if (!muscleTree) process.exit(1)
+// 走 treeOf 而不是直接 loadFbx —— 否则肌肉文件会被解析两遍（这里一次、
+// 下面按源分区时又一次），37MB 白读。其它源由 treeOf 惰性读入。
+const muscleTree = treeOf('muscle')
+if (!muscleTree) {
+  console.error(`✗ 缺 ${SOURCES.muscle}（肌肉主体，28 个 id 里绝大多数在它里面）`)
+  process.exit(1)
+}
 
-const allNames = []
-muscleTree.traverse((o) => { if (o.isMesh) allNames.push(o.name) })
-console.log(`  网格 ${allNames.length} 个`)
+/** id → [网格名]，跨全部源汇总。 */
+const byIdSet = new Map()
+const holes = []
+let otherNames = []
 
-const { byId, other, owner } = partition(allNames)
+for (const src of Object.keys(SOURCES)) {
+  const ids = idsOfSource(src)
+  if (ids.length === 0) continue
 
-// 区分两种"0 命中"：
-//   · map[id] 是**空数组** → 该 id 不在这个文件里（cardio_system 在心血管文件），合法
-//   · map[id] **非空却一个都没匹配上** → 映射表有洞，必须拒绝产出
-// 不区分的话，后者会让那块肌肉永远不亮，而**不会有人发现**。
+  const tree = treeOf(src)
+  if (!tree) {
+    console.error(`\n✗ ${SOURCES[src]} 缺失，但它承载了 ${ids.length} 个 id：${ids.join(', ')}`)
+    process.exit(1)
+  }
+
+  const names = namesOf(tree)
+  const { byId, other, owner } = partition(names, ids)
+  console.log(`  ${src.padEnd(9)} ${String(names.length).padStart(4)} 网格 → 认领 ${ids.length} 个 id`)
+
+  // **other 只取肌肉文件。** 骨骼与心血管那两个文件各有 1900/700 个网格，
+  // 全并进 other 会让 glb 体积翻好几倍，而它们在视觉上本就被肌肉盖住。
+  if (src === 'muscle') otherNames = other
+
+  // 区分两种"0 命中"：
+  //   · map[id] 是**空数组** → 该 id 不属于任何已接入的文件，合法
+  //   · map[id] **非空却一个都没匹配上** → 映射表有洞，必须拒绝产出
+  // 不区分的话，后者会让那块肌肉永远不亮，而**不会有人发现**。
+  for (const id of ids) {
+    if ((MAP[id] ?? []).length > 0 && byId[id].length === 0) holes.push({ id, src })
+  }
+
+  for (const n of names) {
+    const id = owner.get(n)
+    if (id) byIdSet.set(id, [...(byIdSet.get(id) ?? []), n])
+  }
+}
+
 const absent = IDS.filter((id) => (MAP[id] ?? []).length === 0)
-const holes = IDS.filter((id) => (MAP[id] ?? []).length > 0 && byId[id].length === 0)
-
 console.log(`\n映射：${IDS.length - absent.length - holes.length}/${IDS.length - absent.length} 个在场 id 命中`
-  + `（${absent.length} 个不在此文件：${absent.join(', ') || '无'}）`)
-console.log(`  other：${other.length} 个网格`)
+  + `（${absent.length} 个无模式表：${absent.join(', ') || '无'}）`)
+console.log(`  other：${otherNames.length} 个网格（仅肌肉文件）`)
 
 if (holes.length) {
   console.error(`\n✗ 映射表有洞 —— 这些 id 写了模式却一个网格都没匹配上：`)
-  for (const id of holes) console.error(`    ${id}  ← ${JSON.stringify(MAP[id])}`)
+  for (const { id, src } of holes) console.error(`    ${id}  ← ${src}: ${JSON.stringify(MAP[id])}`)
   console.error('  拒绝产出：否则那块肌肉永远不亮，且不会有任何测试变红。')
   process.exit(1)
 }
 
 // 反向：写了模式但匹配数异常多，通常是模式太宽（例如 /biceps/ 会同时吃 brachii 与 femoris）
 for (const id of IDS) {
-  const n = byId[id].length
+  const n = (byIdSet.get(id) ?? []).length
   if (n > 40) console.warn(`  ⚠ ${id} 认领了 ${n} 个网格，模式可能过宽，请核对`)
-}
-
-// 按 id 收集几何并合并
-const byIdSet = new Map()
-for (const n of allNames) {
-  const id = owner.get(n)
-  if (id) byIdSet.set(id, [...(byIdSet.get(id) ?? []), n])
 }
 
 const doc = new Document()
@@ -203,10 +271,12 @@ console.log('\n合并中…')
 let kept = 0
 for (const id of IDS) {
   const names = byIdSet.get(id) ?? []
-  const geoms = collectGeometries(muscleTree, (n) => names.includes(n))
+  // **几何必须从该 id 所属的那棵树里取。** 拿 muscleTree 去 collect 一个
+  // 只存在于骨骼文件的 id，会得到空几何、静默跳过一个本该在场的东西。
+  const geoms = collectGeometries(treeOf(sourceOf(id)), (n) => names.includes(n))
   const m = addMerged(id, geoms)
   if (!m) {
-    console.log(`  ${id.padEnd(20)} —— 不在此文件，跳过`)
+    console.log(`  ${id.padEnd(20)} —— 无几何，跳过`)
     continue
   }
   kept += names.length
@@ -214,7 +284,7 @@ for (const id of IDS) {
 }
 
 // other：其余全部合并成一个中性网格，保留完整解剖观感
-const otherGeoms = collectGeometries(muscleTree, (n) => other.includes(n))
+const otherGeoms = collectGeometries(muscleTree, (n) => otherNames.includes(n))
 addMerged('other', otherGeoms)
 console.log(`  ${'other'.padEnd(20)} ${String(otherGeoms.length).padStart(3)} 网格 → 1`)
 

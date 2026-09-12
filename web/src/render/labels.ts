@@ -38,11 +38,41 @@ export function groupByMuscleId(body: THREE.Group): Map<string, THREE.Mesh[]> {
  * 前提：`meshes` 非空。空数组会走 `divideScalar(0)` 得到 NaN 锚点（静默：标签
  * 只是投影到 NaN、挪出画面）。当前唯一调用方 `groupByMuscleId` 的每组至少 1 块，
  * 故不可达——本函数不做兜底，避免让"空组"这条真错误被一个默认值掩盖。
+ *
+ * **已知后果（Task 8 接受，转 Task 9 验收项）**：`mirror()` 是精确取负，故 22 个成对
+ * 肌群的锚点 x 恰为 0，6 个中轴肌群本来也是 0——**28 条锚点全部落在 x = 0 平面**
+ * （实测 nonZeroAnchorX = 0）。后果不止"会堆叠"：在默认取景 `framingFor('front')`
+ * = [0,1.5,2.6] 下（fov 38 / aspect 800:600 / 800×600）**28/28 条的屏幕 x 全是
+ * 400.00，maxDX = 0.00px**——一条竖线；378 对里 35 对落在 |dx| < 60 且 |dy| < 18 内。
+ * 换四分之三视角 [0.9,1.5,2.6] / [1.8,1.5,2.0] 也只有 maxDX = 17.6 / 36.9px
+ * （1200×900 时 26.4 / 55.4px，重叠对数 27/378）——**远小于标签宽度**。
+ * 同 y 的实例如：biceps / triceps / latissimus_dorsi 都在世界 y = 1.300，
+ * obliques / lower_back / rectus_abdominis 都在 1.140，calves / tibialis_anterior 都在 0.360。
+ * 锚到"靠近相机的近侧块"也不解决——成对肌群的近侧块同样对称。
+ * 故 §6.2 的标签提升/避让不是可选优化，是 Task 9 的验收项（本任务不改：计划要求锚在中点）。
  */
 export function anchorFor(meshes: THREE.Mesh[]): THREE.Vector3 {
   const anchor = new THREE.Vector3()
   for (const m of meshes) anchor.add(m.position)
   return anchor.divideScalar(meshes.length)
+}
+
+/**
+ * 锚点 → 屏幕像素（纯函数，可单测）。`out` 复用，避免每帧 28 次分配。
+ *
+ * x 与 y 有隐含的不对称：NDC 的 y 向上、屏幕 y 向下，所以 y 要翻号、x 不翻。
+ * `out.z` 保留投影后的 NDC z（调用方用它做 `z > 1` 的出画剔除）。
+ */
+export function projectToScreen(
+  anchor: THREE.Vector3,
+  camera: THREE.Camera,
+  size: { w: number; h: number },
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  out.copy(anchor).project(camera)
+  out.x = (out.x * 0.5 + 0.5) * size.w
+  out.y = (-out.y * 0.5 + 0.5) * size.h
+  return out
 }
 
 interface LabelItem {
@@ -84,7 +114,7 @@ export function createLabelLayer(
   }
 
   const raycaster = new THREE.Raycaster()
-  const projected = new THREE.Vector3() // 只存投影后的 NDC
+  const projected = new THREE.Vector3() // 每次迭代复用：x/y = 屏幕像素，z = NDC z
   const dir = new THREE.Vector3()
   const origin = new THREE.Vector3()
 
@@ -98,10 +128,9 @@ export function createLabelLayer(
     },
     update(camera, size): void {
       for (const it of items) {
-        projected.copy(it.anchor).project(camera)
-        const x = (projected.x * 0.5 + 0.5) * size.w
-        const y = (-projected.y * 0.5 + 0.5) * size.h
-        it.el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
+        projectToScreen(it.anchor, camera, size, projected)
+        it.el.style.transform =
+          `translate(-50%, -50%) translate(${projected.x}px, ${projected.y}px)`
         if (projected.z > 1) {
           it.el.style.opacity = '0'
           continue
@@ -117,6 +146,8 @@ export function createLabelLayer(
         // ——28/28 全暗；背面 (0,1,-3) 只差 1 条（{1:10,0.28:18} → {1:9,0.28:19}）；
         // 正面 (0,1,3) **零差异**（都是 {1:17,0.28:11}）。即正/背面人工验收看不出这个回归
         // ——tests/label-layer.test.ts 用俯视那条把它钉住。
+        // 复现：tests/label-layer.test.ts 的 cameraAt + 同一组相机位置（800×600）；
+        // 这些数字只取决于相机位置与 build() 的摆位，与实现无关。
         //
         // 另注：同 id 的命中已被上面的 `!==` 排除，所以成对肌群的左右两块
         // **不会**互相遮挡；锚点落在两块中间，遮挡只可能来自**其它** id 的块。

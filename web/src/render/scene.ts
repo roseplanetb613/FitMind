@@ -131,9 +131,11 @@ export const MUSCLE_OPACITY = 0.3
 export const WIREFRAME_OPACITY_FLOOR = 0.18
 
 export const NON_MUSCLE_EMISSIVE_INTENSITY = 0.85
-/** 心脏的不透明度。**不能是 1** —— 用户要的是"带不透明度"，要能透出它在胸腔里。
- *  0.85 → 0.425：用户要求再减半（配合新增的辉光，露出内部的暗红更有层次）。 */
-export const NON_MUSCLE_OPACITY = 0.425
+/** 心脏的不透明度。**不能是 1** —— 用户要"带不透明度"，要能透出它在胸腔里。
+ *
+ * 调过三次，记下来免得来回摇摆：0.85 →（要求减半）0.425 →（要求加回来一些）0.6。
+ * 0.6 是"看得清是红的、又不至于挡住胸肌"的折中。 */
+export const NON_MUSCLE_OPACITY = 0.6
 
 /**
  * 一块肌肉的**基色**。

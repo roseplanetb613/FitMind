@@ -30,6 +30,9 @@ STAGE_RECEIVED = "received"       # 已收到，正在分析
 STAGE_UNDERSTAND = "understand"   # 正在理解你的问题
 STAGE_WORK = "work"               # 正在查询动作库与训练记录
 STAGE_RENDER = "render"           # 正在生成回答
+# 下面两个带**载荷**（detail），前端据此显示"调用了什么"
+STAGE_SKILL = "skill"             # 顶层技能承接了这一轮（载荷：skill）
+STAGE_TOOL = "tool"               # 多步编排里的单次技能调用（载荷：skill / mode / step）
 
 _emitter: contextvars.ContextVar = contextvars.ContextVar("stage_emitter", default=None)
 
@@ -43,8 +46,12 @@ def clear() -> None:
     _emitter.set(None)
 
 
-def emit(stage: str) -> None:
+def emit(stage: str, **detail) -> None:
     """报一个阶段。无人订阅时是空操作。
+
+    `detail` 是给前端的载荷（如 `skill="qa"`）—— 订阅方收到的是一个 dict：
+    `{"stage": ..., **detail}`。这样"调用了哪个技能"不必再挤进 stage 字符串里
+    做解析（拼字符串再切的写法，改个技能名就会静默错位）。
 
     **吞掉发射器的异常**：订阅方是自己人（SSE 生成器往 queue 里塞），
     但它一旦出错也不该让用户的回答失败。
@@ -53,6 +60,6 @@ def emit(stage: str) -> None:
     if fn is None:
         return
     try:
-        fn(stage)
+        fn({"stage": stage, **detail})
     except Exception:
         pass

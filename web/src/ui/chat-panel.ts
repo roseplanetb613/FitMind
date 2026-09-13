@@ -115,6 +115,16 @@ function renderMessage(
   // reply 是纯文本（后端给的是自然语言），用 textContent 而不是 innerHTML ——
   // innerHTML 会把模型输出里的尖括号当标签解析
   bubble.appendChild(el('p', 'chat-text', msg.text))
+
+  // 调用轨迹：这一轮实际用了哪些技能 / 工具。放在正文之下、卡片之上 ——
+  // 它是"过程"，卡片是"结论"，过程不该抢结论的位置。
+  if (msg.role === 'assistant' && msg.trace && msg.trace.length) {
+    const t = el('div', 'chat-trace')
+    t.appendChild(el('span', 'chat-trace-label', '调用'))
+    t.appendChild(el('span', 'chat-trace-list', msg.trace.join(' · ')))
+    bubble.appendChild(t)
+  }
+
   renderGuard(bubble, msg.guard)
   if (msg.role === 'assistant') renderStructured(bubble, msg.structured, ids, onMuscleClick)
   row.appendChild(bubble)

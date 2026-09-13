@@ -10,7 +10,7 @@
  * 不需要 DOM，也不需要网络。
  */
 
-import type { ChatRequest, ChatResponse } from '../data/chat'
+import type { ChatRequest, ChatResponse, ChatStage } from '../data/chat'
 import type { GuardPayload, Structured, StructuredItem } from '../data/types'
 
 /** 后端阶段值 → 中文文案。**未知阶段原样显示**，不编一个好听的说法。 */
@@ -25,6 +25,18 @@ export function stageText(stage: string): string {
   return STAGE_TEXT[stage] ?? stage
 }
 
+/**
+ * 阶段 → 给用户看的**一行字**。带载荷的阶段（技能/工具调用）在这里拼出名字。
+ *
+ * 未知阶段原样显示：后端将来加阶段时，前端不该显示 undefined，也不该编一个
+ * 好听的说法糊过去。
+ */
+export function stageLabel(s: ChatStage): string {
+  if (s.stage === 'skill' && s.skill) return `技能 · ${s.skill}`
+  if (s.stage === 'tool' && s.skill) return `工具 · ${s.skill}`
+  return stageText(s.stage)
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   text: string
@@ -33,6 +45,14 @@ export interface ChatMessage {
   /** 助手消息才有：风险拦截负载 */
   guard?: GuardPayload | null
   mode?: string
+  /**
+   * 这一轮**实际调用过的技能/工具**，按调用顺序、去重。
+   *
+   * 用户的诉求是"看不见 agent 在调什么"：只显示"正在生成回答"的话，一次多步编排
+   * 和一次直接回答长得一模一样。这里把 `skill` / `tool` 两类阶段记下来，
+   * 挂在回复上，事后也能回头看它做了什么。
+   */
+  trace?: string[]
 }
 
 export interface ChatState {
@@ -48,7 +68,7 @@ export interface ChatState {
 export interface ChatFlowDeps {
   send: (
     req: ChatRequest,
-    onStage: (stage: string) => void,
+    onStage: (stage: ChatStage) => void,
   ) => Promise<ChatResponse>
   /** 状态变化时回调（渲染）。**不传就只更新内部状态**，便于纯逻辑测试。 */
   onChange?: (state: ChatState) => void
@@ -88,6 +108,7 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
       if (!trimmed || pending) return // 空消息与连点都直接吞掉
 
       const mine = ++seq
+      const trace: string[] = []
       messages.push({ role: 'user', text: trimmed })
       pending = true
       stage = null
@@ -101,7 +122,12 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
         const resp = await deps.send(req, (s) => {
           // 迟到的阶段不能污染新一轮
           if (mine !== seq) return
-          stage = s
+          stage = stageLabel(s)
+          // 只记"调了什么"，不记粗粒度阶段（那句太笼统，事后回看没有信息量）
+          if (s.stage === 'skill' || s.stage === 'tool') {
+            const label = stageLabel(s)
+            if (!trace.includes(label)) trace.push(label)
+          }
           emit()
         })
 
@@ -118,6 +144,7 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
           ...(resp.structured ? { structured: resp.structured } : {}),
           guard: resp.guard ?? null,
           ...(resp.mode_used ? { mode: resp.mode_used } : {}),
+          ...(trace.length ? { trace } : {}),
         })
         pending = false
         stage = null

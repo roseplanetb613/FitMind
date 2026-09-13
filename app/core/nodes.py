@@ -246,6 +246,9 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     # ---------------- 技能执行 ----------------
     def _call_skill(state: dict, name: str, params: dict, mode: str):
+        # 多步编排（plan_exec / rewoo / react）里的**每一次**技能调用都经过这里，
+        # 所以进度上报只需要这一个点 —— 四个调用点各写一遍必然漂移。
+        progress.emit(progress.STAGE_TOOL, skill=name, mode=mode)
         s = registry.get(name)
         if s is None:
             return SkillResult(ok=False, data={}, provenance=[], error=f"无 {name}")
@@ -258,6 +261,8 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         if not cands:
             return {"outcome": {"ok": False, "data": {}, "provenance": [],
                                 "error": f"无技能承接 {task_type}"}}
+        # 顶层承接技能（direct 模式走这里，不经过 _call_skill）
+        progress.emit(progress.STAGE_SKILL, skill=cands[0].name, mode="direct")
         r = cands[0].execute(_ctx(state, "direct"), params)
         # skill：实际承接的技能名。此前 state 里没有它，CLI 只能把 provenance 当
         # 技能名打印（"工具→pipeline#screening.plan_check"），排查时误导。

@@ -34,9 +34,23 @@ export interface ChatRequest {
   user_id?: string
 }
 
+/**
+ * 一次进度上报。
+ *
+ * `stage` 是粗粒度阶段；`skill` / `mode` 只在 `stage` 为 `skill` / `tool` 时出现，
+ * 是**载荷**而不是拼进 stage 字符串里的（拼字符串再切成"改个技能名就静默错位"）。
+ */
+export interface ChatStage {
+  stage: string
+  /** 技能 / 工具名，如 `qa`、`split_cycle` */
+  skill?: string
+  /** 调用模式：direct / react / plan_exec / rewoo */
+  mode?: string
+}
+
 /** 流里的一帧。`stage` 是进度，`done` 是最终整包，`error` 是后端捕获的异常。 */
 export type ChatEvent =
-  | { type: 'stage'; stage: string }
+  | ({ type: 'stage' } & ChatStage)
   | { type: 'error'; message: string }
   | ({ type: 'done' } & ChatResponse)
 
@@ -107,7 +121,7 @@ export async function postChat(
  */
 export async function streamChat(
   req: ChatRequest,
-  onStage: (stage: string) => void,
+  onStage: (stage: ChatStage) => void,
   fetchImpl: typeof fetch = globalThis.fetch,
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
@@ -146,7 +160,8 @@ export async function streamChat(
         } catch {
           continue // 坏帧跳过：丢一条阶段远好过整条流炸掉
         }
-        if (ev.type === 'stage') onStage(ev.stage)
+        // 传整个事件（含 skill/mode 载荷），不是只传 stage 字符串
+        if (ev.type === 'stage') onStage(ev)
         else if (ev.type === 'done') done = ev
         else if (ev.type === 'error') errMsg = ev.message
       }

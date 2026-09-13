@@ -187,7 +187,8 @@ def create_app() -> FastAPI:
         def worker() -> None:
             # contextvar 在本线程内注册，agent.run 的整条同步调用链都看得见
             # —— 于是 agent.py / 各节点签名一行都不用改。
-            progress.set_emitter(lambda stage: q.put(("stage", {"stage": stage})))
+            # 发射器收到的是 dict（{"stage":..., "skill":...}），原样转发给前端
+            progress.set_emitter(lambda ev: q.put(("stage", ev)))
             try:
                 resp = agent.run(req.message, req.session_id, user_id=req.user_id)
                 q.put(("done", _payload(resp)))

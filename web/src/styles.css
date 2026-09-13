@@ -166,6 +166,21 @@ html, body {
 }
 .chat-item-name.is-link:hover { color: #8ff0e2; border-bottom-color: #8ff0e2; }
 
+/* 调用轨迹：这一轮用了哪些技能 / 工具。等宽 + 弱化，读作"过程日志"而非正文。
+   颜色仍用 teal 一族；**避开 cyan 196°**（恢复度冷端），理由见文件顶部 */
+.chat-trace {
+  display: flex; gap: 6px; align-items: baseline;
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px dashed rgba(160, 240, 230, .16);
+  font-size: 11px;
+}
+.chat-trace-label { color: #6f7d86; flex: none; }
+.chat-trace-list {
+  color: #5fd4c4; font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  word-break: break-word;
+}
+
 /* 风险拦截：必须与普通回答显著不同（后端专门算好的负载，不该埋没在正文里） */
 .chat-guard {
   margin-top: 9px; padding: 9px 10px; border-radius: 10px;

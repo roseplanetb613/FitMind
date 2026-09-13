@@ -262,6 +262,7 @@ const chatPanel = createChatPanel({
     chatPanel.setOpen(false) // 让出屏幕，否则面板正好盖住要看的模型
   },
   onChooseOption: (o, at) => void chatFlow.chooseOption(o, at),
+  onChooseCustom: (text, at) => void chatFlow.submitCustom(text, at),
   onSubmit: (text) => void chatFlow.send(text),
 })
 

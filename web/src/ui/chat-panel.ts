@@ -21,6 +21,8 @@ export interface ChatPanelOptions {
   onMuscleClick?: MuscleLinkHandler
   /** 点了消歧选项（第二个参数是消息下标，供 flow 定位并防重复点） */
   onChooseOption?: (o: StructuredOption, at: number) => void
+  /** 自定义输入的动作名（第二个参数是消息下标） */
+  onChooseCustom?: (text: string, at: number) => void
   onSubmit: (text: string) => void
 }
 
@@ -117,6 +119,7 @@ export function renderOptions(
   structured: Structured | undefined,
   onChoose?: (o: StructuredOption) => void,
   chosenId?: string | null,
+  onCustom?: (text: string) => void,
 ): void {
   const options = structured?.data?.options
   if (!Array.isArray(options) || options.length === 0) return
@@ -145,6 +148,28 @@ export function renderOptions(
     }
     box.appendChild(btn)
   }
+
+  // 候选都不是 → 自己打一个。**只在没选过时出现**：选完还留着输入框，
+  // 看着像还能再记一次，而补记守卫已经把这组锁住了。
+  if (!chosenId && onCustom) {
+    const form = el('form', 'chat-option-custom')
+    const input = el('input', 'chat-option-input')
+    input.setAttribute('type', 'text')
+    input.setAttribute('placeholder', '都不是？自己写一个动作名')
+    input.setAttribute('autocomplete', 'off')
+    const ok = el('button', 'chat-option-submit')
+    ok.setAttribute('type', 'submit')
+    ok.textContent = '记账'
+    form.append(input, ok)
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault()
+      const t = input.value.trim()
+      if (!t) return
+      input.value = ''
+      onCustom(t)
+    })
+    box.appendChild(form)
+  }
   container.appendChild(box)
 }
 
@@ -155,6 +180,7 @@ function renderMessage(
   onMuscleClick?: MuscleLinkHandler,
   onChooseOption?: (o: StructuredOption, at: number) => void,
   at = -1,
+  onChooseCustom?: (text: string, at: number) => void,
 ): void {
   const row = el('div', `chat-msg is-${msg.role}`)
   const bubble = el('div', 'chat-bubble')
@@ -176,7 +202,8 @@ function renderMessage(
     renderStructured(bubble, msg.structured, ids, onMuscleClick)
     renderOptions(bubble, msg.structured,
                   onChooseOption ? (o) => onChooseOption(o, at) : undefined,
-                  msg.chosenOptionId)
+                  msg.chosenOptionId,
+                  onChooseCustom ? (t) => onChooseCustom(t, at) : undefined)
   }
   row.appendChild(bubble)
   list.appendChild(row)
@@ -236,7 +263,8 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
     // 消息区整段重建（对话量小，重建比 diff 简单且不会残留）
     list.innerHTML = ''
     state.messages.forEach((m, i) => {
-      renderMessage(list, m, muscleIds, onMuscleClick, opts.onChooseOption, i)
+      renderMessage(list, m, muscleIds, onMuscleClick, opts.onChooseOption, i,
+                    opts.onChooseCustom)
     })
     if (state.messages.length === 0) {
       list.appendChild(el('p', 'chat-empty', '你好，我是你的教练。可以问我今天练什么、某块肌肉恢复得怎么样，或者让我排一份计划。'))

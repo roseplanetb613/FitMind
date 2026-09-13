@@ -16,7 +16,7 @@
  * 同一约定（`base: '/app/'` 只作用于静态资源；API 挂在服务器根上，dev 由
  * `vite.config.ts` 的 proxy 转发）。
  */
-import type { GuardPayload, Structured } from './types'
+import type { GuardPayload, Structured, StructuredOption } from './types'
 
 export interface ChatResponse {
   session_id: string
@@ -179,7 +179,9 @@ export async function streamChat(
 
 export interface CheckinResolveRequest {
   user_id?: string
-  exercise_id: string
+  /** 二选一：点候选给 exercise_id；自己打字给 text（后端再解析一次） */
+  exercise_id?: string
+  text?: string
   name_zh?: string
   raw?: string
   sets?: number
@@ -189,6 +191,11 @@ export interface CheckinResolveRequest {
 
 export interface CheckinResolveResponse {
   ok: boolean
+  /** 自定义输入没有**完全同名**的动作 → 把近似结果回给用户再选一次 */
+  need_pick?: boolean
+  reply?: string
+  raw?: string
+  options?: StructuredOption[]
   event_id?: string
   exercise_id?: string
   name_zh?: string

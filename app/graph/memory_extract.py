@@ -220,8 +220,18 @@ def _resolve_exercise(text: str) -> dict | None:
     except Exception:
         pass                                   # 取不到部位表不阻断，继续按动作名解析
     try:
+        from lib.exercise_repo import norm_zh
         from app.runtime.repos import exercise_repo
-        hits = exercise_repo().search_zh(t, limit=1)
+        repo = exercise_repo()
+        # **先找完全同名的。** search_zh 按难度升序返回，取 limit=1 拿到的是
+        # "包含这个词的最简单的动作"而不是这个词本身 —— 实测输入"深蹲"会解析成
+        # `弹力带 单臂 单腿 分腿深蹲`（难度 1），用户点/写的是"深蹲"，记下的却是
+        # 另一个动作。库里有同名条目时必须优先命中它。
+        want = norm_zh(t)
+        for r in repo.by_id.values():
+            if (r.get("norm_name_zh") or "") == want:
+                return r
+        hits = repo.search_zh(t, limit=1)
         if hits:
             return hits[0]
     except Exception:

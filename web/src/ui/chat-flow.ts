@@ -83,8 +83,8 @@ export interface ChatFlowDeps {
   /** 消息里的用户 id（后端记忆图谱归属） */
   userId?: string
   /** 补记通道。不传则消歧选项点了没反应（测试里可以省略） */
-  resolve?: (req: { exercise_id: string; name_zh?: string; raw?: string
-                     user_id?: string }) => Promise<CheckinResolveResponse>
+  resolve?: (req: { exercise_id?: string; text?: string; name_zh?: string
+                     raw?: string; user_id?: string }) => Promise<CheckinResolveResponse>
 }
 
 export interface ChatFlow {
@@ -93,8 +93,10 @@ export interface ChatFlow {
   send: (text: string) => Promise<void>
   /** 清空消息与错误（**不清会话 id**：那是和 agent 的上下文，清掉就断片了） */
   clear: () => void
-  /** 消歧选择框里点一个动作 → 补记训练。`at` 是那条消息在列表里的下标。 */
+  /** 消歧选择框里点一个候选 → 补记训练。`at` 是那条消息在列表里的下标。 */
   chooseOption: (option: StructuredOption, at: number) => Promise<void>
+  /** 候选都不是 → 自己打一个动作名。后端会再解析一次；解析不中就如实说没找到。 */
+  submitCustom: (text: string, at: number) => Promise<void>
 }
 
 export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
@@ -109,6 +111,52 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
 
   const snapshot = (): ChatState => ({ messages: [...messages], pending, stage, error })
   const emit = (): void => deps.onChange?.(snapshot())
+
+  /**
+   * 补记一条消歧结果（候选与自定义输入**共用**）。
+   *
+   * 抽出来是因为"防重复补记"这件事只该有一份实现：两条路径各写一遍的话，
+   * 将来只给其中一条加守卫，另一条就会重复记账 —— 而这种回归没有症状，
+   * 只是训练记录悄悄多了一条。
+   *
+   * `mark` 是防重标记（候选用 exercise id，自定义用 `custom:文本`）。
+   */
+  async function record(
+    payload: { exercise_id?: string; text?: string; name_zh?: string },
+    mark: string,
+    at: number,
+  ): Promise<void> {
+    const msg = messages[at]
+    // 三道门都要：消息得在、没点过、有补记通道。少一道就可能重复补记。
+    if (!msg || msg.chosenOptionId || !deps.resolve) return
+    msg.chosenOptionId = mark          // 先标记再 await：并发连点也只会记一次
+    emit()
+    try {
+      const req = { ...payload } as { exercise_id?: string; text?: string
+                                      name_zh?: string; raw?: string; user_id?: string }
+      const raw = msg.structured?.data?.raw
+      if (typeof raw === 'string') req.raw = raw
+      if (deps.userId) req.user_id = deps.userId
+      const r = await deps.resolve(req)
+      if (r.need_pick) {
+        // 自定义输入没有完全同名的动作 → **不要硬记**（库里没有叫"深蹲"的动作，
+        // 模糊匹配会记成"弹力带…分腿深蹲"这种器械都不一样的），把这批近似结果
+        // 当成新的一轮候选让用户确认。新消息 = 新的补记守卫，可以重新点。
+        messages.push({ role: 'assistant', text: r.reply || '是下面哪个？',
+                        structured: { title: '确认动作',
+                                      data: { options: r.options ?? [],
+                                              raw: r.raw ?? payload.text ?? '' } } })
+      } else {
+        messages.push({ role: 'assistant',
+                        text: r.ack || `已记下：${payload.name_zh ?? payload.text ?? ''}` })
+      }
+    } catch (e) {
+      // 记失败要说出来，并且**放开重试**（把标记撤掉）—— 不然用户以为记上了
+      msg.chosenOptionId = null
+      error = e instanceof Error ? e.message : String(e)
+    }
+    emit()
+  }
 
   return {
     state: snapshot,
@@ -170,26 +218,13 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
     },
 
     async chooseOption(option: StructuredOption, at: number): Promise<void> {
-      const msg = messages[at]
-      // 三道门都要：消息得在、没点过、有补记通道。少一道就可能重复补记。
-      if (!msg || msg.chosenOptionId || !deps.resolve) return
-      msg.chosenOptionId = option.id           // 先标记再 await：连点两次也只会记一次
-      emit()
-      try {
-        const req: { exercise_id: string; name_zh?: string; raw?: string
-                     user_id?: string } = { exercise_id: option.id,
-                                           name_zh: option.name_zh }
-        const raw = msg.structured?.data?.raw
-        if (typeof raw === 'string') req.raw = raw
-        if (deps.userId) req.user_id = deps.userId
-        const r = await deps.resolve(req)
-        messages.push({ role: 'assistant', text: r.ack || `已记下：${option.name_zh}` })
-      } catch (e) {
-        // 记失败要说出来，并且**放开重试**（把标记撤掉）—— 不然用户以为记上了
-        msg.chosenOptionId = null
-        error = e instanceof Error ? e.message : String(e)
-      }
-      emit()
+      await record({ exercise_id: option.id, name_zh: option.name_zh }, option.id, at)
+    },
+
+    async submitCustom(text: string, at: number): Promise<void> {
+      const t = text.trim()
+      if (!t) return
+      await record({ text: t }, `custom:${t}`, at)
     },
 
     clear(): void {

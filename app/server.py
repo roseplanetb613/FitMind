@@ -34,7 +34,11 @@ class CheckinResolveRequest(BaseModel):
     里的模型解析不到，会被当成 query 参数，实测报 422 `missing query req`。
     """
     user_id: str = "local"
-    exercise_id: str
+    # 二选一：点候选给 id；自己打字给 text（后端再解析一次）。
+    # **都必填会挡住自定义输入**，都选填又会让空请求变成 422 之外的另一种静默 ——
+    # 所以两个都选填，在端点里显式判"至少给一个"。
+    exercise_id: str | None = None
+    text: str | None = None           # 自定义输入的动作名
     name_zh: str | None = None
     raw: str | None = None            # 用户原话里的说法，留作审计
     sets: int | None = None
@@ -177,10 +181,45 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=503, content={"ok": False,
                                                           "error": "记忆图谱不可用"})
         ex = exercise_repo()
-        rec = ex.get(req.exercise_id) if req.exercise_id else None
+        if not req.exercise_id and not req.text:
+            return JSONResponse(status_code=422, content={
+                "ok": False, "error": "需要 exercise_id 或 text 之一"})
+
+        eid_in = req.exercise_id
+        if not eid_in and req.text:
+            # 自定义输入：**只认完全同名**，否则把近似结果当选项回去让用户确认。
+            #
+            # 为什么不直接取 search_zh 的首条：它按难度升序返回，拿到的是"包含这个词
+            # 的最简单的动作"。实测输入"深蹲"会落到 `弹力带 单臂 单腿 分腿深蹲` ——
+            # 器械都不一样，**记的是一个用户没做过的动作**。而库里根本没有叫"深蹲"
+            # 的动作（都是"弹力带…分腿深蹲"这类复合名），所以只做模糊匹配一定出错。
+            from lib.exercise_repo import norm_zh
+            want = norm_zh(req.text)
+            exact = next((r for r in ex.by_id.values()
+                          if (r.get("norm_name_zh") or "") == want), None)
+            if exact:
+                eid_in = exact.get("id")
+                if not req.name_zh:
+                    req.name_zh = exact.get("name_zh")
+            else:
+                cands = ex.search_zh(req.text, limit=3)
+                if not cands:
+                    return JSONResponse(status_code=404, content={
+                        "ok": False,
+                        "error": f"动作库里没有「{req.text}」——换个说法试试"})
+                return {"ok": False, "need_pick": True, "raw": req.text,
+                        "reply": f"库里没有正好叫「{req.text}」的动作——是下面哪个？",
+                        "options": [{"id": c.get("id"), "name_zh": c.get("name_zh"),
+                                     "equipment": c.get("normalized_equipment"),
+                                     "difficulty": c.get("difficulty"),
+                                     "recent_count": 0} for c in cands]}
+        rec = ex.get(eid_in) if eid_in else None
         if not rec:
-            return JSONResponse(status_code=404, content={"ok": False,
-                                                          "error": f"动作不存在：{req.exercise_id}"})
+            # 如实说没找到，**不硬记**：库里没有的动作记下去也建不出肌群边，
+            # 3D 上照样看不见 —— 那正是这次要消灭的"以为记上了"。
+            return JSONResponse(status_code=404, content={
+                "ok": False,
+                "error": f"动作库里没有「{req.text or req.exercise_id}」——换个说法试试"})
         name = req.name_zh or rec.get("name_zh")
         mus = rec.get("muscles_canonical") or {}
         # 肌群与角色走单源：与打卡写入口径一致（target 主练 / 其余协同）
@@ -190,7 +229,7 @@ def create_app() -> FastAPI:
         for mm in (mus.get("muscle_group"), *(mus.get("secondary") or [])):
             if mm:
                 roles.setdefault(str(mm), "synergist")
-        item = {"name": name, "exercise_id": req.exercise_id}
+        item = {"name": name, "exercise_id": eid_in}
         if req.raw:
             item["raw"] = req.raw
         if req.sets is not None:
@@ -204,7 +243,7 @@ def create_app() -> FastAPI:
         if not eid:
             return JSONResponse(status_code=500, content={"ok": False,
                                                           "error": "写入失败"})
-        return {"ok": True, "event_id": eid, "exercise_id": req.exercise_id,
+        return {"ok": True, "event_id": eid, "exercise_id": eid_in,
                 "name_zh": name, "muscles": sorted(roles),
                 "ack": f"已记下：{name}"}
 

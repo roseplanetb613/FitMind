@@ -10,8 +10,8 @@
  * 不需要 DOM，也不需要网络。
  */
 
-import type { ChatRequest, ChatResponse, ChatStage } from '../data/chat'
-import type { GuardPayload, Structured, StructuredItem } from '../data/types'
+import type { ChatRequest, ChatResponse, ChatStage, CheckinResolveResponse } from '../data/chat'
+import type { GuardPayload, Structured, StructuredItem, StructuredOption } from '../data/types'
 
 /** 后端阶段值 → 中文文案。**未知阶段原样显示**，不编一个好听的说法。 */
 export const STAGE_TEXT: Record<string, string> = {
@@ -46,6 +46,11 @@ export interface ChatMessage {
   guard?: GuardPayload | null
   mode?: string
   /**
+   * 已经点过的消歧选项 id。点过之后整组选项不再可点 ——
+   * 否则连点会重复补记同一次训练（后端每次都会建一条新事件）。
+   */
+  chosenOptionId?: string | null
+  /**
    * 这一轮**实际调用过的技能/工具**，按调用顺序、去重。
    *
    * 用户的诉求是"看不见 agent 在调什么"：只显示"正在生成回答"的话，一次多步编排
@@ -77,6 +82,9 @@ export interface ChatFlowDeps {
   saveSession?: (id: string) => void
   /** 消息里的用户 id（后端记忆图谱归属） */
   userId?: string
+  /** 补记通道。不传则消歧选项点了没反应（测试里可以省略） */
+  resolve?: (req: { exercise_id: string; name_zh?: string; raw?: string
+                     user_id?: string }) => Promise<CheckinResolveResponse>
 }
 
 export interface ChatFlow {
@@ -85,6 +93,8 @@ export interface ChatFlow {
   send: (text: string) => Promise<void>
   /** 清空消息与错误（**不清会话 id**：那是和 agent 的上下文，清掉就断片了） */
   clear: () => void
+  /** 消歧选择框里点一个动作 → 补记训练。`at` 是那条消息在列表里的下标。 */
+  chooseOption: (option: StructuredOption, at: number) => Promise<void>
 }
 
 export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
@@ -157,6 +167,29 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
         error = e instanceof Error ? e.message : String(e)
         emit()
       }
+    },
+
+    async chooseOption(option: StructuredOption, at: number): Promise<void> {
+      const msg = messages[at]
+      // 三道门都要：消息得在、没点过、有补记通道。少一道就可能重复补记。
+      if (!msg || msg.chosenOptionId || !deps.resolve) return
+      msg.chosenOptionId = option.id           // 先标记再 await：连点两次也只会记一次
+      emit()
+      try {
+        const req: { exercise_id: string; name_zh?: string; raw?: string
+                     user_id?: string } = { exercise_id: option.id,
+                                           name_zh: option.name_zh }
+        const raw = msg.structured?.data?.raw
+        if (typeof raw === 'string') req.raw = raw
+        if (deps.userId) req.user_id = deps.userId
+        const r = await deps.resolve(req)
+        messages.push({ role: 'assistant', text: r.ack || `已记下：${option.name_zh}` })
+      } catch (e) {
+        // 记失败要说出来，并且**放开重试**（把标记撤掉）—— 不然用户以为记上了
+        msg.chosenOptionId = null
+        error = e instanceof Error ? e.message : String(e)
+      }
+      emit()
     },
 
     clear(): void {

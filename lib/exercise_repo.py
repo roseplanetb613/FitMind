@@ -361,11 +361,18 @@ class ExerciseRepo:
                   difficulty: Optional[int | str] = None,
                   count: int = 5,
                   exclude: Optional[Iterable[str]] = None,
-                  include_stretch: bool = False) -> dict:
+                  include_stretch: bool = False,
+                  prefer: Optional[Iterable[str]] = None) -> dict:
         """
         简单推荐：以目标肌肉为主键，逐级放宽条件直到凑够 count。
         默认排除拉伸/柔韧类动作（适合力量/训练建议），include_stretch=True 可放开。
         返回 {recommendations: [...], fallback: bool}，fallback=True 表示放宽过条件。
+
+        `prefer`：用户**最近练过**的动作 id 集合，排在前面。默认 None → 顺序完全不变
+        （既有调用方与测试不受影响）。这是"按你的习惯排序"的唯一注入点。
+
+        排序总键：(是否最近练过, 是否该肌肉的主目标, 难度)。
+        **最近练过排在最前** —— 它比"主目标"更能代表这个人实际在做什么。
         """
         blacklist = set(exclude or [])
         # **每一步都必须带 `muscle`。** 这里曾漏传，于是候选集是**全部 1324 个动作**，
@@ -396,8 +403,13 @@ class ExerciseRepo:
             # 变体去重（family 优先，无 family 用去括号后的动作名）+ 主目标优先 + 难度升序
             seen_fam: set[str] = set()
             picked = []
-            for r in sorted(cands, key=lambda x: (0 if x["muscles_canonical"]["target"] ==
-                            target_id else 1, x["difficulty"])):
+            _pref = set(prefer or ())
+            # 第一项：最近练过的排最前。没有 prefer 时恒为 0，等价于原行为。
+            # ⚠ 改了排序会连带改变"哪几个被 picked"——下面凑够 count 就 break，
+            # 且后半段靠 blacklist 在步骤间排除，所以步骤 2-5 的候选集也会变。
+            for r in sorted(cands, key=lambda x: (0 if x["id"] in _pref else 1,
+                                                  0 if x["muscles_canonical"]["target"] ==
+                                                  target_id else 1, x["difficulty"])):
                 key = r["family"] or self._strip_variant(r["name"])
                 if key in seen_fam:
                     continue

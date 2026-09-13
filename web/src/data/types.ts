@@ -71,7 +71,21 @@ export function emptyMap(days: number): MuscleMapData {
  */
 export interface StructuredData {
   items?: StructuredItem[]
+  /** 打卡消歧：让用户从库内真实动作里挑一个（见后端 clarify_exercise 节点）。
+   *  **已经按"最近 30 天练过的"排好序** —— 前端不再排，避免两处口径。 */
+  options?: StructuredOption[]
+  /** 消歧的原始片段（如"完腿"），仅用于展示它到底没对上什么 */
+  raw?: string
   [k: string]: unknown
+}
+
+/** 消歧选项。`recent_count` 是用户近 30 天练过这个动作的次数。 */
+export interface StructuredOption {
+  id: string
+  name_zh: string
+  equipment?: string | null
+  difficulty?: number | string | null
+  recent_count?: number
 }
 
 export interface StructuredItem {

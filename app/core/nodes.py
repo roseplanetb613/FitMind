@@ -13,6 +13,8 @@ from app.runtime.validator import RuleValidator
 
 MAX_STEPS = 4
 MAX_PLAN = 4
+# 消歧选择框最多给几个动作。6 是一屏能扫完、又不用翻页的量。
+MAX_CLARIFY_OPTIONS = 6
 
 # 上下文消解：肯定应答精确匹配集（剥标点后整词比对，防"好吗/行动"类子串误伤）
 # 2026-09-11 补选择式应答（"就这个计划"）：此前只认 确认/好的 等短应答，
@@ -218,14 +220,20 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         if intent.needs_clarify:
             mode = Mode.DIRECT  # 占位，mode_used 由下方显式置 "clarify"
         out = {"intent": {**intent.__dict__, "needs_clarify": intent.needs_clarify}}
-        out["mode_used"] = "clarify" if intent.needs_clarify else mode.value
+        # 打卡消歧优先于低置信反问：用户已经明确说了练了什么，只是我们没对上
+        # 库里的动作 —— 这时候问"你想做哪件事"是答非所问。
+        if state.get("exercise_clarify"):
+            out["mode_used"] = "clarify_exercise"
+        else:
+            out["mode_used"] = "clarify" if intent.needs_clarify else mode.value
         return out
 
     def mode_route(state: dict) -> str:
         # 已经知道要干什么了，接下来是查数据/编排计划——具体走哪个分支用户不关心
         progress.emit(progress.STAGE_WORK)
         m = state.get("mode_used", "direct")
-        return "clarify" if m == "clarify" else m
+        # 反问答疑类直接收束，不经过下面对 mode 的一一列举
+        return m if m in ("clarify", "clarify_exercise") else m
 
     # ---------------- clarify（低置信反问；直接 END，不耗 render） ----------------
     def clarify(state: dict) -> dict:
@@ -243,6 +251,82 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         return {"reply": (f"我有点不确定你想做哪件事——你是想{opts}，"
                           "还是有别的问题？直接告诉我，我马上帮你。"),
                 "mode_used": "clarify"}
+
+    # -------- clarify_exercise（打卡动作消歧；直接 END，不耗 render） --------
+    def clarify_exercise(state: dict) -> dict:
+        """打卡里有没对上库内动作的片段 → 让用户从**库内真实动作**里挑一个。
+
+        为什么不让 LLM 猜：库里拼作"史密斯深蹲"而用户写"斯密斯深蹲"，没有拼音/
+        模糊匹配，猜不出来只会编；而编错的训练记录会直接污染恢复度计算。
+        让用户点一下，既准确又顺手把偏好攒下来。
+        """
+        from app.graph.memory import MemoryStore
+        from lib.parts import PART_CHARS, PART_WORDS
+        from lib.parts import muscle_of as _muscle_of
+        from app.runtime.repos import exercise_repo
+
+        items = state.get("exercise_clarify") or []
+        raw = next((str(i.get("raw")) for i in items if i.get("raw")), "")
+        uid = state.get("user_id") or "local"
+
+        # 从片段里**扫出部位词**："完腿" → 含"腿" → quadriceps。
+        # 长词优先，免得"大腿"被"腿"抢先匹配掉。扫不到就不过滤部位（见下）。
+        muscle = None
+        for w in sorted(PART_WORDS, key=len, reverse=True):
+            if w and w in raw:
+                muscle = _muscle_of(w)
+                if muscle:
+                    break
+        if not muscle:
+            for c in PART_CHARS:
+                if c and c in raw:
+                    muscle = _muscle_of(c)
+                    if muscle:
+                        break
+
+        ex = exercise_repo()
+        cands: list[dict] = []
+        try:
+            if muscle:
+                # **用 recommend 而不是 filter。** filter 会把该肌群的**全部**
+                # 205 条按文件顺序倒出来，头几条是"分臂 绕环 触趾"这类热身/拉伸；
+                # recommend 是既有的推荐口径（主目标优先、去变体重复、难度递进），
+                # 3D 视图的"点肌肉看推荐"用的也是它 —— 两处同源，口径不会分家。
+                # 多取一倍，留给下面的偏好重排。
+                cands = ex.recommend(muscle, count=MAX_CLARIFY_OPTIONS * 2)["recommendations"]
+            else:
+                # 没有部位线索（多半是拼错的动作名）→ 直接拿原词去检索。
+                # 搜不到就**不给选项**，只问 —— 编一组不相干的动作比空着更糟。
+                cands = ex.search_zh(raw, limit=MAX_CLARIFY_OPTIONS * 2)
+        except Exception:
+            cands = []
+
+        # 常练的排前面：用户第二次遇到就不用翻了。
+        # 排序只在这一处做（前端不再排），避免两边口径不一致。
+        recent: dict = {}
+        try:
+            store = MemoryStore.get()
+            if store is not None:
+                recent = store.recent_exercises(uid, days=30)
+        except Exception:
+            recent = {}
+        cands.sort(key=lambda c: -recent.get(str(c.get("id")), 0))
+
+        options = [{"id": c.get("id"), "name_zh": c.get("name_zh"),
+                    "equipment": c.get("normalized_equipment"),
+                    "difficulty": c.get("difficulty"),
+                    "recent_count": recent.get(str(c.get("id")), 0)}
+                   for c in cands[:MAX_CLARIFY_OPTIONS]]
+
+        where = f"「{raw}」" if raw else "这个动作"
+        if options:
+            reply = f"你说的{where}我没对上库里的动作——是下面哪个？点一下我就记上。"
+        else:
+            reply = (f"你说的{where}我在动作库里没找到。"
+                     "换个说法，或者直接说动作的完整名称？")
+        return {"event": None, "outcome": {"ok": True, "data": {
+                    "options": options, "raw": raw, "verb": state.get("verb")}},
+                "reply": reply, "mode_used": "clarify_exercise"}
 
     # ---------------- 技能执行 ----------------
     def _call_skill(state: dict, name: str, params: dict, mode: str):
@@ -407,7 +491,7 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
 
     nodes = {"guard": guard, "guard_route": guard_route,
              "classify": classify, "mode_route": mode_route,
-             "clarify": clarify,
+             "clarify": clarify, "clarify_exercise": clarify_exercise,
              "execute": execute,
              "plan_node": plan_node, "plan_route": plan_route,
              "aggregate": aggregate,

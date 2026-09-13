@@ -28,6 +28,8 @@ class FitMindState(TypedDict, total=False):
                                       # provenance 当技能名打印，排查时误导）
     reply: str
     memory_ack: list[str]             # 记忆写入确认话术（agent.run 注入，render/clarify 消费）
+    exercise_clarify: list            # 打卡里没对上动作的片段（agent.run 注入，
+                                      # classify 据此改走 clarify_exercise 节点问用户）
     provenance: Annotated[list, operator.add]   # 顶层来源标注（guard/execute/aggregate 写入）
 
 
@@ -43,6 +45,7 @@ def build_graph(registry, llm, classifier=None, validator=None,
     g.add_node("guard", nodes["guard"])
     g.add_node("classify", nodes["classify"])
     g.add_node("clarify", nodes["clarify"])
+    g.add_node("clarify_exercise", nodes["clarify_exercise"])
     g.add_node("execute", nodes["execute"])
     g.add_node("plan_node", nodes["plan_node"])
     g.add_node("aggregate", nodes["aggregate"])
@@ -63,8 +66,10 @@ def build_graph(registry, llm, classifier=None, validator=None,
         "plan_exec": "plan_node",
         "rewoo": "plan_node",
         "clarify": "clarify",
+        "clarify_exercise": "clarify_exercise",
     })
-    g.add_edge("clarify", END)   # 低置信反问：直接收束，不耗 render token
+    g.add_edge("clarify", END)            # 低置信反问：直接收束，不耗 render token
+    g.add_edge("clarify_exercise", END)   # 打卡消歧：同样直接收束
     # plan_node：plan_exec 走顺序 aggregate；rewoo 走 fan-out
     g.add_conditional_edges("plan_node", nodes["plan_route"], {
         "seq": "aggregate", "parallel": "execute_step0",

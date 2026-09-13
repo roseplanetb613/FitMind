@@ -45,9 +45,13 @@ class Agent:
         # 记忆规则抽取（偏好/档案陈述句；静默，宁缺毋滥——失败绝不影响主链路）。
         # 先于投影：抽取落图谱后当轮即可投影回会话（"我只有60kg"同轮生效）。
         acks: list[str] = []
+        # 没解析成库内动作的片段（如"练完腿"里的"完腿"）——不静默丢，带进图里
+        # 触发消歧节点问用户。见 memory_extract._resolve_exercise 的说明。
+        exercise_clarify: list = []
         try:
             from app.graph.memory_extract import apply_memory_extract
-            acks = apply_memory_extract(message, sess.user_id) or []
+            acks = apply_memory_extract(message, sess.user_id,
+                                        unresolved=exercise_clarify) or []
         except Exception:
             pass
         # 记忆图谱单向投影：图谱 current 态为真相源（v1 单用户 local 或注入 uid），
@@ -58,6 +62,8 @@ class Agent:
         state_in = {"session_id": sess.id, "message": message,
                     "profile": dict(sess.profile), "user_id": sess.user_id,
                     "memory_ack": acks,
+                    # 有没对上的动作 → classify 会把 mode 改成 clarify_exercise
+                    "exercise_clarify": exercise_clarify,
                     # 最近 3 轮对话（classify 上下文消解："确认"承接上轮提议）
                     "history": list(sess.history[-6:])}
         if self._checkpointer is not None:

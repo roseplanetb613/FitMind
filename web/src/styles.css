@@ -181,6 +181,35 @@ html, body {
   word-break: break-word;
 }
 
+/* 消歧选项（human-in-the-loop）：点一个就把这次训练记上。
+   顺序由后端给（近 30 天练过的在前），前端只画。 */
+.chat-options { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+.chat-options-hint { font-size: 11px; color: #9aa6b2; margin-bottom: 2px; }
+.chat-option {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  text-align: left; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 7px 10px; border-radius: 10px;
+  color: #e6ebf0;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(160, 240, 230, .18);
+}
+.chat-option:hover:not(:disabled) {
+  background: rgba(95, 212, 196, .18);
+  border-color: rgba(95, 212, 196, .5);
+}
+/* 练过的角标 —— "优先偏好动作"对用户可见的那一半 */
+.chat-option-badge {
+  flex: none; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: rgba(95, 212, 196, .18); color: #5fd4c4; white-space: nowrap;
+}
+/* 点过之后整组禁用：连点会重复补记同一次训练 */
+.chat-option:disabled { cursor: default; opacity: .5; }
+.chat-option.is-chosen { border-style: dashed; }
+.chat-option.is-picked {
+  opacity: 1; border-style: solid;
+  background: rgba(95, 212, 196, .22); border-color: rgba(95, 212, 196, .6);
+}
+
 /* 风险拦截：必须与普通回答显著不同（后端专门算好的负载，不该埋没在正文里） */
 .chat-guard {
   margin-top: 9px; padding: 9px 10px; border-radius: 10px;

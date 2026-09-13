@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,6 +24,22 @@ class ProfileRequest(BaseModel):
     session_id: str
     profile: dict
     user_id: str | None = None
+
+
+class CheckinResolveRequest(BaseModel):
+    """消歧选择框点定后的补记请求。
+
+    ⚠ **必须定义在模块级。** 本文件有 `from __future__ import annotations`，
+    所有注解都是字符串，FastAPI 靠**模块全局**去解析它们；定义在 `create_app()`
+    里的模型解析不到，会被当成 query 参数，实测报 422 `missing query req`。
+    """
+    user_id: str = "local"
+    exercise_id: str
+    name_zh: str | None = None
+    raw: str | None = None            # 用户原话里的说法，留作审计
+    sets: int | None = None
+    reps: int | None = None
+    occurred_at: str | None = None
 
 
 def create_app() -> FastAPI:
@@ -100,7 +117,7 @@ def create_app() -> FastAPI:
         return {**base, "muscles": {mid: states.get(mid) for mid in ids}}
 
     @app.get("/v1/muscle-exercises")
-    def muscle_exercises(muscle: str, limit: int = 3):
+    def muscle_exercises(muscle: str, limit: int = 3, user_id: str = "local"):
         """练这块肌肉的推荐动作（供 3D 视图"点肌肉 → 看该练什么"）。
 
         **复用 `ExerciseRepo.recommend`**，不另写推荐逻辑 —— 它已有变体族去重
@@ -113,7 +130,18 @@ def create_app() -> FastAPI:
         from app.runtime.repos import exercise_repo
 
         ex = exercise_repo()
-        r = ex.recommend(muscle, count=max(1, min(int(limit), 20)))
+        # 按用户**最近 30 天练过的**排序：点肌肉看到的先是自己常练的。
+        # 取不到偏好时是空集 → recommend 的顺序完全不变（见其 prefer 说明）。
+        prefer: set[str] = set()
+        try:
+            from app.graph.memory import MemoryStore
+            store = MemoryStore.get()
+            if store is not None:
+                prefer = set(store.recent_exercises(user_id, days=30))
+        except Exception:
+            prefer = set()          # 偏好是锦上添花，取不到就按原顺序给
+        r = ex.recommend(muscle, count=max(1, min(int(limit), 20)),
+                         prefer=prefer or None)
         out = []
         for x in r["recommendations"]:
             out.append({
@@ -132,6 +160,53 @@ def create_app() -> FastAPI:
             })
         return {"muscle": muscle, "count": len(out),
                 "fallback": r["fallback"], "exercises": out}
+
+    @app.post("/v1/checkin/resolve")
+    def checkin_resolve(req: CheckinResolveRequest):
+        """用户在消歧选择框里点定了一个动作 → 补记这次训练。
+
+        **为什么不复用 /v1/chat**：这时我们已经确知用户点了哪个动作，
+        再跑一遍 agent 既慢（2~5s）又可能再次落回消歧 —— 自找的。
+        这里直接建事件 + TARGETS 边，并把 exercise_id 落进 payload
+        （记为"偏好"，供后续按常练排序）。
+        """
+        from app.graph.memory import MemoryStore
+        from app.runtime.repos import exercise_repo
+        m = MemoryStore.get()
+        if m is None:
+            return JSONResponse(status_code=503, content={"ok": False,
+                                                          "error": "记忆图谱不可用"})
+        ex = exercise_repo()
+        rec = ex.get(req.exercise_id) if req.exercise_id else None
+        if not rec:
+            return JSONResponse(status_code=404, content={"ok": False,
+                                                          "error": f"动作不存在：{req.exercise_id}"})
+        name = req.name_zh or rec.get("name_zh")
+        mus = rec.get("muscles_canonical") or {}
+        # 肌群与角色走单源：与打卡写入口径一致（target 主练 / 其余协同）
+        roles = {}
+        if mus.get("target"):
+            roles[str(mus["target"])] = "target"
+        for mm in (mus.get("muscle_group"), *(mus.get("secondary") or [])):
+            if mm:
+                roles.setdefault(str(mm), "synergist")
+        item = {"name": name, "exercise_id": req.exercise_id}
+        if req.raw:
+            item["raw"] = req.raw
+        if req.sets is not None:
+            item["sets"] = int(req.sets)
+        if req.reps is not None:
+            item["reps"] = int(req.reps)
+        eid = m.log_event(req.user_id, "checkin",
+                          {"about": name, "verb": "点选补记", "items": [item]},
+                          occurred_at=req.occurred_at or None,
+                          muscles=list(roles) or None, muscle_roles=roles or None)
+        if not eid:
+            return JSONResponse(status_code=500, content={"ok": False,
+                                                          "error": "写入失败"})
+        return {"ok": True, "event_id": eid, "exercise_id": req.exercise_id,
+                "name_zh": name, "muscles": sorted(roles),
+                "ack": f"已记下：{name}"}
 
     def _payload(resp) -> dict:
         # structured 由 build_structured 单源组装：失败原因已透传 error 字段。

@@ -51,6 +51,9 @@ _SETS_RE = re.compile(r"(\d{1,2})\s*[xX×*]\s*(\d{1,3})")
 # 实测："我昨晚七点练了夹腿4x15 60kg" 曾被抽成
 # [{'raw':'夹腿','sets':4,'reps':15}, {'raw':'60kg'}] —— 第二个是伪动作条目。
 _WEIGHT_SEG_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(kg|KG|公斤|千克|斤)$")
+# 纯组次片段（"4组8次"/"3组12次"）——与 _WEIGHT_SEG_RE 同类：**不是动作名**。
+# 实测它会单独成一个 item；不滤掉的话消歧选择框里会出现"4组8次"这个"动作"。
+_REPS_SEG_RE = re.compile(r"^[\d\s]*(组|次|下|个|分钟)\s*[\d\s]*(组|次|下|个|分钟)?$")
 
 
 _QUESTION = ("怎么", "吗", "?", "？", "啥", "为什么", "能不能", "可以吗",
@@ -196,16 +199,40 @@ def _occurred_at(occurred: str, text: str = "") -> str:
                     tzinfo=local).astimezone(timezone.utc).isoformat()
 
 
-def _norm_exercise(text: str):
-    """动作回归一：search_zh 命中返回名称；无命中 None（宁缺毋滥）。"""
+def _resolve_exercise(text: str) -> dict | None:
+    """动作词 → 库内整条记录；无命中 None（宁缺毋滥）。
+
+    与 `_norm_exercise` 的区别：**保留 id**。id 是"动作偏好"的地基 ——
+    事件里只存自由文本的话，日后想知道"这人最近常练什么"就必须拿文本重新解析，
+    而解析不中的 token 每次都不中，重解析只会继承同一个缺口。
+    写入时顺手落一个 id，比事后猜便宜也准得多。
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    # **部位词不解析成动作。** 实测 `腿` 会被 search_zh 的双向子串命中到
+    # '摆臂 悬垂 屈膝 腿'（id 2355）这种噪声 —— 把"我练了腿"记成练了那个动作，
+    # 比不记还糟。部位词一律返回 None，交给上层走消歧（问用户到底是哪个动作）。
+    try:
+        from lib.parts import muscle_of
+        if muscle_of(t):
+            return None
+    except Exception:
+        pass                                   # 取不到部位表不阻断，继续按动作名解析
     try:
         from app.runtime.repos import exercise_repo
-        hits = exercise_repo().search_zh(text, limit=1)
+        hits = exercise_repo().search_zh(t, limit=1)
         if hits:
-            return hits[0].get("name_zh")
+            return hits[0]
     except Exception:
         bump("memory_extract.norm_exercise")   # 静默失败可查（见 diag）
     return None
+
+
+def _norm_exercise(text: str):
+    """动作回归一：search_zh 命中返回名称；无命中 None（宁缺毋滥）。"""
+    hit = _resolve_exercise(text)
+    return hit.get("name_zh") if hit else None
 
 
 def _norm_food(text: str):
@@ -410,6 +437,7 @@ def _event(text: str) -> dict | None:
     seg = text.split(verb_hit)[-1]
     items: list[dict] = []
     resolved = False          # 是否有条目检索命中动作（严格护栏判据）
+    unresolved: list[dict] = []   # 没解析中的动作片段，带上层去问用户（见下方 return）
     pending_kg = None         # 重量出现在动作之前时暂存，挂给下一个动作
     for part in _EVENT_SPLIT.split(seg):
         part = part.strip(" 的了。，")
@@ -440,9 +468,11 @@ def _event(text: str) -> dict | None:
         it: dict = {}
         if pending_kg is not None:
             it["weight_kg"], pending_kg = pending_kg, None
-        norm = _norm_exercise(namepart)
-        if norm:
+        hit = _resolve_exercise(namepart)
+        norm = hit.get("name_zh") if hit else None
+        if hit:
             resolved = True                # 检索命中（即使归一为带空格复合名也算）
+            it["exercise_id"] = hit.get("id")   # 偏好地基，见 _resolve_exercise
         if norm and " " not in norm:
             it["name"] = norm              # 无空格干净归一名
         else:
@@ -450,6 +480,15 @@ def _event(text: str) -> dict | None:
         if m:
             it["sets"], it["reps"] = int(m.group(1)), int(m.group(2))
         items.append(it)
+        if not hit and not _REPS_SEG_RE.match(namepart or ""):
+            # **没解析中的也要带出去**，不能像以前那样静默丢掉。
+            # 上层据此弹"你说的是哪个动作"的选择框（human-in-the-loop）。
+            # 静默丢弃的代价实测过：事件照写、ack 照说"已记录"、但一条
+            # TARGETS 边都建不出来 → 3D 上什么都看不见，而用户以为记上了。
+            #
+            # 纯组次片段（"4组8次"）排除在外：它是量不是动作，拿去问用户很荒唐。
+            unresolved.append({k: it[k] for k in ("raw", "sets", "reps", "weight_kg")
+                               if k in it})
     if not items:
         return None
     if strict and not resolved:
@@ -458,7 +497,8 @@ def _event(text: str) -> dict | None:
     today = datetime.now(timezone.utc).date()
     occurred = (today - timedelta(days=time_hit[1])).isoformat()
     return {"op": "checkin", "occurred": occurred,
-            "about": about, "verb": verb_hit, "items": items}
+            "about": about, "verb": verb_hit, "items": items,
+            "unresolved": unresolved}
 
 
 def _name(text: str) -> dict | None:
@@ -657,10 +697,18 @@ def _ack_text(cmd: dict) -> str:
     return op
 
 
-def apply_memory_extract(text: str, user_id: str) -> list[str]:
+def apply_memory_extract(text: str, user_id: str,
+                         unresolved: list | None = None) -> list[str]:
     """把抽取指令写入 MemoryStore，返回 ack 确认话术列表（空=无写入）。
-    静默；无图谱/失败 → 已收集的 acks 原样返回（绝不抛异常影响主链路）。"""
+    静默；无图谱/失败 → 已收集的 acks 原样返回（绝不抛异常影响主链路）。
+
+    `unresolved`：**可选的出参**。传入一个 list 时，checkin 里没解析成库内动作的
+    片段会被追加进去，上层据此弹"你说的是哪个动作"的选择框（human-in-the-loop）。
+    用可选出参而不是改返回值 —— 调用方有 20 多处（测试占绝大多数），
+    改返回类型的收益为零、破坏面很大。
+    """
     acks: list[str] = []
+    pending: list = []
     try:
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
@@ -684,6 +732,9 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                                     about=cmd["about"],
                                     expires_days=cmd.get("expires_days")) is not None
             elif cmd["op"] == "checkin":
+                # 没对上动作的片段带出去（解析不中不等于没发生 —— 以前是静默丢，
+                # 结果是"事件写了、TARGETS 边没有、3D 上什么都看不见"）
+                pending.extend(cmd.get("unresolved") or [])
                 # name（归一）与 raw（用户原词）都试：CONTAINS 解析，宁多挂不漏挂
                 names = [i[k] for i in cmd.get("items", [])
                          for k in ("name", "raw") if i.get(k)]
@@ -730,7 +781,22 @@ def apply_memory_extract(text: str, user_id: str) -> list[str]:
                 m.forget(user_id)            # 删除权最高（E2E-01/IS-02）
                 ok = True
             if ok:
-                acks.append(_ack_text(cmd))
+                # 有没解析中的动作时，**只确认确实记上的那些**。
+                #
+                # 不能整条 ack 照报：那几个片段一条 TARGETS 边都建不出来，
+                # 说"已记下（完腿）"是假话，而且会和紧接着的"你说的是哪个动作？"
+                # 自相矛盾。
+                # 也不能整条都 ack 掉：「我前天练的腿+弯举4*10」里的**弯举是真记上了**，
+                # 一声不吭会让用户以为连弯举也没记 → 于是按"有没有解析出动作"过滤。
+                if cmd.get("unresolved"):
+                    done = [i for i in cmd.get("items") or []
+                            if i.get("exercise_id") or i.get("name")]
+                    if done:
+                        acks.append(_ack_text({**cmd, "items": done}))
+                else:
+                    acks.append(_ack_text(cmd))
     except Exception:
         return acks
+    if unresolved is not None:
+        unresolved.extend(pending)
     return acks

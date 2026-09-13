@@ -687,6 +687,34 @@ class MemoryStore:
                occurred_at: str | None = None) -> str | None:
         return self.log_event(user_id, "pr", payload, occurred_at=occurred_at)
 
+    def recent_exercises(self, user_id: str, days: int = 30) -> dict[str, int]:
+        """近 N 天打卡里出现过的 exercise_id → 次数（只读；异常 → {}）。
+
+        用途有两个，都是"按你的习惯排序"：
+          · 消歧选择框把常练的动作排前面（用户第二次就不用翻）
+          · `/v1/muscle-exercises` 的推荐顺序（点肌肉看到的先是自己常练的）
+
+        **数 id，不重解析文本。** 老事件里只有自由文本，重解析只会继承当初那个
+        解析缺口（不中的 token 每次都不中），而且每次查询都要重算一遍。
+        id 是写入时顺手落下的（见 memory_extract._resolve_exercise）。
+
+        窗口默认 30 天：够长到覆盖一个训练周期，够短到"最近在练什么"还成立。
+        """
+        _validate_user_id(user_id)
+        out: dict[str, int] = {}
+        try:
+            for ev in self.events(user_id, "checkin", days=days):
+                items = (ev.get("payload") or {}).get("items") or []
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    eid = it.get("exercise_id")
+                    if eid:
+                        out[str(eid)] = out.get(str(eid), 0) + 1
+        except Exception:
+            diag.bump("memory.recent_exercises")
+        return out
+
     def events(self, user_id: str, type_: str | None = None,
                days: int = 90) -> list[dict]:
         """事件时间线（只读）：occurred_at 倒序，days 窗口；payload JSON 还原。

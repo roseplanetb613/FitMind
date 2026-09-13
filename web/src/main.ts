@@ -18,7 +18,7 @@ import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
 import { createDetailFlow } from './ui/detail-flow'
 import { MUSCLE_IDS } from './body/load-model'
-import { streamChat } from './data/chat'
+import { postCheckinResolve, streamChat } from './data/chat'
 import { createChatFlow } from './ui/chat-flow'
 import { createChatPanel } from './ui/chat-panel'
 import { hideDetail } from './ui/detail'
@@ -261,11 +261,14 @@ const chatPanel = createChatPanel({
     select(id)
     chatPanel.setOpen(false) // 让出屏幕，否则面板正好盖住要看的模型
   },
+  onChooseOption: (o, at) => void chatFlow.chooseOption(o, at),
   onSubmit: (text) => void chatFlow.send(text),
 })
 
 const chatFlow = createChatFlow({
   send: (req, onStage) => streamChat(req, onStage),
+  // 消歧选择框点定 → 补记（不走 chat：已经确知是哪个动作了，没必要再跑 agent）
+  resolve: (req) => postCheckinResolve(req),
   onChange: (state) => chatPanel.render(state),
   loadSession: () => {
     try {

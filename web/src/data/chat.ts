@@ -174,3 +174,40 @@ export async function streamChat(
   if (!done) throw new Error('对话失败：流已结束但没有收到结果')
   return done
 }
+
+// ────────────────────────────────────────────── 打卡消歧补记 ──
+
+export interface CheckinResolveRequest {
+  user_id?: string
+  exercise_id: string
+  name_zh?: string
+  raw?: string
+  sets?: number
+  reps?: number
+  occurred_at?: string
+}
+
+export interface CheckinResolveResponse {
+  ok: boolean
+  event_id?: string
+  exercise_id?: string
+  name_zh?: string
+  muscles?: string[]
+  ack?: string
+  error?: string
+}
+
+/**
+ * 用户在消歧选择框里点定了一个动作 → 补记这次训练。
+ *
+ * **不走 `/v1/chat`**：这时已经确知点了哪个动作，再跑一遍 agent 既慢（2~5s）
+ * 又可能再次落回消歧。后端直接建事件 + 肌群边。
+ */
+export async function postCheckinResolve(
+  req: CheckinResolveRequest,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<CheckinResolveResponse> {
+  const url = '/v1/checkin/resolve'
+  const res = await request(url, req as unknown as ChatRequest, fetchImpl)
+  return (await res.json()) as CheckinResolveResponse
+}

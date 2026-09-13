@@ -708,7 +708,8 @@ def _ack_text(cmd: dict) -> str:
 
 
 def apply_memory_extract(text: str, user_id: str,
-                         unresolved: list | None = None) -> list[str]:
+                         unresolved: list | None = None,
+                         forgotten: list | None = None) -> list[str]:
     """把抽取指令写入 MemoryStore，返回 ack 确认话术列表（空=无写入）。
     静默；无图谱/失败 → 已收集的 acks 原样返回（绝不抛异常影响主链路）。
 
@@ -716,6 +717,11 @@ def apply_memory_extract(text: str, user_id: str,
     片段会被追加进去，上层据此弹"你说的是哪个动作"的选择框（human-in-the-loop）。
     用可选出参而不是改返回值 —— 调用方有 20 多处（测试占绝大多数），
     改返回类型的收益为零、破坏面很大。
+
+    `forgotten`：同样是可选出参。发生 `forget_all` 时会被追加一项 ——
+    上层据此清掉**会话缓存里的档案**。这一步不能省：`forget` 只删图谱节点，
+    而 `qa._profile` 读的是会话缓存 `ctx.profile`，两头不清就会出现
+    "回复说已清除、再问还是看得到"（实测）。
     """
     acks: list[str] = []
     pending: list = []
@@ -790,6 +796,10 @@ def apply_memory_extract(text: str, user_id: str,
             elif cmd["op"] == "forget_all":
                 m.forget(user_id)            # 删除权最高（E2E-01/IS-02）
                 ok = True
+                # 图谱清了，会话缓存还得由调用方清（那边才拿得到 Session）。
+                # 见函数 docstring 的 forgotten 说明。
+                if forgotten is not None:
+                    forgotten.append(cmd)
             if ok:
                 # 有没解析中的动作时，**只确认确实记上的那些**。
                 #

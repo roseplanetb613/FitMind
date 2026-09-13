@@ -257,6 +257,17 @@ class MemoryStore:
                 include_expired: bool = False) -> list[dict]:
         """active 状态（valid_to NULL 且未失效）；include_expired 时仍返回
         已过期事实（expires_at<now，由 expire_prompts 消费转确认）。"""
+        return self.current_rows(user_id, type_, include_expired) or []
+
+    def current_rows(self, user_id: str, type_: str | None = None,
+                     include_expired: bool = False) -> list[dict] | None:
+        """同 `current`，但**读失败返回 None 而不是 []**。
+
+        为什么需要区分：`[]` 既可能是"这个人没有任何事实"，也可能是"这次没读到"。
+        下游对这两种情况的处理**必须相反** —— 前者该把会话缓存清空（用户行使了
+        清除权），后者绝不能清（那会把用户档案抹掉）。混在一起就只能保守地不清，
+        代价是"清除"在别的会话里不生效（实测：A 里清除、B 里照样看得见）。
+        """
         _validate_user_id(user_id)
         where_t = "AND f.type = $t" if type_ else ""
         exp_f = "" if include_expired else "AND (f.expires_at IS NULL OR f.expires_at >= $now)"
@@ -272,19 +283,20 @@ class MemoryStore:
                 "ORDER BY f.recorded_at",
                 uid=user_id, t=type_, now=self._now())
         except Exception:
-            return []
+            diag.bump("memory.current_rows")
+            return None
 
     def current_about(self, user_id: str, type_: str) -> list[str]:
         """active（未过期）事实的 about 去重序列（guard 主动禁忌交叉消费）。"""
         return sorted({str(r["about"]) for r in self.current(user_id, type_)
                        if r.get("about")})
 
-    def current_profile(self, user_id: str) -> dict[str, object]:
-        """profile.* active → {key: value}（SessionManager 单向投影）。
-        type 存 profile.<key> 前缀，必须按前缀匹配而非全等；
-        value 为 JSON 序列化，读取时类型还原（数值保持 int/float）。"""
+    @staticmethod
+    def _profile_of(rows) -> dict[str, object]:
+        """StateFact 行 → {key: value}。type 存 `profile.<key>` 前缀，
+        必须按前缀匹配而非全等；value 为 JSON，读取时还原类型（数值保持 int/float）。"""
         out: dict[str, object] = {}
-        for r in self.current(user_id):
+        for r in rows or []:
             t = str(r["type"])
             if t.startswith("profile."):
                 try:
@@ -292,6 +304,19 @@ class MemoryStore:
                 except Exception:
                     out[t[len("profile."):]] = r["value"]     # 兜底原串
         return out
+
+    def current_profile(self, user_id: str) -> dict[str, object]:
+        """profile.* active → {key: value}（SessionManager 单向投影）。"""
+        return self._profile_of(self.current(user_id))
+
+    def current_profile_checked(self, user_id: str) -> dict[str, object] | None:
+        """同 `current_profile`，但**读失败返回 None**（见 current_rows 的说明）。
+
+        消费方（`Agent._project_memory_profile`）据此决定能不能把会话缓存清空：
+        `None` → 保持现状；`{}` → 权威值就是空，必须清。
+        """
+        rows = self.current_rows(user_id)
+        return None if rows is None else self._profile_of(rows)
 
     def as_of(self, user_id: str, when: str,
               type_: str | None = None) -> list[dict]:

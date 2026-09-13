@@ -48,12 +48,19 @@ class Agent:
         # 没解析成库内动作的片段（如"练完腿"里的"完腿"）——不静默丢，带进图里
         # 触发消歧节点问用户。见 memory_extract._resolve_exercise 的说明。
         exercise_clarify: list = []
+        forgotten: list = []
         try:
             from app.graph.memory_extract import apply_memory_extract
             acks = apply_memory_extract(message, sess.user_id,
-                                        unresolved=exercise_clarify) or []
+                                        unresolved=exercise_clarify,
+                                        forgotten=forgotten) or []
         except Exception:
             pass
+        # **清除要两头都清。** `forget` 只删图谱节点，而档案查询读的是会话缓存
+        # （`nodes._ctx` 用 sess.profile）—— 只清图谱的话，回复说"已清除"、
+        # 用户再问却还看得见（实测复现）。
+        if forgotten:
+            sess.profile.clear()
         # 记忆图谱单向投影：图谱 current 态为真相源（v1 单用户 local 或注入 uid），
         # 新会话建档/记忆变更后投影回会话缓存（写只写图谱，读投影重建）
         self._project_memory_profile(sess)
@@ -92,15 +99,26 @@ class Agent:
     @staticmethod
     def _project_memory_profile(sess: Session) -> None:
         """记忆图谱 current 态 → 会话 profile 单向投影（写只写图谱，读投影重建）。
-        图谱不可用/无记忆 → 保持会话现状（降级链不变）。"""
+
+        **必须是"替换"而不是"只增不减"**：原先写的是
+        `if p: sess.profile.update(p)`，图谱为空时整段跳过，于是会话缓存里的档案
+        **永远不会消失** —— 用户清除数据后，回复说"已清除"、他再问却还看得见
+        （实测复现）。同一个漏洞还有一个更隐蔽的门：在会话 B 里清除，会话 A 的
+        缓存从没被清过，A 里永远看得到。
+
+        用 `current_profile_checked` 区分"空"与"没读到"：
+          · None（读失败）→ **保持现状**，绝不能用空值覆盖（那会把用户档案抹掉）
+          · {}（读到且确实为空）→ 权威值就是空，必须清
+        """
         try:
             from app.graph.memory import MemoryStore
             m = MemoryStore.get()
             if m is None:
-                return
-            p = m.current_profile(sess.user_id)
-            if p:
-                sess.profile.update(p)
+                return                          # 图谱不可用 → 会话独立建档（降级链不变）
+            p = m.current_profile_checked(sess.user_id)
+            if p is None:
+                return                          # 没读到 ≠ 没有，保持现状
+            sess.profile = dict(p)
         except Exception:
             diag.bump("agent.project_profile")   # 投影失败 → 会话用旧档案
 
@@ -122,7 +140,10 @@ class Agent:
             if m is not None:
                 m.upsert_profile(sess.user_id, dict(sess.profile))
         except Exception:
-            pass                                   # 图谱不可用 → 会话独立建档（现状）
+            # 图谱不可用 → 会话独立建档（现状）。**但这会与图谱分叉**：会话有、
+            # 图谱没有，下一轮的投影（替换语义）会把它抹掉。留个痕，好在
+            # /health 的 degraded 里看见 —— 此前是裸 pass，分叉了也没人知道。
+            diag.bump("agent.profile_write")
         return dict(sess.profile)
 
     def get_profile(self, session_id: str) -> dict | None:

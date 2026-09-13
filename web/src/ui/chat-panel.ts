@@ -23,6 +23,8 @@ export interface ChatPanelOptions {
   onChooseOption?: (o: StructuredOption, at: number) => void
   /** 自定义输入的动作名（第二个参数是消息下标） */
   onChooseCustom?: (text: string, at: number) => void
+  /** 打开建档窗口 */
+  onOpenProfile?: () => void
   onSubmit: (text: string) => void
 }
 
@@ -217,6 +219,12 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
 
   const head = el('div', 'chat-head')
   head.appendChild(el('span', 'chat-title', 'FitMind 教练'))
+  if (opts.onOpenProfile) {
+    const pf = el('button', 'chat-profile-btn', '我的信息')
+    pf.setAttribute('type', 'button')
+    pf.addEventListener('click', () => opts.onOpenProfile?.())
+    head.appendChild(pf)
+  }
   const close = el('button', 'chat-close')
   close.setAttribute('type', 'button')
   close.setAttribute('aria-label', '收起对话')

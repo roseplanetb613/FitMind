@@ -191,8 +191,12 @@ class QaSkill(Skill):
                                    provenance=["qa#memory.as_of"])
         p = dict(getattr(ctx, "profile", None) or {})
         if not p:
+            # `need_profile`：给前端的**结构化**信号 —— 收到就把建档窗口弹出来。
+            # 不靠匹配下面那句中文：文案一改前端就静默失效，而且那种失败
+            # 看起来只是"自动弹窗不好使了"，没人会想到是措辞变了。
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "data_kind": "data",
+                                              "need_profile": True,
                                               "reason": "尚未建立身体档案，请先建档"},
                                provenance=["qa#session.profile"])
         label = {"name": "称呼", "sex": "性别", "age": "年龄",

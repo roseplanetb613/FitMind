@@ -82,6 +82,10 @@ export interface ChatFlowDeps {
   saveSession?: (id: string) => void
   /** 消息里的用户 id（后端记忆图谱归属） */
   userId?: string
+  /** agent 说"还没建档"时回调 → 自动把建档窗口弹出来。
+   *  读的是后端给的结构化标记 `data.need_profile`，**不是匹配那句中文** ——
+   *  文案一改靠匹配就会静默失效，而且看起来只是"自动弹窗不好使了"。 */
+  onNeedProfile?: () => void
   /** 补记通道。不传则消歧选项点了没反应（测试里可以省略） */
   resolve?: (req: { exercise_id?: string; text?: string; name_zh?: string
                      raw?: string; user_id?: string }) => Promise<CheckinResolveResponse>
@@ -196,6 +200,10 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
           sessionId = resp.session_id
           deps.saveSession?.(resp.session_id)
         }
+        // 未建档 → 主动弹窗口。放在 push 之后：先让回复进列表，
+        // 用户看到"尚未建档"那句话的同时窗口才弹出来，因果才连得上。
+        const needProfile = (resp.structured?.data as { need_profile?: boolean } | undefined)
+          ?.need_profile
         messages.push({
           role: 'assistant',
           text: resp.reply,
@@ -207,6 +215,7 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
         pending = false
         stage = null
         emit()
+        if (needProfile) deps.onNeedProfile?.()
       } catch (e) {
         if (mine !== seq) return
         pending = false

@@ -304,3 +304,72 @@ html, body {
   #toolbar { flex-wrap: wrap; max-width: 55vw; }
   .chat-toggle { bottom: calc(68vh + 12px); }
 }
+
+/* ══════════════════════════════════════════════════════════
+   建档窗口 —— 同一个玻璃拟态体系（见上方 .chat-panel 的色相说明）
+   ══════════════════════════════════════════════════════════ */
+.profile-modal { display: none; }
+.profile-modal.is-open { display: block; }
+.profile-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 10, 14, .55);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.profile-card {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px); overflow-y: auto;
+  padding: 20px 22px; border-radius: 20px;
+  background: linear-gradient(160deg, rgba(56, 189, 178, .16), rgba(18, 38, 46, .88));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(160, 240, 230, .2);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .14);
+}
+.profile-title { margin: 0 0 6px; font-size: 16px; }
+.profile-sub { margin: 0 0 16px; font-size: 12px; color: #9aa6b2; line-height: 1.6; }
+
+.profile-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.profile-field { display: flex; flex-direction: column; gap: 5px; }
+.profile-field-label { font-size: 12px; color: #c8d2da; }
+.profile-unit { color: #6f7d86; }
+.profile-input {
+  width: 100%; padding: 8px 10px; border-radius: 10px; font: inherit; font-size: 13px;
+  color: #e6ebf0; outline: none;
+  background: rgba(0, 0, 0, .28);
+  border: 1px solid rgba(160, 240, 230, .2);
+}
+.profile-input:focus { border-color: rgba(95, 212, 196, .6); }
+/* 空选项在 select 里显示为占位灰 */
+.profile-input option { background: #14232a; color: #e6ebf0; }
+.profile-field-err { font-size: 11px; color: #e0a458; min-height: 0; }
+.profile-field-hint { font-size: 11px; color: #6f7d86; }
+
+.profile-status { margin: 12px 0 0; font-size: 12px; color: #9aa6b2; }
+.profile-status.is-error { color: #e0a458; }
+
+.profile-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.profile-cancel {
+  padding: 8px 16px; border-radius: 10px; cursor: pointer; font: inherit; font-size: 13px;
+  background: transparent; color: #9aa6b2;
+  border: 1px solid rgba(160, 240, 230, .2);
+}
+.profile-cancel:hover { color: #e6ebf0; }
+.profile-save {
+  padding: 8px 20px; border-radius: 10px; cursor: pointer; font: inherit;
+  font-size: 13px; font-weight: 600; color: #04211f;
+  background: linear-gradient(160deg, #7fe6d6, #45bfb0);
+  border: 1px solid rgba(255, 255, 255, .3);
+}
+.profile-save:disabled { opacity: .5; cursor: default; }
+
+/* 对话头部的建档按钮 */
+.chat-profile-btn {
+  background: transparent; color: #5fd4c4; cursor: pointer; font: inherit;
+  font-size: 12px; padding: 3px 8px; border-radius: 8px;
+  border: 1px solid rgba(95, 212, 196, .35);
+}
+.chat-profile-btn:hover { background: rgba(95, 212, 196, .14); }
+
+@media (max-width: 720px) {
+  .profile-fields { grid-template-columns: 1fr; }
+}

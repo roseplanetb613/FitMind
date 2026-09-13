@@ -21,6 +21,8 @@ import { MUSCLE_IDS } from './body/load-model'
 import { postCheckinResolve, streamChat } from './data/chat'
 import { createChatFlow } from './ui/chat-flow'
 import { createChatPanel } from './ui/chat-panel'
+import { createProfileForm } from './ui/profile-form'
+import { saveProfile } from './data/profile'
 import { hideDetail } from './ui/detail'
 
 const params = new URLSearchParams(location.search)
@@ -249,6 +251,48 @@ tick()
 const SESSION_KEY = 'fitmind.chat.session'
 const chatEl = document.querySelector<HTMLElement>('#chat')!
 const chatToggleEl = document.querySelector<HTMLButtonElement>('#chat-toggle')!
+const profileEl = document.querySelector<HTMLElement>('#profile')!
+
+/**
+ * 保证会话 id 存在 —— **建档和对话共用同一个**。
+ *
+ * 建档接口按 session_id 定位（`POST /v1/profile`），而没聊过天时前端手里还没有 id。
+ * 与其为建档单开一条"按 user_id 建档"的接口（等于把同一件事做成两套），
+ * 不如在前端生成一个：后端 `sessions.create(given_id)` 对未知 id 就是建一个新的，
+ * 格式与它自己的 `uuid4().hex[:12]` 同形。副作用是**好事**：建档之后再聊天，
+ * 对话会复用这个 id，档案和上下文落在同一个会话里。
+ */
+function ensureSessionId(): string {
+  try {
+    const cur = localStorage.getItem(SESSION_KEY)
+    if (cur) return cur
+    const buf = new Uint8Array(6)
+    crypto.getRandomValues(buf)
+    const id = Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('')
+    localStorage.setItem(SESSION_KEY, id)
+    return id
+  } catch {
+    return ''      // 隐私模式：拿不到存储 → 退回"服务端会新建一个"，建档仍可用
+  }
+}
+let sessionId = ensureSessionId()
+
+const profileForm = createProfileForm({
+  root: profileEl,
+  // getter：会话 id 可能在首次对话后才由后端确立，不能在建档窗口创建时快照
+  get sessionId() { return sessionId || ensureSessionId() },
+  userId: uid,
+  save: (sid, profile, user) => saveProfile(sid, profile, user),
+  onSaved: (p) => {
+    // 存完告诉用户一声，并且**带上他刚填的关键项** —— 只说"已保存"用户
+    // 不知道自己填的对不对
+    const bits = [p.sex === 'male' ? '男' : p.sex === 'female' ? '女' : null,
+                  p.age ? `${p.age}岁` : null,
+                  p.height_cm ? `${p.height_cm}cm` : null,
+                  p.weight_kg ? `${p.weight_kg}kg` : null].filter(Boolean)
+    void chatFlow.send(`档案已保存：${bits.join(' ')}` || '档案已保存')
+  },
+})
 
 const chatPanel = createChatPanel({
   root: chatEl,
@@ -263,6 +307,7 @@ const chatPanel = createChatPanel({
   },
   onChooseOption: (o, at) => void chatFlow.chooseOption(o, at),
   onChooseCustom: (text, at) => void chatFlow.submitCustom(text, at),
+  onOpenProfile: () => void profileForm.open(),
   onSubmit: (text) => void chatFlow.send(text),
 })
 
@@ -279,6 +324,7 @@ const chatFlow = createChatFlow({
     }
   },
   saveSession: (id) => {
+    sessionId = id                 // 建档窗口共用同一个会话 id
     try {
       localStorage.setItem(SESSION_KEY, id)
     } catch {
@@ -286,6 +332,8 @@ const chatFlow = createChatFlow({
     }
   },
   userId: uid,
+  // 后端说"还没建档" → 直接把窗口弹出来，别让用户自己去找入口
+  onNeedProfile: () => void profileForm.open(),
 })
 
 chatToggleEl.addEventListener('click', () => chatPanel.setOpen(true))

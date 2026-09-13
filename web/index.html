@@ -22,6 +22,9 @@
          放最后才压在画布与其它面板之上。内部结构由 ui/chat-panel.ts 建。 -->
     <section id="chat" class="chat-panel" aria-label="与教练对话"></section>
     <button id="chat-toggle" class="chat-toggle" type="button" aria-controls="chat">对话</button>
+    <!-- 建档窗口。内容由 ui/profile-form.ts 建。放最后 = 盖在所有东西之上
+         （本仓不用 z-index，DOM 顺序就是层叠顺序）。 -->
+    <div id="profile" class="profile-modal"></div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

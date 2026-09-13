@@ -2,9 +2,9 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
-import { buildStarField } from './star-field'
+import { applyStars, buildStarField } from './star-field'
 import { buildHeartGlow, prefersReducedMotion, pulseGlow } from './glow'
-import { muscleState, type MuscleMapData } from '../data/types'
+import { emptyMap, muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
 
 /** 只建场景图，不建 renderer —— 使 node 里可测（无 WebGL 上下文）。 */
@@ -319,6 +319,15 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 只在加载时建一次；数据变化只改 drawRange/尺寸/不透明度，不重建几何。
   const stars = buildStarField(body)
   scene.add(stars)
+
+  // **首帧之前先落一次"还没有数据"的状态。**
+  // 不落的话第一帧用的是加载期的初始材质：星点已由 buildStarField 归零，但肌肉
+  // 仍是 assembleBody 给的 `color: OTHER_TISSUE_COLOR, opacity: 1` —— 一具**不透明**
+  // 的深灰人体，等第一次 applyStates 才变成半透明彩色，中间那一下是明显的跳变。
+  // `emptyMap` 正是"没有数据"的表示（加载失败路径也用它），所以这里不需要新的特例。
+  // 它的 `days` 字段不参与渲染，真实数据到达后立刻被覆盖。
+  applyStates(body, emptyMap(0))
+  applyStars(stars, emptyMap(0))
 
   // 心脏辉光。**加在 scene 上而不是 body.children 里** —— 与星场同一个理由：
   // applyStates / setHover / interactiveMeshes / buildStarField 都会遍历

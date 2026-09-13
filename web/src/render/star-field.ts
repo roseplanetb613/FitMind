@@ -72,8 +72,16 @@ export function sampleSurface(mesh: THREE.Mesh, maxCount = MAX_STARS): Float32Ar
 }
 
 /**
+ * 星点的**初始态 = 无数据态**。见下方 PointsMaterial 处的说明：写死一个"好看"的
+ * 默认值会在数据到达前糊满屏幕。
+ */
+const INITIAL = starSpec(null)
+
+/**
  * 为 `body` 里每个肌群 mesh 建一层星点，返回一个 Group。
  * **只在加载时建一次**（与几何同一条约定：数据只驱动材质/绘制范围，不重建几何）。
+ *
+ * ⚠ 建出来的星场是**不可见**的（见 INITIAL）—— 要等第一次 `applyStars` 才亮。
  */
 export function buildStarField(body: THREE.Group, maxCount = MAX_STARS): THREE.Group {
   const field = new THREE.Group()
@@ -94,14 +102,27 @@ export function buildStarField(body: THREE.Group, maxCount = MAX_STARS): THREE.G
       ),
       new THREE.PointsMaterial({
         color: 0xbfe3ff, // 冷白偏蓝 —— 与 palette 的暖金/冷青都不同族，不会被读成恢复度色
-        size: 3,
+        // **初始材质就是"还没有数据"那一态**（starSpec(null)：0 颗 / 尺寸 0 / 不透明 0）。
+        //
+        // 早先这里写死 `size: 3, opacity: 1` 且不设 drawRange，后果实测是刷新时
+        // **一道白闪**：`buildStarField` 到第一次 `applyStars` 之间隔着一次网络请求，
+        // 那几帧里每块肌肉都画出**全部 256 颗**、每颗直径 3 世界单位
+        // （applyStars 给的真值是 0.002~0.007，差约 1000 倍），再叠上加色混合 ——
+        // 28 块 ≈ 7000 个白团糊满屏幕。
+        //
+        // 用 `starSpec(null)` 而不是另写一组 0，是为了让"初始态 = 无数据态"这件事
+        // 只有一个来源：改 particles.ts 的契约，这里自动跟着走。
+        size: INITIAL.size,
         sizeAttenuation: true,
         transparent: true,
-        opacity: 1,
+        opacity: INITIAL.opacity,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       }),
     )
+    // **必须同时把 drawRange 归零**：材质再透明，256 颗几何也照画不误 ——
+    // 加色混合下"画了但透明"和"不画"的开销不一样，而且这里是白闪的另一半成因。
+    points.geometry.setDrawRange(0, INITIAL.count)
     points.userData.muscleId = id
     points.userData.isStars = true
     points.renderOrder = 2 // 画在肌肉与外壳之上

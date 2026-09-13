@@ -11,7 +11,8 @@ from app.core.arbitrate import arbitrate
 from app.core.semantic import ExemplarStore, _params_for, map_conf
 from app.core.vocab import (                       # 记忆查询词表单源（见 vocab.py）
     _MEM_ADVICE_KW, _MEM_ASPECT_KW, _MEM_DOMAIN_KW, _MEM_PAST_KW,
-    _MEM_SELF_KW, _MEM_WHEN_KW, _MEM_WHERE_FRAME_KW, _MEM_WHERE_SELF_KW)
+    _MEM_ASK_KW, _MEM_SELF_KW, _MEM_WHEN_KW, _MEM_WHERE_FRAME_KW,
+    _MEM_WHERE_SELF_KW)
 
 
 class Mode(Enum):
@@ -67,7 +68,10 @@ def is_memory_query(text: str) -> bool:
         return True
     if not any(k in t for k in _MEM_SELF_KW):
         return False
-    if not any(k in t for k in _MEM_WHEN_KW):
+    # 时间疑问（啥时/哪天/几次）**或**内容疑问（啥/什么/哪些）—— 二者居其一即可。
+    # 前者问"什么时候练的"，后者问"练了什么"，都是对**自己记录**的回读。
+    if not (any(k in t for k in _MEM_WHEN_KW)
+            or any(k in t for k in _MEM_ASK_KW)):
         return False
     if not (any(k in t for k in _MEM_ASPECT_KW)
             or any(k in t for k in _MEM_PAST_KW)):

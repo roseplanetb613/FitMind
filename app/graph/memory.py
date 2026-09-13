@@ -414,12 +414,6 @@ class MemoryStore:
                            "payload": json.dumps(payload, ensure_ascii=False),
                            "occurred_at": occ, "occurred_end": None,
                            "recorded_at": now, "invalidated_at": None}))
-                for mn in (muscles or []):       # 挂 Muscle（MATCH 不中静默跳过）
-                    s.run("MATCH (e:Event {event_id: $eid}), "
-                          "(mm:Muscle {name: $mn}) "
-                          "MERGE (e)-[r:TARGETS]->(mm) "
-                          "SET r.role = $role",
-                          eid=eid, mn=mn, role=(muscle_roles or {}).get(mn))
                 for fn in (foods or []):         # Food 个人域 MERGE
                     s.run("MATCH (e:Event {event_id: $eid}) "
                           "MERGE (f:Food {name: $fn}) "
@@ -430,9 +424,34 @@ class MemoryStore:
                         "(pv:PlanVersion {user_id: $uid, plan_id: $pid}) "
                         "MERGE (e)-[:UNDER]->(pv)",
                         eid=eid, uid=user_id, pid=plan_id)
+            self.add_event_muscles(eid, muscles, muscle_roles)
             return eid
         except Exception:
             return None
+
+    def add_event_muscles(self, event_id: str, muscles: list[str] | None,
+                          muscle_roles: dict[str, str] | None = None) -> bool:
+        """给**已存在**的事件挂 `(Event)-[:TARGETS {role}]->(Muscle)`。幂等（MERGE）。
+
+        抽出来是为了让这条 Cypher 只有一个来源：回填脚本（scripts/backfill_event_muscles）
+        要补**历史**事件的边，自己再抄一遍的话，将来改边名或属性就会有一半的写入
+        静默走旧格式，而且两边都不会报错。
+
+        `MATCH` 不中的肌群名**静默跳过**（与 log_event 原行为一致）：库里没有的肌群
+        建不出边，硬造节点会污染图谱。整段异常 → False，由调用方决定怎么办。
+        """
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                for mn in (muscles or []):
+                    s.run("MATCH (e:Event {event_id: $eid}), "
+                          "(mm:Muscle {name: $mn}) "
+                          "MERGE (e)-[r:TARGETS]->(mm) "
+                          "SET r.role = $role",
+                          eid=event_id, mn=mn, role=(muscle_roles or {}).get(mn))
+            return True
+        except Exception:
+            diag.bump("memory.add_event_muscles")
+            return False
 
     def muscles_of_exercises(self, names: list[str],
                              roles: tuple[str, ...] | None = None) -> list[str]:
@@ -469,11 +488,25 @@ class MemoryStore:
     def _dominant_rows(self, name: str) -> list[tuple[str, str]]:
         """单动作词 → [(肌群, role)]（已剔复合名噪声）。
 
-        CONTAINS 过匹配（2026-09-11）："深蹲" 子串命中 72 个动作，含
-        '哑铃 肱二头肌弯举 深蹲'(biceps)、'绳索 深蹲划船'(latissimus_dorsi) 这类
-        **复合名**——它们的运动模式与主体不同。实测 72 个里 69 个 squat、3 个 pull，
-        恰好就是这 3 个噪声。故按**模态运动模式**过滤（数据驱动，不手写词表）；
-        模态占比不足 _DOMINANT_SHARE 时视为歧义词，**不过滤**（宁缺毋滥）。"""
+        **部位词优先走映射表，不走 CONTAINS**（2026-09-13）。实测 `腿`/`胸`/`背`
+        这类单字部位词 CONTAINS 会命中 **19 个动作名** → "我练了胸"把全身 19 块都
+        标成刚练完，恢复度整屏一起走低。比"认不出来"糟得多：认不出来只是少一次
+        记录，糊一片则让用户彻底失去判断依据。
+
+        映射表 `_PART2MUSCLE` 派生自 lib/parts.py 的单源，一个部位一个代表肌群。
+
+        取舍：一个部位只映射到**一块**代表肌群（腿 → quadriceps，不含腘绳/臀/小腿），
+        比口语里的"腿"窄。宁可少标也不糊一片，理由同上。
+        """
+        part = _PART2MUSCLE.get((name or "").strip())
+        if part:
+            return [(part, "target")]
+
+        # CONTAINS 过匹配（2026-09-11）："深蹲" 子串命中 72 个动作，含
+        # '哑铃 肱二头肌弯举 深蹲'(biceps)、'绳索 深蹲划船'(latissimus_dorsi) 这类
+        # **复合名**——它们的运动模式与主体不同。实测 72 个里 69 个 squat、3 个 pull，
+        # 恰好就是这 3 个噪声。故按**模态运动模式**过滤（数据驱动，不手写词表）；
+        # 模态占比不足 _DOMINANT_SHARE 时视为歧义词，**不过滤**（宁缺毋滥）。
         pat = self._dominant_pattern(name)
         return [(m, r) for m, r, _ in self._muscle_rows(name, pat)]
 

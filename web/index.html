@@ -4,6 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>肌群恢复状态 · 3D</title>
+  <!-- 刷新时的**白屏一闪**（深色站点的经典 FOUC）：
+       样式是外部文件（`import './styles.css'` 被 Vite 抽成 index-*.css），
+       浏览器在它到达前用**自己的默认底色**铺满视口 —— 白。页面整体是 #0f1419，
+       于是"白 → 深"这一下很显眼。
+       color-scheme 让浏览器**在 CSS 到达前就知道该用深色底**（这正是它存在的
+       用途，不是可选的锦上添花）；下面那段内联背景是第二道保险，给忽略该 meta
+       的浏览器兜底。两行都必须留在 <head> 里、且不能挪进外部样式表——
+       挪出去就等于把白屏窗口又拉回来了。 -->
+  <meta name="color-scheme" content="dark" />
+  <style>html, body { background: #0f1419; margin: 0; }</style>
 </head>
 <body>
   <div id="app">
@@ -15,6 +25,7 @@
     <div id="toolbar">
       <button data-view="front">正面</button>
       <button data-view="back">背面</button>
+      <button id="plan-toggle" type="button" aria-controls="plan">训练计划</button>
       <label class="toggle"><input type="checkbox" id="toggle-labels" checked />标签</label>
       <label class="toggle"><input type="checkbox" id="toggle-unknown" />无记录</label>
     </div>
@@ -22,9 +33,24 @@
          放最后才压在画布与其它面板之上。内部结构由 ui/chat-panel.ts 建。 -->
     <section id="chat" class="chat-panel" aria-label="与教练对话"></section>
     <button id="chat-toggle" class="chat-toggle" type="button" aria-controls="chat">对话</button>
+    <!-- 训练计划抽屉。内容由 ui/plan.ts 建。入口是工具栏的「训练计划」按钮。 -->
+    <div id="plan" class="plan-modal"></div>
     <!-- 建档窗口。内容由 ui/profile-form.ts 建。放最后 = 盖在所有东西之上
          （本仓不用 z-index，DOM 顺序就是层叠顺序）。 -->
     <div id="profile" class="profile-modal"></div>
+
+    <!-- 载入提示。**必须是静态的**（写在这里而不是由 JS 建）—— 它的全部意义
+         就是在 JS 还没跑起来 / 3D 模型还没下完时先给用户一个交代。3D 就绪后由
+         main.ts 移除（`sceneReady.finally`，成功失败都撤）。
+         没有它时，模型下完前用户只看到工具栏那几个按钮，读起来像页面坏了。
+         ⚠ **必须排在 #app 最后**：本仓不用 z-index，DOM 顺序就是层叠顺序，
+         放前面的话工具栏会压在它上面，"载入中"反而盖不住那几个孤零零的按钮。 -->
+    <div id="boot" role="status" aria-live="polite">
+      <div class="boot-inner">
+        <div class="boot-spinner" aria-hidden="true"></div>
+        <p class="boot-text">正在载入 3D 肌群模型…</p>
+      </div>
+    </div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

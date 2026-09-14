@@ -41,6 +41,38 @@ def _repo():
     return exercise_repo()
 
 
+def _cue(it: dict) -> str:
+    """动作要领文本（本地拼接，零 RAG 往返）。
+
+    2026-09-14：此前这里写占位符"（通用要领，详见后续 RAG）"，指望 _rag_enrich 用
+    向量召回把 ingest._exercise_cue() 生成的文本取回来。但那段文本本就只是对动作记录
+    的**确定性拼接**，而本函数手里的字段已经够用——绕一圈 Ollama + PG 只是把已知信息
+    取回来，代价是每条 query 多一次 embed（60s 超时 ×3 重试），且 Ollama 一挂就永远
+    停在占位符上。真正需要图才能得到的"同族替代"仍走 _rag_enrich（Neo4j）。"""
+    return (f"{it.get('name_zh')}：{it.get('pattern') or '综合'}模式，"
+            f"建议{it.get('sets')}组×{it.get('reps')}次，"
+            f"组间休息{it.get('rest_sec')}s，器械{it.get('equipment') or '自重'}。"
+            f"保持{it.get('target') or '目标肌群'}发力，避免借力代偿。")
+
+
+def _out_item(e: dict) -> dict:
+    """动作记录 → 对外 item（主路径与归一化兜底路径共用，保证两处字段一致）。"""
+    mus = e.get("muscles_canonical") or {}
+    sug = e.get("suggested") or {}
+    it = {
+        "id": e["id"],
+        "name_zh": e.get("name_zh"),
+        "target": mus.get("target"),
+        "sets": sug.get("sets"), "reps": sug.get("reps"),
+        "rest_sec": sug.get("rest_sec"),
+        "equipment": e.get("normalized_equipment"),
+        "pattern": e.get("movement_pattern"),
+        "rag": False,
+    }
+    it["cue"] = _cue(it)
+    return it
+
+
 class TeachSkill(Skill):
     name = "teach"
     description = "动作要领：目标肌群/组次/休息/器械（RAG 扩展位）"
@@ -209,22 +241,7 @@ class TeachSkill(Skill):
                     "note": kb["note"]}
             return SkillResult(ok=True, data={"items": [item]},
                                provenance=["teach#scene_kb"])
-        items = []
-        for e in self._search(query):
-            mus = e.get("muscles_canonical") or {}
-            sug = e.get("suggested") or {}
-            items.append({
-                "id": e["id"],
-                "name_zh": e.get("name_zh"),
-                "target": mus.get("target"),
-                "sets": sug.get("sets"), "reps": sug.get("reps"),
-                "rest_sec": sug.get("rest_sec"),
-                "equipment": e.get("normalized_equipment"),
-                "pattern": e.get("movement_pattern"),
-                "cue": f"保持目标肌群发力，按建议 {sug.get('sets')}组×{sug.get('reps')}次，"
-                       f"组间休息 {sug.get('rest_sec')}s（通用要领，详见后续 RAG）",
-                "rag": False,
-            })
+        items = [_out_item(e) for e in self._search(query)]
         if not items:
             # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱 + audit 留痕
             try:
@@ -236,21 +253,7 @@ class TeachSkill(Skill):
             except Exception:
                 adopted, hits = False, []
             if adopted:
-                for e in hits:
-                    mus = e.get("muscles_canonical") or {}
-                    sug = e.get("suggested") or {}
-                    items.append({
-                        "id": e["id"],
-                        "name_zh": e.get("name_zh"),
-                        "target": mus.get("target"),
-                        "sets": sug.get("sets"), "reps": sug.get("reps"),
-                        "rest_sec": sug.get("rest_sec"),
-                        "equipment": e.get("normalized_equipment"),
-                        "pattern": e.get("movement_pattern"),
-                        "cue": f"保持目标肌群发力，按建议 {sug.get('sets')}组×{sug.get('reps')}次，"
-                               f"组间休息 {sug.get('rest_sec')}s（通用要领，详见后续 RAG）",
-                        "rag": False,
-                    })
+                items.extend(_out_item(e) for e in hits)
         if not items:
             # W4：#40 担忧型问法（"斜方肌越练越大"）意图常落 teach（贴近"怎么练"例句）
             # 但动作库无肌群名词 → 兜底查 qa 辟谣块（"越练越大"类担忧），避免空结果
@@ -276,36 +279,36 @@ class TeachSkill(Skill):
                            provenance=[f"teach:{it['name_zh']}" for it in items])
 
     def _rag_enrich(self, ctx, query: str, items: list) -> None:
-        """对前 2 条动作追加 RAG 证据：同族替代（Neo4j）+ 要领向量块（PG）。全 try/except 静默降级。"""
+        """对前 2 条动作追加图证据：同族替代（Neo4j）。全 try/except 静默降级。
+
+        2026-09-14 两处变更：
+        1. 去掉了 exercise_cue 的向量召回。它取回的文本是对动作记录的确定性拼接
+           （见 _cue），而这里手里已有记录——是零信息量的往返。只保留真正需要图
+           才能得到的同族替代。
+        2. 同族替代现在有上限、按同主目标肌排序、并带可读中文名（见
+           GraphStore.family_alternatives）。
+
+        ⚠ **`rag_evidence` 目前仍无任何读取方**（`grep -rn rag_evidence` 全仓只有
+        本文件这一处写入）。它当初是作为"RAG 扩展位"预留的，消费它的渲染器一直没写。
+        因此在接上渲染之前，这里的产出**对用户不可见**——别误以为它在生效。
+        要与用户可见的出处标注区分：那个走的是 items[].source / source_ref
+        （见 qa._rag_science 与 render_util.item_lines）。"""
         try:
             from app.rag import retriever
-            from app.rag.store import PgStore
-            from app.rag.embedder import OllamaEmbedder
             from app.graph.store import GraphStore
-            store, embedder = PgStore(), OllamaEmbedder()
             graph = GraphStore.get()
+            if graph is None:
+                return
             for it in items[:2]:
                 eid = it.get("id")
                 if not eid:
                     continue
-                ev = {"alternatives": [], "cue": None}
-                if graph is not None:
-                    try:
-                        ev["alternatives"] = retriever.graph_family_alternatives(
-                            graph, eid)
-                    except Exception:
-                        pass
                 try:
-                    qv = retriever.embed_query(embedder, it.get("name_zh") or query)
-                    hits = retriever.vector_search(
-                        store, qv, getattr(embedder, "model", "bge-m3"),
-                        top_k=1, chunk_types=("exercise_cue",))
-                    if hits:
-                        ev["cue"] = hits[0]["content"]
+                    alts = retriever.graph_family_alternatives(graph, eid)
                 except Exception:
-                    pass
-                if ev["alternatives"] or ev["cue"]:
-                    it["rag_evidence"] = ev
+                    continue
+                if alts:
+                    it["rag_evidence"] = {"alternatives": alts}
                     it["rag"] = True
         except Exception:
             pass

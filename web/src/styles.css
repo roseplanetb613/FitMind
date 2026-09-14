@@ -253,6 +253,14 @@ html, body {
 }
 .chat-error.is-on { display: block; }
 
+/* 语音状态条：录音中 / 转写中 / 录音错误。与 .chat-stage 同构，
+   区别只在错误态要显眼（红），正常态安静（青）。 */
+.chat-voice {
+  display: none; padding: 0 14px 8px; font-size: 11px; color: #5fd4c4;
+}
+.chat-voice.is-on { display: block; }
+.chat-voice.is-error { color: #e0685f; }
+
 .chat-form {
   display: flex; gap: 8px; padding: 12px 14px 14px;
   border-top: 1px solid rgba(160, 240, 230, .14);
@@ -272,6 +280,21 @@ html, body {
   border: 1px solid rgba(255, 255, 255, .3);
 }
 .chat-send:disabled { opacity: .5; cursor: default; }
+
+/* 麦克风按钮：与 .chat-send 同尺寸但更安静（它是次要入口，不该抢发送的视觉） */
+.chat-mic {
+  padding: 9px 12px; border-radius: 12px; cursor: pointer; font: inherit;
+  color: #cfe9e4; line-height: 1;
+  background: rgba(0, 0, 0, .28);
+  border: 1px solid rgba(160, 240, 230, .2);
+}
+.chat-mic:disabled { opacity: .5; cursor: default; }
+/* 录音中：红 + 呼吸，和阶段点的节奏一致，一眼能看出"正在听" */
+.chat-mic.is-recording {
+  color: #ffd8d4; border-color: rgba(224, 104, 95, .75);
+  background: rgba(224, 104, 95, .22);
+  animation: chat-pulse 1.2s ease-in-out infinite;
+}
 
 /* 打开对话的浮动按钮（面板收起时显示） */
 .chat-toggle {
@@ -372,4 +395,132 @@ html, body {
 
 @media (max-width: 720px) {
   .profile-fields { grid-template-columns: 1fr; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   训练计划抽屉 —— 与建档窗口同一套玻璃拟态。
+   ⚠ 强调色同 .chat-panel 的取舍：teal 175°，避开恢复度冷端 cyan 196°。
+   ══════════════════════════════════════════════════════════ */
+.plan-modal { display: none; }
+.plan-modal.is-open { display: block; }
+.plan-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 10, 14, .55);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+/* 比建档窗口宽：计划表是三列表格，440px 会把动作名挤断行 */
+.plan-card {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px); overflow-y: auto;
+  padding: 20px 22px; border-radius: 20px;
+  background: linear-gradient(160deg, rgba(56, 189, 178, .16), rgba(18, 38, 46, .92));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(160, 240, 230, .2);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .14);
+}
+.plan-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.plan-title { margin: 0; font-size: 16px; }
+.plan-close {
+  background: transparent; color: #9aa6b2; border: 0; cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 2px 8px; border-radius: 6px;
+}
+.plan-close:hover { background: rgba(255, 255, 255, .08); color: #e6ebf0; }
+
+.plan-sub { margin: 0 0 14px; font-size: 12px; color: #9aa6b2; }
+.plan-loading { margin: 0; font-size: 12px; color: #9aa6b2; }
+.plan-empty {
+  margin: 0; font-size: 13px; color: #9aa6b2; line-height: 1.7;
+}
+.plan-empty.is-error, .plan-empty.is-degraded { color: #e0a458; }
+
+.plan-days { display: flex; flex-direction: column; gap: 12px; }
+.plan-day {
+  padding: 11px 12px; border-radius: 12px;
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid rgba(160, 240, 230, .13);
+}
+/* 休息日弱化：它是空白，不该和训练日一样抢眼 */
+.plan-day.is-rest { opacity: .72; }
+.plan-day-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.plan-day-date { font-size: 12px; color: #5fd4c4; }
+.plan-day-name { font-size: 13px; font-weight: 600; }
+.plan-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  color: #e0a458; border: 1px solid rgba(224, 164, 88, .45);
+}
+.plan-day-note { margin: 0; font-size: 12px; color: #9aa6b2; }
+
+.plan-table { width: 100%; border-collapse: collapse; }
+.plan-table th {
+  text-align: left; font-size: 11px; font-weight: 400; color: #6f7d86;
+  padding: 0 8px 4px 0; border-bottom: 1px solid rgba(160, 240, 230, .1);
+}
+.plan-table td {
+  font-size: 12px; padding: 5px 8px 5px 0; vertical-align: top;
+  border-bottom: 1px solid rgba(160, 240, 230, .06);
+}
+.plan-table tr:last-child td { border-bottom: 0; }
+.plan-ex-name { word-break: break-word; }
+.plan-ex-sets, .plan-ex-rest { color: #9aa6b2; white-space: nowrap; }
+
+.plan-section {
+  margin: 0 0 4px; font-size: 11px; font-weight: 600; color: #5fd4c4;
+}
+.plan-macros, .plan-screening {
+  margin-top: 14px; padding: 11px 12px; border-radius: 12px;
+  background: rgba(0, 0, 0, .22);
+  border: 1px solid rgba(160, 240, 230, .13);
+}
+.plan-macros-line { margin: 0; font-size: 12px; color: #c8d2da; }
+.plan-screening-line { margin: 0; font-size: 12px; color: #e0a458; }
+.plan-screening-warn { margin: 4px 0 0; font-size: 12px; color: #9aa6b2; }
+
+@media (max-width: 720px) {
+  /* 窄屏：三列表格挤不下，动作名单独占一行，组次/休息并排在下 */
+  .plan-card { padding: 16px 16px; border-radius: 16px; }
+  .plan-table, .plan-table tbody, .plan-table tr, .plan-table td { display: block; }
+  .plan-table thead { display: none; }
+  .plan-table tr { padding: 6px 0; border-bottom: 1px solid rgba(160, 240, 230, .08); }
+  .plan-table tr:last-child { border-bottom: 0; }
+  .plan-table td { border: 0; padding: 0; }
+  .plan-ex-sets, .plan-ex-rest { display: inline; margin-right: 10px; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   载入提示（#boot）—— 静态写在 index.html 里，3D 就绪后由 main.ts 移除。
+   它盖在整屏之上，是**唯一**能盖住 #app 的元素（本仓不用 z-index）。
+   ⚠ 底色与 html/body 一致：它出现时页面还没有别的内容，若用别的颜色
+   反而会从"深色底"跳成另一种色，把"一闪"变成"两闪"。
+   ══════════════════════════════════════════════════════════ */
+#boot {
+  position: fixed; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background: #0f1419;
+  /* ⚠ 本仓唯一一处显式 z-index（其余靠 DOM 顺序叠层，见 index.html 的说明）。
+     理由：它是**全屏不透明遮罩**，必须盖住包括工具栏、建档弹窗在内的一切。
+     靠 DOM 顺序也能做到（它排在 #app 最后），但实测这太脆——第一版把它放在
+     最前面，工具栏就压在它上面，"载入中"反而盖不住那几个孤零零的按钮（用户
+     截图报过）。显式层级让这件事与"谁先写在 HTML 里"解耦。 */
+  z-index: 100;
+}
+.boot-inner { text-align: center; }
+.boot-text { margin: 14px 0 0; font-size: 13px; color: #9aa6b2; }
+.boot-spinner {
+  width: 26px; height: 26px; margin: 0 auto;
+  border: 2px solid rgba(160, 240, 230, .22);
+  border-top-color: #5fd4c4;          /* 强调色同 .chat-card-title：避开 cyan 196° */
+  border-radius: 50%;
+  animation: boot-spin .9s linear infinite;
+}
+@keyframes boot-spin { to { transform: rotate(360deg) } }
+/* 用户开了"减少动态效果"就不要转 —— 静止的环 + 文案同样能表达"在载入" */
+@media (prefers-reduced-motion: reduce) {
+  .boot-spinner { animation: none; }
 }

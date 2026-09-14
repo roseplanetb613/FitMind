@@ -1,0 +1,162 @@
+{"query": "RPE10 做5次大概是几成1RM", "chunk_type": "science_doc", "expected": "anchor_4", "kind": "science", "note": "5次@RPE10 ≈ 86%1RM"}
+{"query": "RPE 和 1RM 怎么换算", "chunk_type": "science_doc", "expected": "method", "kind": "science", "note": ""}
+{"query": "深蹲的力量标准是多少", "chunk_type": "science_doc", "expected": "lift_squat", "kind": "science", "note": ""}
+{"query": "卧推力量标准和体重比", "chunk_type": "science_doc", "expected": "lift_bench", "kind": "science", "note": ""}
+{"query": "硬拉的力量标准", "chunk_type": "science_doc", "expected": "lift_deadlift", "kind": "science", "note": ""}
+{"query": "高血压能不能做力量训练", "chunk_type": "science_doc", "expected": "cn03", "kind": "science", "note": ""}
+{"query": "腰椎间盘突出能硬拉吗", "chunk_type": "science_doc", "expected": "cn01", "kind": "science", "note": ""}
+{"query": "肩袖损伤还能做过头推举吗", "chunk_type": "science_doc", "expected": ["cn02", "ep05"], "kind": "science", "note": "禁忌与流行病学都切题"}
+{"query": "膝骨关节炎能深蹲吗", "chunk_type": "science_doc", "expected": "cn04", "kind": "science", "note": ""}
+{"query": "ACL 术后多久能重返运动", "chunk_type": "science_doc", "expected": ["rt02_rtp", "rt02_3"], "kind": "science", "note": ""}
+{"query": "踝关节扭伤多久能好", "chunk_type": "science_doc", "expected": "rt01_rtp", "kind": "science", "note": ""}
+{"query": "腘绳肌拉伤多久恢复", "chunk_type": "science_doc", "expected": "rt03_rtp", "kind": "science", "note": ""}
+{"query": "足底筋膜炎多久能好", "chunk_type": "science_doc", "expected": "rt04_rtp", "kind": "science", "note": ""}
+{"query": "有氧运动每周练几次", "chunk_type": "science_doc", "expected": "cardiorespiratory", "kind": "science", "note": ""}
+{"query": "增肌用多大重量", "chunk_type": "science_doc", "expected": "resistance", "kind": "science", "note": ""}
+{"query": "柔韧性训练多久做一次", "chunk_type": "science_doc", "expected": "flexibility", "kind": "science", "note": ""}
+{"query": "PAR-Q 是什么", "chunk_type": "science_doc", "expected": ["pq_header", "q1", "q2", "q3", "q4", "q5", "q6", "q7"], "kind": "science", "note": "门检总述或任一题都切题"}
+{"query": "运动前要做哪些健康筛查", "chunk_type": "science_doc", "expected": ["pq_header", "rule_any_yes"], "kind": "science", "note": ""}
+{"query": "ACL 损伤的风险因素", "chunk_type": "science_doc", "expected": "ep02", "kind": "science", "note": ""}
+{"query": "跟腱炎是怎么来的", "chunk_type": "science_doc", "expected": "ep06", "kind": "science", "note": ""}
+{"query": "踝关节扭伤怎么预防", "chunk_type": "science_doc", "expected": "ep01", "kind": "science", "note": ""}
+{"query": "腘绳肌拉伤怎么预防", "chunk_type": "science_doc", "expected": "ep03", "kind": "science", "note": ""}
+{"query": "下背痛怎么预防", "chunk_type": "science_doc", "expected": ["ep04", "cn01"], "kind": "science", "note": ""}
+{"query": "力量训练的强度区间", "chunk_type": "science_doc", "expected": ["resistance", "fitt_intensity"], "kind": "science", "note": "两块都切题"}
+{"query": "有氧运动的强度怎么定", "chunk_type": "science_doc", "expected": ["cardiorespiratory", "fitt_intensity"], "kind": "science", "note": ""}
+{"query": "增肌的原理是什么", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "语料无语料/机制类块——只有处方参数"}
+{"query": "肌肉生长的科学原理", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "同上；注意这是既有测试里的旗舰查询，实测 top1≈0.53 会误召回"}
+{"query": "每天该吃多少蛋白质", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养不在 embeddings 里"}
+{"query": "减脂期怎么吃", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养不在 embeddings 里"}
+{"query": "蛋白粉有必要吃吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "补剂不在 embeddings 里"}
+{"query": "训练后多久补充蛋白质", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养时序不在 embeddings 里"}
+{"query": "练几休几怎么排", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "编排在 lib/split_cycle，不在 embeddings"}
+{"query": "分化训练怎么安排", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "同上"}
+{"query": "什么是超级组", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "训练法术语，语料未收录"}
+{"query": "睡眠对恢复的影响", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "恢复时长/睡眠不在语料；rt 系列只讲伤后 RTP"}
+{"query": "有氧会不会掉肌肉", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "干扰效应不在语料"}
+{"query": "女生练力量会不会变金刚芭比", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": ""}
+{"query": "今天适合练什么", "chunk_type": "exercise_cue", "expected": null, "kind": "negative", "note": "编排类提问，不该拿某条动作要领当证据"}
+{"query": "我该练几组", "chunk_type": "exercise_cue", "expected": null, "kind": "negative", "note": "组次是处方问题，不是某个动作的要领"}
+{"query": "一周练几次比较好", "chunk_type": "exercise_cue", "expected": null, "kind": "negative", "note": "频率问题，与单条动作无关"}
+{"query": "健身房里先练哪台器械", "chunk_type": "exercise_cue", "expected": null, "kind": "negative", "note": "排序/流程问题"}
+{"query": "练完吃什么", "chunk_type": "exercise_cue", "expected": null, "kind": "negative", "note": "营养问题"}
+{"query": "小腿拉伸带绳索怎么练", "chunk_type": "exercise_cue", "expected": "1378", "kind": "auto_name", "note": ""}
+{"query": "快速步伐 版本 2的要领", "chunk_type": "exercise_cue", "expected": "3552", "kind": "auto_name", "note": ""}
+{"query": "绳索 过头 弯举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1636", "kind": "auto_name", "note": ""}
+{"query": "弹力带 站姿 扭转 卷腹的标准动作", "chunk_type": "exercise_cue", "expected": "1007", "kind": "auto_name", "note": ""}
+{"query": "哑铃 登阶 分腿深蹲怎么练", "chunk_type": "exercise_cue", "expected": "2812", "kind": "auto_name", "note": ""}
+{"query": "交替 触踵的要领", "chunk_type": "exercise_cue", "expected": "0006", "kind": "auto_name", "note": ""}
+{"query": "弹力带 耸肩练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1018", "kind": "auto_name", "note": ""}
+{"query": "反向平板支撑带腿 上提的标准动作", "chunk_type": "exercise_cue", "expected": "3663", "kind": "auto_name", "note": ""}
+{"query": "史密斯 下斜卧推怎么练", "chunk_type": "exercise_cue", "expected": "0753", "kind": "auto_name", "note": ""}
+{"query": "步行 椭圆机 交叉训练机的要领", "chunk_type": "exercise_cue", "expected": "2141", "kind": "auto_name", "note": ""}
+{"query": "曲杠 抗重力 推举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0445", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 旋转 小腿的标准动作", "chunk_type": "exercise_cue", "expected": "2315", "kind": "auto_name", "note": ""}
+{"query": "史密斯 颈后 推举怎么练", "chunk_type": "exercise_cue", "expected": "0747", "kind": "auto_name", "note": ""}
+{"query": "肱二头肌 窄 引体向上的要领", "chunk_type": "exercise_cue", "expected": "0139", "kind": "auto_name", "note": ""}
+{"query": "哑铃 飞鸟在健身球练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1277", "kind": "auto_name", "note": ""}
+{"query": "哑铃 后弓步的标准动作", "chunk_type": "exercise_cue", "expected": "0381", "kind": "auto_name", "note": ""}
+{"query": "弹力带 反手腕弯举怎么练", "chunk_type": "exercise_cue", "expected": "0994", "kind": "auto_name", "note": ""}
+{"query": "壶铃 爆发式 俯卧撑的要领", "chunk_type": "exercise_cue", "expected": "0545", "kind": "auto_name", "note": ""}
+{"query": "绳索 扭转 拉练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0244", "kind": "auto_name", "note": ""}
+{"query": "绳索 侧 卷腹的标准动作", "chunk_type": "exercise_cue", "expected": "0223", "kind": "auto_name", "note": ""}
+{"query": "杠铃 反握 碎颅者怎么练", "chunk_type": "exercise_cue", "expected": "1721", "kind": "auto_name", "note": ""}
+{"query": "弹力带 扭转 过头推举的要领", "chunk_type": "exercise_cue", "expected": "1012", "kind": "auto_name", "note": ""}
+{"query": "俯卧撑 (波速球)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0653", "kind": "auto_name", "note": ""}
+{"query": "绳索 蹲姿 弯举的标准动作", "chunk_type": "exercise_cue", "expected": "1644", "kind": "auto_name", "note": ""}
+{"query": "雪橇机 45° 腿举 (侧面视角)怎么练", "chunk_type": "exercise_cue", "expected": "1463", "kind": "auto_name", "note": ""}
+{"query": "杠铃 反向 牧师凳弯举的要领", "chunk_type": "exercise_cue", "expected": "0081", "kind": "auto_name", "note": ""}
+{"query": "史密斯机 反向 下斜 窄距 卧推练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1626", "kind": "auto_name", "note": ""}
+{"query": "绳索 俄罗斯转体s (在稳定球)的标准动作", "chunk_type": "exercise_cue", "expected": "0211", "kind": "auto_name", "note": ""}
+{"query": "悬垂 派克式怎么练", "chunk_type": "exercise_cue", "expected": "0473", "kind": "auto_name", "note": ""}
+{"query": "哑铃 前弓步 肱三头肌伸展的要领", "chunk_type": "exercise_cue", "expected": "1732", "kind": "auto_name", "note": ""}
+{"query": "仰卧 腿髋上抬练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0865", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 牧师凳弯举的标准动作", "chunk_type": "exercise_cue", "expected": "0592", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 T 杆 反握 划船怎么练", "chunk_type": "exercise_cue", "expected": "1351", "kind": "auto_name", "note": ""}
+{"query": "哑铃 站姿 肱三头肌伸展的要领", "chunk_type": "exercise_cue", "expected": "0430", "kind": "auto_name", "note": ""}
+{"query": "负重 双力臂 (在杆)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "3312", "kind": "auto_name", "note": ""}
+{"query": "哑铃 下斜 锤式推举的标准动作", "chunk_type": "exercise_cue", "expected": "0303", "kind": "auto_name", "note": ""}
+{"query": "史密斯 哈克深蹲怎么练", "chunk_type": "exercise_cue", "expected": "0755", "kind": "auto_name", "note": ""}
+{"query": "凳 髋伸展的要领", "chunk_type": "exercise_cue", "expected": "0130", "kind": "auto_name", "note": ""}
+{"query": "爆发式俯卧撑练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1306", "kind": "auto_name", "note": ""}
+{"query": "哑铃 下斜 耸肩的标准动作", "chunk_type": "exercise_cue", "expected": "0305", "kind": "auto_name", "note": ""}
+{"query": "哑铃 交叉 锤式弯举 版本 2怎么练", "chunk_type": "exercise_cue", "expected": "1657", "kind": "auto_name", "note": ""}
+{"query": "绳索 仰卧 肱二头肌弯举的要领", "chunk_type": "exercise_cue", "expected": "1634", "kind": "auto_name", "note": ""}
+{"query": "步行在踏步机练哪块肌肉", "chunk_type": "exercise_cue", "expected": "2311", "kind": "auto_name", "note": ""}
+{"query": "绳索 站姿 划船 (V 杆)的标准动作", "chunk_type": "exercise_cue", "expected": "0234", "kind": "auto_name", "note": ""}
+{"query": "绳索 站姿 内侧 弯举怎么练", "chunk_type": "exercise_cue", "expected": "0229", "kind": "auto_name", "note": ""}
+{"query": "哑铃 单臂 站姿 弯举的要领", "chunk_type": "exercise_cue", "expected": "1670", "kind": "auto_name", "note": ""}
+{"query": "弹力带 推 仰卧起坐练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0992", "kind": "auto_name", "note": ""}
+{"query": "四肢 s股四头肌 拉伸的标准动作", "chunk_type": "exercise_cue", "expected": "1512", "kind": "auto_name", "note": ""}
+{"query": "史密斯 屈膝 早安式怎么练", "chunk_type": "exercise_cue", "expected": "0749", "kind": "auto_name", "note": ""}
+{"query": "绳索 交叉 反向 飞鸟的要领", "chunk_type": "exercise_cue", "expected": "0154", "kind": "auto_name", "note": ""}
+{"query": "内收 (在稳定球)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0650", "kind": "auto_name", "note": ""}
+{"query": "哑铃 单臂 坐姿 肱二头肌弯举在健身球的标准动作", "chunk_type": "exercise_cue", "expected": "1668", "kind": "auto_name", "note": ""}
+{"query": "固定单车 跑步 版本 3怎么练", "chunk_type": "exercise_cue", "expected": "2138", "kind": "auto_name", "note": ""}
+{"query": "哑铃 下斜 飞鸟的要领", "chunk_type": "exercise_cue", "expected": "0302", "kind": "auto_name", "note": ""}
+{"query": "杠铃 牧师凳弯举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0070", "kind": "auto_name", "note": ""}
+{"query": "杠铃 翻举推举的标准动作", "chunk_type": "exercise_cue", "expected": "0028", "kind": "auto_name", "note": ""}
+{"query": "杠铃 反握 上斜 凳 划船怎么练", "chunk_type": "exercise_cue", "expected": "1317", "kind": "auto_name", "note": ""}
+{"query": "绳索 卧推的要领", "chunk_type": "exercise_cue", "expected": "0151", "kind": "auto_name", "note": ""}
+{"query": "臀桥 行军步练哪块肌肉", "chunk_type": "exercise_cue", "expected": "3561", "kind": "auto_name", "note": ""}
+{"query": "哑铃s 坐姿 肱三头肌伸展的标准动作", "chunk_type": "exercise_cue", "expected": "2189", "kind": "auto_name", "note": ""}
+{"query": "杠铃 弯举怎么练", "chunk_type": "exercise_cue", "expected": "0031", "kind": "auto_name", "note": ""}
+{"query": "侧 手腕 拉 拉伸的要领", "chunk_type": "exercise_cue", "expected": "0721", "kind": "auto_name", "note": ""}
+{"query": "绳索 坐姿 过头 弯举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1643", "kind": "auto_name", "note": ""}
+{"query": "侧 推 颈部 拉伸的标准动作", "chunk_type": "exercise_cue", "expected": "0716", "kind": "auto_name", "note": ""}
+{"query": "哑铃 上斜 飞鸟在健身球怎么练", "chunk_type": "exercise_cue", "expected": "1278", "kind": "auto_name", "note": ""}
+{"query": "滑冰跳的要领", "chunk_type": "exercise_cue", "expected": "3361", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 坐姿 早安式练哪块肌肉", "chunk_type": "exercise_cue", "expected": "3759", "kind": "auto_name", "note": ""}
+{"query": "滚轮 身体锯的标准动作", "chunk_type": "exercise_cue", "expected": "2204", "kind": "auto_name", "note": ""}
+{"query": "俯卧撑 内侧 腿 踢怎么练", "chunk_type": "exercise_cue", "expected": "0661", "kind": "auto_name", "note": ""}
+{"query": "哑铃过凳 单臂 中立 手腕弯举的要领", "chunk_type": "exercise_cue", "expected": "0366", "kind": "auto_name", "note": ""}
+{"query": "滚轮 坐姿 肩 屈肌 降肌 回缩肌练哪块肌肉", "chunk_type": "exercise_cue", "expected": "2203", "kind": "auto_name", "note": ""}
+{"query": "哑铃 单臂 下斜 胸部推举的标准动作", "chunk_type": "exercise_cue", "expected": "1287", "kind": "auto_name", "note": ""}
+{"query": "哑铃 仰卧 单臂 旋前 肱三头肌伸展怎么练", "chunk_type": "exercise_cue", "expected": "0344", "kind": "auto_name", "note": ""}
+{"query": "仰卧起坐带手臂在胸部的要领", "chunk_type": "exercise_cue", "expected": "3679", "kind": "auto_name", "note": ""}
+{"query": "杠铃 后弓步 版本 2练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0077", "kind": "auto_name", "note": ""}
+{"query": "绳索 上胸 交叉的标准动作", "chunk_type": "exercise_cue", "expected": "1270", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 反向过度伸展怎么练", "chunk_type": "exercise_cue", "expected": "0593", "kind": "auto_name", "note": ""}
+{"query": "混合握距 反握引体向上的要领", "chunk_type": "exercise_cue", "expected": "0627", "kind": "auto_name", "note": ""}
+{"query": "改良 俯卧撑至下 手臂练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1421", "kind": "auto_name", "note": ""}
+{"query": "哈克 单腿 提踵的标准动作", "chunk_type": "exercise_cue", "expected": "1384", "kind": "auto_name", "note": ""}
+{"query": "杠杆机 坐姿 卷腹 版本 2怎么练", "chunk_type": "exercise_cue", "expected": "3760", "kind": "auto_name", "note": ""}
+{"query": "负重 引体向上的要领", "chunk_type": "exercise_cue", "expected": "0841", "kind": "auto_name", "note": ""}
+{"query": "绳索 转体 (向上-向下)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0862", "kind": "auto_name", "note": ""}
+{"query": "推至跑步的标准动作", "chunk_type": "exercise_cue", "expected": "3638", "kind": "auto_name", "note": ""}
+{"query": "绳索 过头 弯举在健身球怎么练", "chunk_type": "exercise_cue", "expected": "1637", "kind": "auto_name", "note": ""}
+{"query": "俯卧撑的要领", "chunk_type": "exercise_cue", "expected": "0662", "kind": "auto_name", "note": ""}
+{"query": "绳索 反握 肱三头肌 下压 (SZ 杆) (带 臂托板)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "2406", "kind": "auto_name", "note": ""}
+{"query": "健身球 背阔肌 拉伸的标准动作", "chunk_type": "exercise_cue", "expected": "1339", "kind": "auto_name", "note": ""}
+{"query": "哑铃 下斜 耸肩 版本 2怎么练", "chunk_type": "exercise_cue", "expected": "0304", "kind": "auto_name", "note": ""}
+{"query": "哑铃 上斜 锤式弯举的要领", "chunk_type": "exercise_cue", "expected": "0320", "kind": "auto_name", "note": ""}
+{"query": "哑铃 凳上深蹲练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0291", "kind": "auto_name", "note": ""}
+{"query": "杠铃 站姿 宽距 肱二头肌弯举的标准动作", "chunk_type": "exercise_cue", "expected": "1629", "kind": "auto_name", "note": ""}
+{"query": "哑铃 锤式弯举s (带 臂托板)怎么练", "chunk_type": "exercise_cue", "expected": "2402", "kind": "auto_name", "note": ""}
+{"query": "弹力带 单臂 扭转 坐姿划船的要领", "chunk_type": "exercise_cue", "expected": "0990", "kind": "auto_name", "note": ""}
+{"query": "下斜 仰卧起坐练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0282", "kind": "auto_name", "note": ""}
+{"query": "稳定球 卷腹 (全幅度 手 头后)的标准动作", "chunk_type": "exercise_cue", "expected": "2297", "kind": "auto_name", "note": ""}
+{"query": "绳索 坐姿 转体怎么练", "chunk_type": "exercise_cue", "expected": "2399", "kind": "auto_name", "note": ""}
+{"query": "杠铃 下斜 仰卧屈臂上拉的要领", "chunk_type": "exercise_cue", "expected": "1255", "kind": "auto_name", "note": ""}
+{"query": "杠铃 仰卧 窄距 推举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0055", "kind": "auto_name", "note": ""}
+{"query": "绳索 交替 肱三头肌伸展的标准动作", "chunk_type": "exercise_cue", "expected": "0149", "kind": "auto_name", "note": ""}
+{"query": "坐姿 臀肌 拉伸怎么练", "chunk_type": "exercise_cue", "expected": "1424", "kind": "auto_name", "note": ""}
+{"query": "绳索 肱三头肌 下压 (V 杆)的要领", "chunk_type": "exercise_cue", "expected": "0241", "kind": "auto_name", "note": ""}
+{"query": "悬垂 腹斜肌 提膝练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1761", "kind": "auto_name", "note": ""}
+{"query": "哑铃 上斜 单臂 锤式推举的标准动作", "chunk_type": "exercise_cue", "expected": "1619", "kind": "auto_name", "note": ""}
+{"query": "绳索 坐姿 胸部推举怎么练", "chunk_type": "exercise_cue", "expected": "2144", "kind": "auto_name", "note": ""}
+{"query": "负重 一 手 引体向上的要领", "chunk_type": "exercise_cue", "expected": "3290", "kind": "auto_name", "note": ""}
+{"query": "哑铃 满罐式 侧平举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "0311", "kind": "auto_name", "note": ""}
+{"query": "自重 爆发 跳跃深蹲的标准动作", "chunk_type": "exercise_cue", "expected": "3543", "kind": "auto_name", "note": ""}
+{"query": "手指弯举怎么练", "chunk_type": "exercise_cue", "expected": "0455", "kind": "auto_name", "note": ""}
+{"query": "股四头肌的要领", "chunk_type": "exercise_cue", "expected": "3533", "kind": "auto_name", "note": ""}
+{"query": "曲杠 蜘蛛弯举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "1628", "kind": "auto_name", "note": ""}
+{"query": "绳索 地面 坐姿 宽距 划船的标准动作", "chunk_type": "exercise_cue", "expected": "0160", "kind": "auto_name", "note": ""}
+{"query": "杠铃 潘德利划船怎么练", "chunk_type": "exercise_cue", "expected": "3017", "kind": "auto_name", "note": ""}
+{"query": "哑铃 后摆臂屈伸的要领", "chunk_type": "exercise_cue", "expected": "0333", "kind": "auto_name", "note": ""}
+{"query": "哑铃 站姿 交替 锤式弯举和推举练哪块肌肉", "chunk_type": "exercise_cue", "expected": "3560", "kind": "auto_name", "note": ""}
+{"query": "绳索 侧向下拉 (带 绳索附件)的标准动作", "chunk_type": "exercise_cue", "expected": "0177", "kind": "auto_name", "note": ""}
+{"query": "脊柱扭转怎么练", "chunk_type": "exercise_cue", "expected": "2329", "kind": "auto_name", "note": ""}
+{"query": "史密斯 椅子 深蹲的要领", "chunk_type": "exercise_cue", "expected": "0750", "kind": "auto_name", "note": ""}
+{"query": "桥式 - 登山者 (交叉)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "2466", "kind": "auto_name", "note": ""}
+{"query": "下背 弯举的标准动作", "chunk_type": "exercise_cue", "expected": "1352", "kind": "auto_name", "note": ""}

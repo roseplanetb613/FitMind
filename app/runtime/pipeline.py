@@ -24,7 +24,8 @@ def _bp(p: dict, sex: str) -> float:
     return 10 * w + 6.25 * h - 5 * a + (5 if sex == "male" else -161)
 
 
-_REST_NOTE = "睡眠 7-9 小时、蛋白质吃够、可做轻拉伸或散步"
+# 休息日提示语单源在 lib/split_cycle（计划编辑也要写同一句，不能各写一份漂移）
+_REST_NOTE = split_cycle.REST_NOTE
 
 
 def _reps_mid(reps) -> int:

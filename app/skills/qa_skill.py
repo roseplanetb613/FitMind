@@ -62,7 +62,11 @@ def repos():
 class QaSkill(Skill):
     name = "qa"
     description = "动作/食物/知识检索问答"
-    task_types = ("qa", "fallback")
+    # profile_edit：档案**写入**的回读确认（"把目标改成减脂"）。写入本身由
+    # memory_extract 在 agent 入口完成，这里只负责组织答复——回读档案时新值
+    # 已经在里面，等于"已记下 + 给你看现状"。故复用 qa 的 profile 分支，
+    # 不另起技能（同样的读法、同样的字段表，另写一份必然漂）。
+    task_types = ("qa", "fallback", "profile_edit")
 
     # 科学/医学语境触发词 → 追加 RAG 知识块（training-science / sports-medicine）
     _SCIENCE_KW = ("强度", "RPE", "心率", "渐进", "免疫", "肌肉生长",
@@ -156,6 +160,19 @@ class QaSkill(Skill):
             res = self._foods(ctx, fr, query)
         else:
             res = self._exercises(ctx, ex, query)
+        # ⚠ 实测（2026-09-14，data/rag_eval 的 37 条标注）：
+        #   **知识块召回 0/37**，这条路径实际上从未触发。
+        # 原因是两个门互斥：含科学关键词（_SCIENCE_KW）的 10 条 query **全部**
+        # `items` 为空（问的是知识，命不中动作库）；而 `items` 非空的 7 条
+        # **全部**不含科学关键词。于是 `_rag_science` 一次都没被调到。
+        # 另有 MIN_SCORE=0.55 一道：像 "RPE 是什么意思" 这种问法 top1 只有 0.50，
+        # 即使调到了也会被门槛挡回（该块其实完全对题）。
+        #
+        # **暂不放开**：门槛不放宽时实测证据准只有 0.68（32% 是错证），而放宽
+        # 词法/语义门会让这些错证直接出现在用户面前——按本项目对 RAG 的定位
+        # （错证据比没有证据更糟），沉默优于答错。要放开请先提升检索质量
+        # （rerank / hybrid），不是改这里的条件。
+        # 详见 docs/SDD/2026-09-14-variant-family-audit.md 同批的 RAG 评估结论。
         if res.ok and res.data.get("items"):
             self._rag_science(res.data["items"], query)
         # 概念/术语题：库内**未命中**才走通识分支（data_kind=knowledge，渲染侧按
@@ -464,7 +481,16 @@ class QaSkill(Skill):
                            provenance=[f"ex:{it['id']}" for it in items])
 
     def _rag_science(self, items: list, query: str) -> None:
-        """科学/医学语境 → 追加 top1 science_doc 知识块。全 try/except 静默降级。"""
+        """科学/医学语境 → 追加 top1 science_doc 知识块。全 try/except 静默降级。
+
+        2026-09-14 修正：
+        1. 传 min_score —— 此前只有 LIMIT 1，无论像不像都必返回一条，等于把随机
+           知识块当证据。
+        2. pending_review 如实透传 —— 此前硬编码 True，永远不反映实际审核状态。
+        3. 正文键用 `value` 而非 `content`，并补 `source` / `source_ref`。
+           此前是 `{"name": "知识块(RAG)", "content": ...}`，而
+           `render_util.item_lines` 只认 name/name_zh/value —— **正文整段被丢掉**，
+           离线渲染出来只有一行 `· 知识块(RAG)`；出处（source_ref）也在这一层丢。"""
         if not any(k in query for k in QaSkill._SCIENCE_KW):
             return
         try:
@@ -475,13 +501,20 @@ class QaSkill(Skill):
             qv = retriever.embed_query(embedder, query)
             hits = retriever.vector_search(
                 store, qv, getattr(embedder, "model", "bge-m3"),
-                top_k=1, chunk_types=("science_doc",))
+                top_k=1, chunk_types=("science_doc",),
+                min_score=retriever.MIN_SCORE)
         except Exception:
             return
         if not hits:
             return
-        items.append({"name": "知识块(RAG)", "content": hits[0]["content"],
-                      "pending_review": True, "rag": True})
+        sr = hits[0].get("source_ref") or {}
+        # 出处：优先语料写入时的可读名（source_ref.title），无则退回 id ——
+        # 老库未重建时 title 缺失，不能因此渲染成空
+        items.append({"name": "知识块(RAG)", "value": hits[0]["content"],
+                      "source": sr.get("title") or sr.get("id") or None,
+                      "source_ref": sr,
+                      "pending_review": hits[0]["pending_review"],
+                      "rag": True})
 
     @staticmethod
     def _sounds_food(q: str) -> bool:

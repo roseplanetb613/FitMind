@@ -23,6 +23,24 @@ from app.runtime.pipeline import build_plan
 _EDIT_REPLACE_RE = re.compile(r"(?:把)?(.+?)(?:换成|换掉|改成做?)(.+)")
 _EDIT_REMOVE_RE = re.compile(r"(?:去掉|删掉|不要练?|不练|别练|取消)(.+)")
 
+# 支持的编辑句式单源：**技能自己会说出口**（parse_fail/not_found 的提示），渲染层
+# 也只会复述这里的写法。2026-09-13 的坑正是两边不一致——助手自创「今天改成休息日」
+# 而技能层没有这条语法，用户照说必然失败。
+_EDIT_HINT = ("换动作（'把卧推换成哑铃卧推'）、去掉动作（'去掉窄距卧推'）、"
+              "按部位撤（'今天不练三头'）、整天休息（'今天改成休息日'）")
+
+_DAY_OFFSET_ZH = ("今天", "明天", "后天")
+
+
+def _day_name(target: dict) -> str:
+    """目标日 spec → 给用户看的说法（"今天"/"后天"/"9月30日"）。"""
+    off = target.get("offset")
+    if isinstance(off, int) and 0 <= off < len(_DAY_OFFSET_ZH):
+        return _DAY_OFFSET_ZH[off]
+    if "month" in target:
+        return f"{target['month']}月{target['day']}日"
+    return "这一天"
+
 
 def _register_plan(plan: dict, user_id: str) -> None:
     """计划产出 → 图谱 PlanVersion（静默：图谱不可用/失败不影响计划主链路）。"""
@@ -376,8 +394,58 @@ class PlanSkill(Skill):
             "plan": moved},
             provenance=["plan#edit.shift", "memory#plan_version"])
 
+    def _rest_day(self, m, uid: str, content: dict, target: dict,
+                  query: str) -> SkillResult:
+        """整天改休息日：定位条目 → 翻转成 rest（capability 补课，2026-09-13）。
+
+        先 `reanchor` 再定位：`_edit` 读回的是**生成时快照**，隔日锚点整体偏移
+        （`day_label` 把第 1 天写成"今天"），按快照定位「今天」会撤错天——与 read
+        路径 D2 同一个坑。reanchor 同时剔掉过期的 fatigue 断言（隔日即失效）。"""
+        today = date.today()
+        if not content.get("start_date"):
+            return SkillResult(ok=True, data={"items": [{
+                "name": "无法定位",
+                "value": "这版计划没有日期基准，定位不到「今天」——要我重排一版吗"}]},
+                provenance=["plan#edit.rest.no_base"])
+        content = split_cycle.reanchor(content, today)
+        items = (content.get("training") or {}).get("items") or []
+        idx = split_cycle.day_index(content, target, today)
+        if idx is None or idx >= len(items):
+            return SkillResult(ok=True, data={"items": [{
+                "name": "未找到",
+                "value": f"这份计划里没有「{_day_name(target)}」那一天"
+                         f"（共 {len(items)} 天，超出跨度了）"}]},
+                provenance=["plan#edit.rest.not_found"])
+        day = items[idx]
+        if day.get("type") == "rest":
+            return SkillResult(ok=True, data={"items": [{
+                "name": "无需改动",
+                "value": f"{day.get('date') or ''}本来就是休息日，计划没有变动"}]},
+                provenance=["plan#edit.rest.noop"])
+        if sum(1 for d in items if d.get("type") != "rest") <= 1:
+            return SkillResult(ok=True, data={"items": [{
+                "name": "拒绝",
+                "value": "这是计划里唯一一个训练日，整天撤掉就没得练了——"
+                         "真要休息的话我按新周期给你重排一版"}]},
+                provenance=["plan#edit.rest.guard"])
+        label = str(day.get("day") or "")
+        for k in ("pattern", "deload", "focused", "blocked_from", "rest_from"):
+            day.pop(k, None)                 # 降级日标记/模式必须清干净
+        day.update({"day": f"休息日（原：{label}）", "type": "rest",
+                    "exercises": [], "note": split_cycle.REST_NOTE,
+                    # rest_from = **用户要求**改休；渲染层据此与"因身体筛查"
+                    # （blocked_from）分开措辞——混用等于替筛查背锅
+                    "rest_from": label})
+        m.register_plan(uid, f"plan-{uuid.uuid4().hex[:8]}", "edit", content=content)
+        return SkillResult(ok=True, data={
+            "items": [{"name": "计划已更新",
+                       "value": f"已把{day.get('date')}整天空出来，"
+                                f"原定的{label}改为休息日"}],
+            "plan": content},
+            provenance=["plan#edit.rest", "memory#plan_version"])
+
     def _edit(self, ctx, query: str, shift_days: int | None = None) -> SkillResult:
-        """计划指令：把X换成Y / 去掉X / 整体平移（pattern 一致校验；如实拒绝，不硬改）。"""
+        """计划指令：把X换成Y / 去掉X / 整天休息 / 整体平移（如实拒绝，不硬改）。"""
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
         uid = getattr(getattr(ctx, "session", None), "user_id", "local")
@@ -391,17 +459,31 @@ class PlanSkill(Skill):
             return self._shift(m, uid, content, shift_days)
         items = (content.get("training") or {}).get("items") or []
         mrep = _EDIT_REPLACE_RE.search(query)
+        # day 级必须先于换/删句式（2026-09-13）：「今天改成休息日」的"改成"会被
+        # _EDIT_REPLACE_RE 切成 X=今天 / Y=休息日，进而报"没有「今天」这个动作"。
+        target = split_cycle.extract_rest_day(query)
+        if target is not None:
+            # "把推日改成休息日" 句中没有日词 → 缺省今天；但 X 侧若**恰好**是某个
+            # day 名，它比缺省确定得多。定位错就是把**别的**一天撤掉（破坏性），
+            # 所以宁可多这一步。注意 "今天" 不是任何 day 名，不会被这里劫走。
+            if mrep:
+                _di = split_cycle.day_index_of_label(
+                    items, mrep.group(1).strip(" ，。我的"))
+                if _di is not None:
+                    target = {"index": _di}
+            return self._rest_day(m, uid, content, target, query)
         mdel = None if mrep else _EDIT_REMOVE_RE.search(query)
         if not mrep and not mdel:
             return SkillResult(ok=True, data={"items": [{
                 "name": "无法解析",
-                "value": "告诉我要改哪一处就行：换动作（'把卧推换成哑铃卧推'）、"
-                         "去掉动作（'去掉窄距卧推'）、按部位撤（'今天不练三头'）"}]},
+                "value": f"告诉我要改哪一处就行：{_EDIT_HINT}"}]},
                 provenance=["plan#edit.parse_fail"])
-        x_raw = (mrep.group(1) if mrep else mdel.group(1)).strip(" ，。我")
+        # 尾缀语气词一并剥掉："不练三头了" 的目标词是"三头"而不是"三头了"——
+        # 带着"了"去比对肌群词/日名必然 miss（同"了"在 _EDIT_REMOVE_RE 里也吃得下）。
+        x_term = (mrep.group(1) if mrep else mdel.group(1)).strip(" ，。我了吧啦呀")
         # 剥离训练日前缀（"把拉日引体向上换成X"→"引体向上"），防包含匹配 miss
         x_raw = re.sub(r"(?:推|拉|腿|核心|胸|背|肩|臀|腹|臂)日", "",
-                       x_raw).strip(" ，。的")
+                       x_term).strip(" ，。的")
         y_raw = mrep.group(2).strip(" ，。") if mrep else None
         # 空格归一后比对（2026-09-11）：计划内动作名来自 search_zh，多为带空格复合名
         # （'杠铃 窄距 卧推'），而用户说的是 '窄距卧推' → 朴素子串包含**永不命中**
@@ -416,6 +498,13 @@ class PlanSkill(Skill):
                     break
             if hit_ex:
                 break
+        if hit_ex is None and mdel and x_term:
+            # day 级删除（"今天不练推日"）：词面**恰好**是某天的 day 名 → 整天改休息日。
+            # 必须用**未剥离**的 x_term——日前缀剥离会把「推日」剥成空串（实测报出
+            # 「当前计划里没有「」这个动作」，用户看到一对空引号）。
+            _di = split_cycle.day_index_of_label(items, x_term)
+            if _di is not None:
+                return self._rest_day(m, uid, content, {"index": _di}, query)
         if hit_ex is None and mdel:
             # 肌群级删除："不练三头" 命中 triceps → 撤掉计划里所有 target=triceps 的动作
             pairs = _muscle_targets(items, x_raw)
@@ -439,9 +528,16 @@ class PlanSkill(Skill):
                         "plan": content},
                         provenance=["plan#edit.muscle", "memory#plan_version"])
         if hit_ex is None:
+            # 目标词被剥空（如"今天不练推日"且"推日"非本计划日名）→ 报未找到时
+            # 会印出一对空引号，用户无从判断；按未能解析处理，退回句式提示。
+            if not _x:
+                return SkillResult(ok=True, data={"items": [{
+                    "name": "无法解析",
+                    "value": f"没看出要改哪一处。可以说：{_EDIT_HINT}"}]},
+                    provenance=["plan#edit.parse_fail"])
             return SkillResult(ok=True, data={"items": [{
                 "name": "未找到",
-                "value": f"当前计划里没有「{x_raw}」这个动作。"
+                "value": f"当前计划里没有「{x_raw}」这个动作。{_EDIT_HINT}。"
                          "如果是饮食偏好，直接说'我不喜欢吃X'我会记住"}]},
                 provenance=["plan#edit.not_found"])
         if mdel:

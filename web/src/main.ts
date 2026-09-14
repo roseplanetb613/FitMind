@@ -19,9 +19,12 @@ import { createLoadErrorNotice } from './ui/notice'
 import { createDetailFlow } from './ui/detail-flow'
 import { MUSCLE_IDS } from './body/load-model'
 import { postCheckinResolve, streamChat } from './data/chat'
+import { asrStatus, postAsr } from './data/asr'
 import { createChatFlow } from './ui/chat-flow'
 import { createChatPanel } from './ui/chat-panel'
+import { createVoiceFlow, type RecorderLike } from './ui/voice-flow'
 import { createProfileForm } from './ui/profile-form'
+import { createPlanPanel } from './ui/plan'
 import { saveProfile } from './data/profile'
 import { hideDetail } from './ui/detail'
 
@@ -30,8 +33,17 @@ const uid = params.get('user_id') ?? 'local'
 const days = Number(params.get('days') ?? 7)
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
-// 顶层 await：createScene 现在要异步加载 4MB 的肌肉模型
-const handle = await createScene(canvas)
+
+// **先发起、不在这里 await**（2026-09-13）。createScene 要异步加载 ~543 KiB 的
+// 肌肉模型，而原写法把它 await 在模块顶部，于是**下面每一行都被它卡住** ——
+// 包括与 3D 毫无关系的图例、错误提示、名称层。实测用户在手机上刷新时，
+// 首屏只看到 index.html 里静态存在的工具栏（"正面/背面/训练计划/标签/无记录"），
+// 等模型下完才"唰"地出现全部内容，像页面坏了。
+//
+// 现在只有**真正用到 handle 的地方**才等（见下方 `await sceneReady`），
+// 图例等不受影响的装配立刻完成。配合 index.html 的 #boot 载入提示，
+// 等待窗口读起来是"正在载入模型"而不是"页面残缺"。
+const sceneReady = createScene(canvas)
 const detailEl = document.querySelector<HTMLElement>('#detail')!
 const legendEl = document.querySelector<HTMLElement>('#legend')!
 const labelsEl = document.querySelector<HTMLElement>('#labels')!
@@ -47,6 +59,12 @@ const names = createLabelNames()
 //   focused —— 键盘 Tab / 点选选中的那块（详情浮层 + roving tabindex 跟着它）
 let hovered: string | null = null
 let focused: string | null = null
+// 到这里才需要 3D —— 前面那些装配（图例/提示/名称层）在模型下载期间就已完成。
+// finally 保证**成功或失败都撤掉 #boot**：模型加载失败时若留着它，"正在载入"
+// 会永久盖在页面上，比空白更难排查（错误提示在建 #boot 的那一步已经被挡住了）。
+const handle = await sceneReady.finally(() => {
+  document.querySelector('#boot')?.remove()
+})
 const labels = createLabelLayer(labelsEl, handle.body, (id) => names.resolve(id))
 /** 键盘遍历顺序 = 标签顺序（就是那 28 个 id） */
 const ids = labels.ids()
@@ -252,6 +270,8 @@ const SESSION_KEY = 'fitmind.chat.session'
 const chatEl = document.querySelector<HTMLElement>('#chat')!
 const chatToggleEl = document.querySelector<HTMLButtonElement>('#chat-toggle')!
 const profileEl = document.querySelector<HTMLElement>('#profile')!
+const planEl = document.querySelector<HTMLElement>('#plan')!
+const planToggleEl = document.querySelector<HTMLButtonElement>('#plan-toggle')!
 
 /**
  * 保证会话 id 存在 —— **建档和对话共用同一个**。
@@ -294,6 +314,20 @@ const profileForm = createProfileForm({
   },
 })
 
+// ── 语音输入 ────────────────────────────────────────────────────────
+// 状态机在 ui/voice-flow.ts（可单测），这里只装配浏览器 API 并接线。
+
+/**
+ * 转写服务能不能用 —— **决定要不要渲染麦克风按钮**。
+ *
+ * ⚠ **必须是顶层 await，且必须在建面板之前完成**：`onMic` 传不传是在
+ * `createChatPanel` 那一刻定下来的，晚了按钮就建不出来。
+ * 探活端点**不会**触发模型加载（见 app/runtime/asr.py 的 status），所以这次
+ * 多等一个 RTT 不会把 4.6GB 权重拉进显存。
+ * 探活本身失败按"不可用"处理，不会让页面挂掉（见 data/asr.ts 的 asrStatus）。
+ */
+const asrInfo = await asrStatus()
+
 const chatPanel = createChatPanel({
   root: chatEl,
   // 28 个 id 的**单源**就是 load-model 的 MUSCLE_IDS —— 卡片里扫肌肉名时用它比对，
@@ -308,7 +342,21 @@ const chatPanel = createChatPanel({
   onChooseOption: (o, at) => void chatFlow.chooseOption(o, at),
   onChooseCustom: (text, at) => void chatFlow.submitCustom(text, at),
   onOpenProfile: () => void profileForm.open(),
+  // 不可用就**不传**，按钮整个不渲染 —— 不给一个点了才报错的按钮
+  ...(asrInfo.available ? { onMic: () => void voiceFlow.toggle() } : {}),
   onSubmit: (text) => void chatFlow.send(text),
+})
+
+const voiceFlow = createVoiceFlow({
+  // 用 `?.`：非 https/localhost 时 mediaDevices 整个是 undefined，
+  // 直接调会 TypeError（voice-flow 拿到 undefined 会给出对应提示）
+  getUserMedia: (c) => navigator.mediaDevices?.getUserMedia(c),
+  createRecorder: (stream) =>
+    new MediaRecorder(stream) as unknown as RecorderLike,
+  transcribe: (blob) => postAsr(blob),
+  // 转写结果**只回填、不自动发**：语音必然有听错的，给用户改字的机会
+  onText: (text) => chatPanel.setInput(text),
+  onChange: (s) => chatPanel.setVoiceStatus(s.status, s.error),
 })
 
 const chatFlow = createChatFlow({
@@ -338,3 +386,8 @@ const chatFlow = createChatFlow({
 
 chatToggleEl.addEventListener('click', () => chatPanel.setOpen(true))
 chatPanel.render(chatFlow.state()) // 首帧：显示欢迎语而不是空面板
+
+// 训练计划抽屉。打开时才拉取 —— 计划是"想查才看"的东西，没必要每次进页面都请求。
+// 它与对话面板无关：计划来自图谱里的 PlanVersion，不是这次对话的产物。
+const planPanel = createPlanPanel({ root: planEl, userId: uid })
+planToggleEl.addEventListener('click', () => void planPanel.open())

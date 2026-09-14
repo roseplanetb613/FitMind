@@ -2,6 +2,7 @@
 """风险守卫：规则拦截最优先，任何模式不得绕过。非诊断提示。"""
 from __future__ import annotations
 from app.skills.base import Skill, SkillResult
+from app.core import diag                     # 降级可观测（静默失败可查）
 from app.core.vocab import (GUARD_SYMPTOMS, GUARD_SIGNAL_EXTRA,
                                is_pure_soreness)
 from app.core.llm import _is_minor_context, _is_intensity_context
@@ -384,7 +385,14 @@ class GuardSkill(Skill):
         return MEMORY_USER_ID
 
     def _memory_record(self, signal: str, uid: str) -> None:
-        """症状自报 → injury 记忆（部位抽取；静默，抽不中宁缺毋滥）。"""
+        """症状自报 → injury 记忆（部位抽取；抽不中宁缺毋滥）。
+
+        ⚠ 降级方向是"不写"，但**失败必须留痕**（2026-09-13）：原先整段
+        `except Exception: pass`，实测 `extract_injury_site("我手肘疼")` 抛
+        KeyError（部位表键集漂移）被吞得干干净净 —— guard 照回黄色警告、
+        图谱里一条没记、diag 里也没计数，**用户以为记上了，三层都没灯**。
+        现在失败 bump diag（写不进去是允许的，但"写不进去且无人知道"不允许）。
+        """
         try:
             from app.graph.memory import extract_injury_site
             m = self._memory_or_none()
@@ -400,9 +408,9 @@ class GuardSkill(Skill):
             try:
                 m.link_injury_muscle(uid, zh)   # 伤痛挂肌肉（不中静默，T4）
             except Exception:
-                pass
+                diag.bump("guard.link_injury_muscle")
         except Exception:
-            pass
+            diag.bump("guard.memory_record")    # 部位抽取/写入失败 → 可查
 
     @staticmethod
     def _find_injury(m, uid: str, site_zh: str) -> dict | None:
@@ -431,6 +439,15 @@ class GuardSkill(Skill):
         # 不疼"）→ 是"刚发生的异常事件+无痛补充"，不是旧伤康复确认 → 不走 close，
         # 交回常规症状拦截（G1-04/14/18 曾因 close 误放行 green；D2：T2-02
         # "膝盖不疼了但一蹲就响"——done 词消除后仍有其它症状词 → 非康复）
+        # 疑问句不是确认（2026-09-13）："我好了吗"含 done 词却是**提问**，
+        # 若被当成确认就会把记录里的伤直接关掉——用户只是问一句，记录没了。
+        # 路由侧已用整句式收紧（不含裸"好了"），这里再兜一道，防别的路径送进来。
+        try:
+            from app.graph.memory_extract import _is_question
+            if _is_question(signal):
+                return None
+        except Exception:
+            pass
         if done:
             if any(k in signal for k in _ACUTE_KW):
                 return None
@@ -454,6 +471,30 @@ class GuardSkill(Skill):
                     # "不疼就是抬不起胳膊" T2-11）不是纯康复回应，交回常规拦截。
                     if done and not any(k in signal for k in (
                             "医生", "但", "可是", "就是", "但是", "然而", "不过")):
+                        # 无部位康复句（"我康复了""我好了"）：**得真的把那处关掉**，
+                        # 否则记录里留一条 active 伤，30 天内计划一直被禁忌拦住
+                        # （2026-09-13：这类句子此前到不了本流程，即使到了也只回
+                        #   一句泛泛的 green —— 说了"收到"却什么都没改）。
+                        # 一处 → 就是它；多于一处分不清哪处，**问**而不是猜。
+                        try:
+                            actives = m.current(uid, "injury")
+                        except Exception:
+                            actives = []
+                        if len(actives) == 1:
+                            m.close(uid, actives[0]["fact_id"])
+                            zh1 = str(actives[0].get("about") or "不适")
+                            return {"blocked": False, "level_label": "green",
+                                    "advice": f"收到，{zh1}部不适已记为康复。"
+                                              "恢复训练请从低强度开始，循序渐进。",
+                                    "blocks": []}
+                        if len(actives) > 1:
+                            parts = "、".join(str(r.get("about") or "?")
+                                             for r in actives)
+                            return {"blocked": False, "level_label": "黄色",
+                                    "advice": f"你记录里有 {len(actives)} 处不适"
+                                              f"（{parts}）。是哪一处好了？告诉我部位，"
+                                              "我就更新记录。",
+                                    "blocks": []}
                         return {"blocked": False, "level_label": "green",
                                 "advice": "收到。恢复训练请从低强度开始，循序渐进，"
                                           "给身体足够适应时间。",
@@ -523,12 +564,19 @@ class GuardSkill(Skill):
             if not hits:
                 return None
             conds = "、".join(part for part in inj)
-            detail = "；".join(
-                f"{c}（危险模式 {','.join(p)}）" if p is not None else c
-                for c, _r, p in hits)
+            # ⚠ 话术**只念用户说过的部位，不念查到的病名**（2026-09-13）。
+            #
+            # `screening.contraindication(部位)` 是拿部位去**子串匹配中文病名**
+            # 做的筛查启发式：用户说"腰不适"，它返回的是「腰椎间盘突出/坐骨神经痛」。
+            # 原话术把 `entry["condition_zh"]` 直接拼进 advice，于是输出变成
+            # "本次训练安排命中禁忌：腰椎间盘突出（活动期或明显症状）"——
+            # **用户没说过这个诊断，系统替他说了**。本模块开头就写着"非诊断提示"，
+            # 这既是越界的话术也是吓人的（凭空被告知有椎间盘突出）。
+            # 病名继续留在 structured 的 blocks 里（机器消费：模式封堵、分级），
+            # 只是不再念给用户。要解释"为什么拦"就讲负荷关系，不讲病。
             return {"blocked": True, "level_label": "黄色",
                     "advice": (f"根据你的历史记录，之前曾提到{conds}不适（记忆来源），"
-                               f"本次训练安排命中禁忌：{detail}。"
+                               "这次安排里有力负荷该部位的动作。为避免加重，"
                                "建议先咨询医生或专业康复师评估，再决定训练安排。"),
                     "blocks": [
                         {"condition": c, "risk_level": r, "hit_patterns": p or []}

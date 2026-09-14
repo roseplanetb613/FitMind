@@ -6,7 +6,8 @@ import json
 import re
 from datetime import date, timedelta
 from app.core import progress
-from app.core.render_util import training_lines
+from app.core.render_util import (empty_result_lines, item_lines,
+                                  payload_lines, training_lines)
 from app.core.router import Mode, RouteClassifier, route
 from app.skills.base import ExecutionContext, SkillResult
 from app.runtime.validator import RuleValidator
@@ -76,7 +77,8 @@ _PLAN_EDIT_CLAIM_KW = ("已改", "已经改", "已调整", "已后延", "已延"
                        "已撤", "撤掉了", "已换", "换成了")
 # 编辑**失败**的 provenance 结尾（"无法解析/未找到/无计划"等如实拒绝不算改动依据）
 _PLAN_EDIT_FAIL = (".parse_fail", ".not_found", ".no_plan", ".no_base",
-                   ".guard", ".pattern_mismatch", ".y_not_found")
+                   ".guard", ".pattern_mismatch", ".y_not_found",
+                   ".noop")   # rest.noop：什么都没改，"已改…" 断言同属幻觉
 
 
 def _edit_ok_provenance(sources) -> bool:
@@ -269,6 +271,14 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         items = state.get("exercise_clarify") or []
         raw = next((str(i.get("raw")) for i in items if i.get("raw")), "")
         uid = state.get("user_id") or "local"
+        # 待消歧项有两种来路（memory_extract）：
+        #   checkin            —— 打卡里没对上的动作片段 → 点定后**补记这次训练**
+        #   preference(_pending) —— 偏好陈述里没对上的动作 → 点定后**记这条偏好**
+        # 两者共用这一个节点与前端选择框，靠 kind 分流。默认 checkin（向后兼容：
+        # checkin 的 pending 项没有 kind 字段）。
+        pending_item = next((i for i in items if i.get("raw")), {})
+        kind = str(pending_item.get("kind") or "checkin")
+        pref_value = str(pending_item.get("value") or "")
 
         # 从片段里**扫出部位词**："完腿" → 含"腿" → quadriceps。
         # 长词优先，免得"大腿"被"腿"抢先匹配掉。扫不到就不过滤部位（见下）。
@@ -288,17 +298,26 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         ex = exercise_repo()
         cands: list[dict] = []
         try:
-            if muscle:
+            # **先用用户原词检索，再按扫到的部位兜底**（2026-09-13 调换顺序）。
+            #
+            # 原顺序是"有部位线索就走 recommend"，对最初那个用例（"完腿"这种
+            # 解析残渣）是对的，但对**真的口语动作名**是反的：实测
+            #     "夹腿" 含"腿" → 走 recommend(quadriceps) → 后跳 / 平衡板 / 分腿深蹲
+            #     而 search_zh("夹腿") → 绳索 髋内收 / 杠杆机 坐姿 髋内收  ← 这才是答案
+            # 用户说的词本身就是最好的检索键；部位字只是片段里的线索，不该压过它。
+            #
+            # 兜底仍然保留：search_zh("完腿") == [] → 落回 recommend(quadriceps)，
+            # 与调换前逐字一致（那条路径的实测依据见下方 recommend 的说明）。
+            if raw:
+                cands = ex.search_zh(raw, limit=MAX_CLARIFY_OPTIONS * 2)
+            if not cands and muscle:
                 # **用 recommend 而不是 filter。** filter 会把该肌群的**全部**
                 # 205 条按文件顺序倒出来，头几条是"分臂 绕环 触趾"这类热身/拉伸；
                 # recommend 是既有的推荐口径（主目标优先、去变体重复、难度递进），
                 # 3D 视图的"点肌肉看推荐"用的也是它 —— 两处同源，口径不会分家。
                 # 多取一倍，留给下面的偏好重排。
                 cands = ex.recommend(muscle, count=MAX_CLARIFY_OPTIONS * 2)["recommendations"]
-            else:
-                # 没有部位线索（多半是拼错的动作名）→ 直接拿原词去检索。
-                # 搜不到就**不给选项**，只问 —— 编一组不相干的动作比空着更糟。
-                cands = ex.search_zh(raw, limit=MAX_CLARIFY_OPTIONS * 2)
+            # 都没有 → **不给选项，只问**（编一组不相干的动作比空着更糟）
         except Exception:
             cands = []
 
@@ -320,13 +339,23 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
                    for c in cands[:MAX_CLARIFY_OPTIONS]]
 
         where = f"「{raw}」" if raw else "这个动作"
-        if options:
-            reply = f"你说的{where}我没对上库里的动作——是下面哪个？点一下我就记上。"
+        # 措辞按 kind 分：偏好问的是"你要避开的/你偏好的**是哪一个**"，
+        # 打卡问的是"你练的是哪一个"——同一句会答非所问。
+        if kind == "preference":
+            verb_zh = "避开" if pref_value == "不喜欢" else "偏爱"
+            head = f"你想{verb_zh}的{where}"
         else:
-            reply = (f"你说的{where}我在动作库里没找到。"
+            head = f"你说的{where}"
+        if options:
+            reply = f"{head}我没对上库里的动作——是下面哪个？点一下我就记上。"
+        else:
+            reply = (f"{head}我在动作库里没找到。"
                      "换个说法，或者直接说动作的完整名称？")
         return {"event": None, "outcome": {"ok": True, "data": {
-                    "options": options, "raw": raw, "verb": state.get("verb")}},
+                    "options": options, "raw": raw, "verb": state.get("verb"),
+                    # kind/value 回流给前端 → 由它带回 /v1/checkin/resolve，
+                    # 那个端点据此决定写打卡还是写偏好
+                    "kind": kind, "value": pref_value}},
                 "reply": reply, "mode_used": "clarify_exercise"}
 
     # ---------------- 技能执行 ----------------
@@ -578,11 +607,12 @@ def _render_fallback(structured: dict) -> str:
         lines.append("已记下：" + "、".join(acks))
     if structured.get("error"):
         lines.append("提示: " + str(structured["error"]))   # 失败原因如实透出
-    for it in d.get("items", []):
-        nm = it.get("name") or it.get("name_zh")
-        if nm:
-            lines.append(f"· {nm}")
+    # 文本载荷（advice/message）单源：**必须排在 items 之前**——guard 的 advice
+    # 就是答案本身，排在条目后面会被淹没。此前漏渲染，安全建议降级后成空白卡片。
+    lines.extend(payload_lines(d))
+    lines.extend(item_lines(d))       # 条目行单源：两个渲染器此前各认一种形态
     lines.extend(training_lines(d))   # 天级行（日期/休息/封堵/建议）单源：render_util
+    lines.extend(empty_result_lines(d))   # 空检索兜底：否则只剩标题+来源的空白卡片
     if "macros" in d:
         m = d["macros"]
         lines.append(f"目标热量 {m.get('target_kcal')} kcal，"

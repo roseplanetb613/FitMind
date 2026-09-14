@@ -187,6 +187,14 @@ export interface CheckinResolveRequest {
   sets?: number
   reps?: number
   occurred_at?: string
+  /**
+   * 这次点选是为哪件事：`checkin`（补记训练）还是 `preference`（记偏好）。
+   * 由 `clarify_exercise` 节点放进 `structured.data.kind`，前端原样带回 ——
+   * 后端据此决定写打卡还是写偏好。缺省 `checkin`。
+   */
+  kind?: string
+  /** `kind=preference` 时的极性：喜欢 / 不喜欢 */
+  value?: string
 }
 
 export interface CheckinResolveResponse {

@@ -76,6 +76,14 @@ export interface StructuredData {
   options?: StructuredOption[]
   /** 消歧的原始片段（如"完腿"），仅用于展示它到底没对上什么 */
   raw?: string
+  /**
+   * 这次消歧是为什么而问：`checkin`（补记训练）还是 `preference`（记偏好）。
+   * 偏好陈述里没对上的动作也走同一个选择框（见后端 clarify_exercise 节点），
+   * 前端原样带回 `/v1/checkin/resolve`，由后端分流写打卡还是写偏好。
+   */
+  kind?: string
+  /** `kind=preference` 时的极性：喜欢 / 不喜欢 */
+  value?: string
   [k: string]: unknown
 }
 

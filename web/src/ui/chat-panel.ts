@@ -9,6 +9,7 @@
  */
 import type { Structured, StructuredItem, StructuredOption } from '../data/types'
 import { muscleIdInItem, stageText, type ChatMessage, type ChatState } from './chat-flow'
+import type { VoiceStatus } from './voice-flow'
 
 /** 点结构化卡片时回调。返回 null 表示这块肌肉在 3D 里找不到，**不给链接**。 */
 export type MuscleLinkHandler = (muscleId: string) => void
@@ -25,6 +26,11 @@ export interface ChatPanelOptions {
   onChooseCustom?: (text: string, at: number) => void
   /** 打开建档窗口 */
   onOpenProfile?: () => void
+  /**
+   * 点麦克风按钮。**不传就不渲染这个按钮** —— 转写服务不可用时（未装模型、
+   * 或走了非 https/localhost）宁可没有按钮，也不要一个点了就报错的按钮。
+   */
+  onMic?: () => void
   onSubmit: (text: string) => void
 }
 
@@ -35,6 +41,15 @@ export interface ChatPanel {
   isOpen: () => boolean
   /** 取输入框里的文字并清空 —— 供表单提交与快捷键共用 */
   takeInput: () => string
+  /**
+   * 把文本放进输入框（**不覆盖用户已经打的字**，追加在后面）。
+   *
+   * 语音转写的结果走这里回填：给用户一个改字的机会，而不是替他发出去。
+   * 不复用 `takeInput`（那是取走不是写入，且不 trim）。
+   */
+  setInput: (text: string) => void
+  /** 录音/转写状态 → 按钮外观与提示文字。逻辑在 voice-flow，这里只管画。 */
+  setVoiceStatus: (status: VoiceStatus, error: string | null) => void
 }
 
 /** 元素的创建收口在这里，测试的 DOM stub 只需要支持这几步。 */
@@ -248,10 +263,32 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
   input.setAttribute('type', 'text')
   input.setAttribute('placeholder', '问点什么…（今天练什么 / 恢复得怎么样）')
   input.setAttribute('autocomplete', 'off')
+  // 语音状态条：录音/转写/错误都走它。**必须有可见反馈** —— 从松手到出字
+  // 是秒级（medium 每次约 0.7s + 首次 4.4s 加载），中间毫无提示的话用户
+  // 会以为按钮坏了，然后再点一次。
+  const voiceLine = el('div', 'chat-voice')
+  voiceLine.setAttribute('role', 'status')
+  voiceLine.setAttribute('aria-live', 'polite')
+
   const send = el('button', 'chat-send')
   send.setAttribute('type', 'submit')
   send.textContent = '发送'
-  form.append(input, send)
+
+  // 麦克风。**必须 type='button'**：form 里 type 缺省是 submit，
+  // 点一下会顺带把表单提交了（把半截文字发出去）。
+  let mic: HTMLButtonElement | null = null
+  if (opts.onMic) {
+    mic = el('button', 'chat-mic')
+    mic.setAttribute('type', 'button')
+    mic.setAttribute('aria-label', '语音输入')
+    mic.textContent = '🎤'
+    mic.addEventListener('click', () => opts.onMic?.())
+  }
+
+  const row: HTMLElement[] = [input]
+  if (mic) row.push(mic)   // 不传 onMic 就没有它，顺序不能错乱
+  row.push(send)
+  form.append(...row)
   form.addEventListener('submit', (ev) => {
     ev.preventDefault()
     const text = input.value.trim()
@@ -260,7 +297,7 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
     opts.onSubmit(text)
   })
 
-  root.append(head, list, stageLine, errorLine, form)
+  root.append(head, list, stageLine, errorLine, voiceLine, form)
 
   function setOpen(next: boolean): void {
     open = next
@@ -289,6 +326,8 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
     // 等待期间禁用发送：不禁的话连点会发出并发请求，后端会话状态会乱
     input.disabled = state.pending
     send.disabled = state.pending
+    // 麦克风跟着一起禁 —— agent 应答期间再录一段，回来会和当前这轮抢输入框
+    if (mic) mic.disabled = state.pending
     root.classList.toggle('is-busy', state.pending)
 
     // 有回复就先滚动到最新
@@ -304,6 +343,28 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
       const v = input.value
       input.value = ''
       return v
+    },
+    setInput(text: string) {
+      // **追加而不是覆盖**：用户可能已经打了半句再想起来用语音补一句，
+      // 直接覆盖会把他打的字静默丢掉。
+      input.value = input.value ? `${input.value} ${text}` : text
+    },
+    setVoiceStatus(status: VoiceStatus, error: string | null) {
+      if (mic) {
+        mic.classList.toggle('is-recording', status === 'recording')
+        mic.disabled = status === 'transcribing'
+        mic.textContent = status === 'recording' ? '⏹' : '🎤'
+        mic.setAttribute('aria-label', status === 'recording' ? '结束录音' : '语音输入')
+      }
+      const text =
+        error ? error
+        : status === 'recording' ? '正在录音…说完点一下按钮结束'
+        : status === 'transcribing' ? '正在转写…'
+        : ''
+      voiceLine.textContent = text
+      // 错误要显眼（红），录音/转写是正常态（安静一点）
+      voiceLine.classList.toggle('is-on', Boolean(text))
+      voiceLine.classList.toggle('is-error', Boolean(error))
     },
   }
 }

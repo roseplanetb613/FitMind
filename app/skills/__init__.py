@@ -10,6 +10,7 @@ def build_default_registry():
     from app.skills.teach_skill import TeachSkill
     from app.skills.progress_skill import ProgressSkill
     from app.skills.smalltalk_skill import SmallTalkSkill
+    from app.skills.preference_skill import PreferenceSkill
     reg = SkillRegistry()
     reg.register(GuardSkill())
     reg.register(QaSkill())
@@ -17,4 +18,5 @@ def build_default_registry():
     reg.register(TeachSkill())
     reg.register(ProgressSkill())
     reg.register(SmallTalkSkill())
+    reg.register(PreferenceSkill())
     return reg

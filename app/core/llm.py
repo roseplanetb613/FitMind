@@ -7,9 +7,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from app.core.intent import Intent, PlannedCall
-from app.core.render_util import training_lines
-from app.core.vocab import (GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS, is_pure_soreness,
-                            MEMORY_QUERY_RULE_KW)   # 记忆查询词表单源（见 vocab.py）
+from app.core.render_util import (empty_result_lines, item_lines,
+                                  payload_lines, training_lines)
+from app.core.vocab import (GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS,
+                            is_profile_field_word, is_profile_query,
+                            is_pure_soreness,
+                            MEMORY_QUERY_RULE_KW)   # 记忆/档案词表单源（见 vocab.py）
 import split_cycle                      # lib 单源：plan 参数抽取（split/days）
 
 
@@ -57,6 +60,14 @@ _RULES = [
     # guard：症状词单源（app.core.vocab.GUARD_SYMPTOMS，与 guard_skill 共享）
     # + 意图层补充信号（"能不能练"类问法）。tfcc/半月板等已含于症状表。
     (GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA, "guard",
+     lambda t, kw: {"signal": t}),
+    # 康复确认句（2026-09-13）："我康复了/我好了"这类**不含任何症状词**，分类器
+    # 不会当 guard → 永远到不了 guard_skill 的确认/续期流程 → 记下的伤只能等
+    # 30 天自然过期，期间计划一直被禁忌挡住（实测"我康复了"落 qa）。
+    # ⚠ 只收**整句式**，绝不收裸"好了"：裸词会吞掉"计划好了吗""午休好了"这类
+    # 正常提问（而且"我好了吗"若被当确认，会把记录里的伤直接关掉）。
+    (("我康复了", "我恢复了", "我痊愈了", "我好了", "已经好了", "都好了",
+      "完全好了", "彻底好了", "伤好了", "全好了", "我好利索了"), "guard",
      lambda t, kw: {"signal": t}),
     (("挺不错", "还不错", "就按这个", "按这个练", "没问题就按"), "smalltalk",
      lambda t, kw: {"topic": t}),
@@ -291,7 +302,19 @@ class StubProvider(LLMProvider):
         # 删/去类须排除记忆域句（"把我的训练记录删掉"是删除权请求非计划编辑）。
         # "edit": True 标记编辑意图 → plan_skill 在句式未识别时如实拒绝，
         # 不再静默回落整份重新生成（CLI 实证："今天不练三头"曾零改动却叙述已改）。
-        if any(k in t for k in ("换成", "换掉", "改成做")):
+        # day 级：整天改休息日（2026-09-13）——必须**先于**下面的 "改成做" 规则。
+        # 此前「今天改成休息日」不含"改成做" → 落 qa 0.3 → 交 L2 猜（路由不确定），
+        # 且即便到了技能层也被切成 X=今天/Y=休息日。能力已补（_rest_day），分类补。
+        if split_cycle.extract_rest_day(t) is not None:
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
+        # ⚠ 档案字段不是计划内动作（2026-09-13）：「目标换成增肌」「把目标改成减脂」
+        # 含"换成/改成"却是在改**档案**（目标/体重/身高…），不是换计划里的动作。
+        # 实测被判 plan_edit → plan_skill 回"当前计划里没有「目标」这个动作，
+        # 这句话我这边接不住"——用户按上一轮回复的原话说的，系统接不住自己提的话。
+        # 与上面"删/去"规则排除记忆域同法：命中档案字段名就交回下方的档案通道。
+        if (any(k in t for k in ("换成", "换掉", "改成做"))
+                and not is_profile_field_word(t)):
             return Classification("plan_edit", {"query": t, "edit": True},
                                   confidence=1.0)
         if any(k in t for k in ("去掉", "删掉", "不要练", "别练", "取消")) \
@@ -367,8 +390,13 @@ class StubProvider(LLMProvider):
         # 谎报"没有找到相关内容"（库内本就不收 TDEE/活动系数这类概念）。标记 concept：
         # 库内命中照常作答，**未命中**才走通识分支（data_kind=knowledge + 标注），
         # 不再对概念问题谎报未收录。动作类问法不受影响（无 concept 标记）。
-        if any(k in t for k in ("是什么", "什么是", "什么意思", "啥意思",
-                                "是什么意思", "指什么")):
+        # ⚠ **档案自指问句除外**（2026-09-13）：本条 conf=1.0 且跑在 _RULES 循环
+        # 之前，会把"我的目标是什么"截胡成通识题 → 库内命中不了 → 答"没有找到
+        # 相关内容"（用户体感"查不到我的档案"）。"X是什么"里的 X 是**自己的档案
+        # 字段**时，问的是档案不是术语，交给下方的档案直通门。
+        if (not is_profile_query(t)
+                and any(k in t for k in ("是什么", "什么是", "什么意思", "啥意思",
+                                         "是什么意思", "指什么"))):
             return Classification("qa", {"query": t, "kind": "concept"},
                                   confidence=1.0)
         for entry in reversed(_RULES):
@@ -412,6 +440,10 @@ class StubProvider(LLMProvider):
             parts.append("提示: " + str(structured["error"]))   # 失败原因如实透出
         data = structured.get("data") or {}
         if data:
+            # 文本载荷（advice/message）单源，排在 items 之前——guard 的 advice
+            # 就是答案本身。此前与 nodes._render_fallback 平行地漏了这两个键，
+            # 离线路径下安全建议/闲聊正文全丢（只剩标题+来源）。
+            parts.extend(payload_lines(data))
             for k in ("macros", "training", "meals"):
                 if k == "training":
                     # 计划型 data：天级行（日期/休息/封堵/建议）单源直出，
@@ -419,8 +451,10 @@ class StubProvider(LLMProvider):
                     parts.extend(training_lines(data))
                 elif k in data:
                     parts.append(f"[{k}]")
-        for it in structured.get("items", []):
-            parts.append(f"· {it}")
+            parts.extend(empty_result_lines(data))   # 空检索兜底，与 fallback 单源
+            parts.extend(item_lines(data))           # 条目单源：此前读顶层
+        # structured["items"]（旧顶层死键，build_structured 已不再产出）此处不再读——
+        # 两个渲染器读同一处，避免"各瞎一半"
         for s in structured.get("sources", []):
             parts.append(f"来源: {s}")
         return "\n".join(parts)
@@ -651,9 +685,12 @@ class DeepSeekProvider(LLMProvider):
                 "8) 训练计划 data.training.items 每项含 date 字段（日期锚点，如"
                 "\'今天（9月10日 周四）\'）：逐日介绍训练安排时必须原样带上该日期，"
                 "不得省略或改写；type 为 rest 的条目是休息日，念出日期+\'休息日\'并"
-                "带上 note 里的恢复提示；day 含\'原：\'的是筛查封堵降级日，要如实"
-                "说明\'因身体筛查改为休息\'；动作条目含 progression 字段时，用一句话"
-                "念出 reason 与建议重量（如\'卧推：{reason}，建议试试 62.5kg\'）；"
+                "带上 note 里的恢复提示；day 含\'原：\'的降级日**必须分清缘由**："
+                "带 blocked_from 的是筛查封堵降级，说\'因身体筛查改为休息\'；"
+                "带 rest_from 的是**用户自己要求**改的休息日，说\'按你的要求改为休息\'，"
+                "严禁说成筛查原因（替筛查背锅＝编造健康结论）；动作条目含 progression "
+                "字段时，用一句话念出 reason 与建议重量"
+                "（如\'卧推：{reason}，建议试试 62.5kg\'）；"
                 "data.fatigue_sources 是减量断言的**出处**（date/term/pattern）："
                 "用户追问依据（\'练的哪里\'\'为什么减量\'\'48小时练了什么\'）时必须"
                 "念出其中的日期与原词，不得改写、省略或臆造。"
@@ -665,7 +702,15 @@ class DeepSeekProvider(LLMProvider):
                 "data 与当前原话组织，上一轮问过的动作/食物不因为出现在 history 里就"
                 "变成本轮要答的内容。原话里的身体数字"
                 "（如\'如果我80kg\'）只是用户说法、不是档案事实，除非它也出现在 data 或"
-                "档案中，否则不得当作用户的真实数据复述。")
+                "档案中，否则不得当作用户的真实数据复述。"
+                "10) 告诉用户\"你可以这样说\"时，**只能逐字复用 data.items 里已给出的"
+                "句式**，严禁自创系统还不支持的问法——2026-09-13 实测：助手自编"
+                "\'想整天空出来就说「今天改成休息日」\'，而技能层当时根本没有这条语法，"
+                "用户照说必然报错。承诺的能力必须与 data 里出现的句式一一对应；"
+                "11) data.advice 是**筛查/进度技能算好的结论正文**（安全提示与"
+                "训练建议），必须按其原意完整转述，不得省略、弱化或改写其结论；"
+                "这是数据层给的判断，不是你可以自行斟酌的建议——尤其 level_label 为"
+                "red/yellow 时，advice 的内容就是回答的核心。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),

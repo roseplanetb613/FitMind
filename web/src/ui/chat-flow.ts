@@ -88,7 +88,8 @@ export interface ChatFlowDeps {
   onNeedProfile?: () => void
   /** 补记通道。不传则消歧选项点了没反应（测试里可以省略） */
   resolve?: (req: { exercise_id?: string; text?: string; name_zh?: string
-                     raw?: string; user_id?: string }) => Promise<CheckinResolveResponse>
+                     raw?: string; user_id?: string; kind?: string
+                     value?: string }) => Promise<CheckinResolveResponse>
 }
 
 export interface ChatFlow {
@@ -137,9 +138,16 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
     emit()
     try {
       const req = { ...payload } as { exercise_id?: string; text?: string
-                                      name_zh?: string; raw?: string; user_id?: string }
+                                      name_zh?: string; raw?: string; user_id?: string
+                                      kind?: string; value?: string }
       const raw = msg.structured?.data?.raw
       if (typeof raw === 'string') req.raw = raw
+      // kind/value 原样带回：这次点选可能是"记偏好"而不是"补记训练"
+      // （偏好陈述里没对上的动作，见 nodes.clarify_exercise）。后端据此分流。
+      const kind = msg.structured?.data?.kind
+      if (typeof kind === 'string') req.kind = kind
+      const value = msg.structured?.data?.value
+      if (typeof value === 'string') req.value = value
       if (deps.userId) req.user_id = deps.userId
       const r = await deps.resolve(req)
       if (r.need_pick) {

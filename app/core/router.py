@@ -9,10 +9,10 @@ from app.core.intent import Intent
 from app.core.llm import Classification, LLMProvider, StubProvider
 from app.core.arbitrate import arbitrate
 from app.core.semantic import ExemplarStore, _params_for, map_conf
-from app.core.vocab import (                       # 记忆查询词表单源（见 vocab.py）
+from app.core.vocab import (                       # 记忆/档案查询词表单源（见 vocab.py）
     _MEM_ADVICE_KW, _MEM_ASPECT_KW, _MEM_DOMAIN_KW, _MEM_PAST_KW,
     _MEM_ASK_KW, _MEM_SELF_KW, _MEM_WHEN_KW, _MEM_WHERE_FRAME_KW,
-    _MEM_WHERE_SELF_KW)
+    _MEM_WHERE_SELF_KW, is_profile_query)
 
 
 class Mode(Enum):
@@ -81,6 +81,52 @@ def is_memory_query(text: str) -> bool:
     return not any(k in t for k in _MEM_ADVICE_KW)
 
 
+def is_profile_update(text: str) -> bool:
+    """档案**写入**陈述（改目标/体重/身高…），而非查询。
+
+    与 `is_preference_statement` 同法：判据**复用抽取器**，不另起词表——只有真抽出
+    `op=profile` 指令才算数（"我不想受伤"含"想"却抽不出，就不该当档案写入）。
+
+    为什么需要这条门：写入本身由 `memory_extract` 在 agent 入口完成，但**答复**
+    来自当时恰好被选中的技能——实测「我想减脂」落 qa 动作库检索答"没有找到相关
+    内容"、「把目标改成减脂」更被 plan_edit 接走答"当前计划里没有「目标」这个动作"。
+    用户按回复原话说的，系统却接不住自己提的话。
+
+    ⚠ 只认 `op == "profile"`（写一个具体字段值）。不带 `profile_delta`
+    （相对量"又瘦了一斤"——无现值锚定时 apply 会跳过不写，那就没有 ack，
+    答成空卡片）也不带别的 op（混了偏好/打卡的句子留给原先的路由）。
+    ⚠ 建议型否决沿用查询门那一套：-"我体重怎么减"是在问，不是在改。
+    """
+    t = text or ""
+    if any(k in t for k in _MEM_ADVICE_KW):
+        return False
+    try:
+        from app.graph.memory_extract import extract
+        cmds = extract(t)
+    except Exception:
+        return False
+    return bool(cmds) and all(c.get("op") == "profile" for c in cmds)
+
+
+def is_preference_statement(text: str) -> bool:
+    """是否"偏好陈述句"（写入），而非知识问答/记忆查询。
+
+    ⚠ **判据必须复用抽取器**，不能自己再列一份"喜欢/讨厌/不想"词表：
+      · 只有抽取器真正产出偏好指令时才算数——否则会造出"没有写入却有回执"的
+        假确认（"我不想受伤"含"不想"但抽不出任何偏好，不该答"已记下"）；
+      · 词表已有单源（memory_extract._LIKE/_DISLIKE，含「不喜欢」⊂「喜欢」
+        的最长优先与否定窗口），另起一份必然与其漂移。
+    问句由抽取器自身挡掉（"我喜欢的动作有什么"→ _is_question）。
+    """
+    try:
+        from app.graph.memory_extract import extract
+        cmds = extract(text)
+    except Exception:
+        return False
+    return bool(cmds) and all(
+        str(c.get("op", "")).startswith("preference") for c in cmds)
+
+
 class RouteClassifier:
     """三层分类器：L0 规则(DIRECT，纯规则可复现) → L1 语义例句库 → L2 LLM
     → arbitrate 单点。语义层加载失败静默跳过；stub => 与现状一致。"""
@@ -117,6 +163,21 @@ class RouteClassifier:
 
     def _classify(self, text, profile) -> Classification:
         rule = self._rules.classify(text, profile)        # L0 纯规则
+        # 档案**写入**优先于**宽词表**的强信号（2026-09-13）：
+        # `_RULES` 的 W1 档案行把裸「体重」写成 conf=1.0，于是"把体重改成70kg"
+        # 在下面那道 `>= 0.7` 就返回了，标签落成"知识问答"——同一类操作
+        # （改目标/改体重/改身高）却出现两种卡片标题。写入能力本身没问题，
+        # 只是**答话的技能与标签不对**。
+        #
+        # ⚠ **guard 例外，不可省**：安全红线不能被档案写入抢走——
+        # "我体重70kg，膝盖疼"必须走 guard（实测仍是 guard，见 test_router）。
+        # 其余强信号（plan/teach/progress…）与本门天然互斥：那些句式含"计划/
+        # 怎么做"等词，会被 `memory_extract._SKIP`/`_is_question` 整句挡在抽取之外
+        # → 本门判 False（"我身高175，帮我排个计划"即为该情形）。
+        if rule.task_type != "guard" and is_profile_update(text):
+            return Classification("profile_edit",
+                                  {"query": text, "kind": "profile"},
+                                  confidence=0.9)
         if rule.confidence >= 0.7:                        # 强信号直接定（现状）
             return rule
         # 记忆查询句式：L0 字面表外无法表达 kind（L2 tool schema 无该字段）→
@@ -124,10 +185,26 @@ class RouteClassifier:
         if is_memory_query(text):
             return Classification("qa", {"query": text, "kind": "memory"},
                                   confidence=0.9)
+        # 档案查询句式：与上一门同因——L2 表达不了 kind（tool schema 无该字段），
+        # 表外说法会落动作库检索答"没找到"。确定性直通 qa(kind=profile)。
+        # 排在记忆查询**之后**：记录型否决门已让两者互斥，但顺序上让更专的先行。
+        if is_profile_query(text):
+            return Classification("qa", {"query": text, "kind": "profile"},
+                                  confidence=0.9)
         # W2：规则级指代澄清（fallback+needs_clarify）不经 L1/L2——
         # 否则 0.3 低置信会被语义层/LLM 转判（#83/#99 实证：clarify 仍变 direct）
         if rule.needs_clarify:
             return rule
+        # 偏好陈述句：是记忆**写入**，不是知识问答。走 qa 会拿这句去动作库检索，
+        # 而句子里的动作正是用户要避开的 → 命中必然是反答案（实测"我今天不想练
+        # 杠铃卧推"被答成"知识问答 · 杠铃 卧推"）。判据复用抽取器，不另起词表。
+        #
+        # ⚠ **必须排在 needs_clarify 之后**：指代澄清优先。"我喜欢清淡这个"含悬空
+        # 指代"这个"，走 clarify 路径才能把"已记下"排在反问之前（O-3，见
+        # test_agent_http.test_memory_ack_overrides_clarify）；抢到 preference 会
+        # 把标题顶到 ack 前面，破坏那条契约。
+        if is_preference_statement(text):
+            return Classification("preference", {"query": text}, confidence=0.9)
         c = self._sem_or_llm(text, rule)
         # W4 兜底：最终仍需 clarify/低置信 → 意图归一化改写 → 重跑 L0/L1（仅兜底触发）
         if c.needs_clarify or c.confidence < 0.4:

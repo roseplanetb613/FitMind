@@ -24,6 +24,10 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "graph_config
 
 # 实体子图标签 + rel 名（与 ingest 迁移保持一致：rel 小写）
 _ENTITY_LABELS = ("Exercise", "Muscle", "Equipment", "Pattern", "Condition", "Family")
+
+# 同族替代的条数上限。词干族最大 49 人，即使语义正确（如 f003 'curl' 27 人全是
+# biceps），26 条"替代动作"也不是一份可用的清单。6 是"够挑几个换着练"的量级。
+_FAMILY_ALT_LIMIT = 6
 _REL_MAP = {  # 冻结 rel 白名单（防注入）
     "targets", "uses", "pattern_of", "contraindicates", "member_of",
     "ALIAS_OF", "IMPLIES_INTENT", "MAPS_TO",
@@ -222,15 +226,35 @@ class GraphStore:
                 muscle=muscle, limit=limit)
             return [{"name": r["name"], "kind": "exercise"} for r in res]
 
-    def family_alternatives(self, exercise_id: str) -> list[dict]:
-        """同族变体（可替代）：member_of → 同族其它动作，返回 [{"name","kind"}]（name=动作 id）。"""
+    def family_alternatives(self, exercise_id: str,
+                            limit: int = _FAMILY_ALT_LIMIT) -> list[dict]:
+        """同族变体（可替代）：member_of → 同族其它动作。
+
+        返回 [{"id","name_zh","kind"}]，**共享主目标肌的排在前面**，且有条数上限。
+
+        2026-09-14 两处修正（审计见 docs/SDD/2026-09-14-variant-family-audit.md）：
+        1. 加上限 + 同主肌优先。此前返回**全部**同族：`f001 'press'` 对杠铃卧推会返回
+           48 条，其中混着「杠铃坐姿过头推举」「哑铃交替侧推」这类练别的的动作——
+           族是按动作**词干**划的，不等于可互换。词干族里 8 个大族只有 f001 真混了语义，
+           其余 139 族经审计合理，故这里只做排序+截断，**不重划族表**。
+        2. 带上可读名 `name_zh`。此前用 `name` 存动作 id（`graph_*` 的历史约定），
+           消费端只能拿到 `"1309"` 这种不可读的值。
+        ⚠ 因此本函数**不再返回 `name` 键**，与 `muscle_exercises` 的约定不同——
+           后者目前零消费方（随 hybrid_retrieve 一起停用），保留原样未动。
+        """
         with self._driver.session(database=self._database) as s:
             res = s.run(
                 "MATCH (e:Exercise {id: $eid})-[:member_of]->(f:Family)"
                 "<-[:member_of]-(alt:Exercise) WHERE alt.id <> $eid "
-                "RETURN DISTINCT alt.id AS name",
-                eid=exercise_id)
-            return [{"name": r["name"], "kind": "exercise"} for r in res]
+                "OPTIONAL MATCH (e)-[:targets {role: 'target'}]->(tm:Muscle)"
+                "<-[:targets {role: 'target'}]-(alt) "
+                "WITH alt, count(DISTINCT tm) AS shared "
+                "RETURN alt.id AS id, alt.name_zh AS name_zh, shared "
+                "ORDER BY shared DESC, alt.id "
+                "LIMIT $limit",
+                eid=exercise_id, limit=limit)
+            return [{"id": r["id"], "name_zh": r["name_zh"], "kind": "exercise"}
+                    for r in res]
 
     # ---- 别名子图（在线沉淀 + 前置查询） ----
 

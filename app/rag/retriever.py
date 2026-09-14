@@ -1,8 +1,39 @@
 # -*- coding: utf-8 -*-
 """RAG 检索：向量语义召回（HNSW，PG）+ 图检索（Cypher，Neo4j）。
-统一后的双源编排 hybrid_retrieve：图上下文/替代（GraphStore）+ 向量召回（PgStore）；
-图/向量各自异常降级为空，绝不抛出（项目"异常静默"传统）。"""
+图/向量各自异常降级为空，绝不抛出（项目"异常静默"传统）。
+
+调用方直接组合图检索与向量检索；这里只提供单步原语（见 2026-09-14 变更说明）。"""
 from __future__ import annotations
+import os
+
+# 证据召回的相关性下限（余弦相似度）。低于此值的命中直接丢弃。
+#
+# 实测标定（2026-09-14，bge-m3，本机 1390 条语料，10 条相关 + 8 条无关查询）：
+#   science_doc    相关 min/p50/max = 0.478 / 0.588 / 0.686
+#                  无关 min/p50/max = 0.374 / 0.468 / 0.493
+#   exercise_cue   相关 min/p50/max = 0.312 / 0.574 / 0.670
+#                  无关 min/p50/max = 0.321 / 0.499 / 0.516
+#
+# ⚠ **两个分布是重叠的**（"今天天气怎么样""写一首诗"这类完全无关的中文查询也能
+# 拿到 0.49~0.52）。也就是说**不存在能把相关/无关干净分开的阈值**——dense 检索器
+# 在中文上有很高的相似度地板。0.55 取的是"高于实测噪声上限"，即：宁可让部分该召回
+# 的被丢掉（precision 优先），也不要把随机知识块当证据挂到答案上（那是幻觉形状的
+# 失败）。这不是好阈值，只是当前能站住的阈值。
+#
+# 真正的解法是加 rerank 或 dense+sparse 混合召回，不是继续调这个数。
+#
+# 2026-09-14 用 scripts/eval_rag.py 在 37 条人工标注（25 正 / 12 负）上实测本值：
+#     阈值   证据准  错证率  召回  LEAK  Acc
+#     0.40   0.56   0.44   0.80   11   0.57
+#     0.55   0.68   0.32   0.76    4   0.73   ← 当前值
+#     0.60   0.75   0.25   0.72    1   0.78
+#     0.65   0.94   0.06   0.68    0   0.78
+#     0.70   1.00   0.00   0.36    0   0.57
+# 看起来 0.60~0.65 更好，**但先别改**：同一份标注做 dev/test 留出后，dev 上
+# 0.60/0.65 的 precision 是 0.91/1.00，留出的 test 上只有 0.62 —— n=37 支持不了
+# 阈值调优，那个甜点是过拟合。要动这个数，先扩标注集（尤其缺**改写式 query**：
+# 现在的正样本多为"原词命中"，对稠密检索不利、对词法有利），再跑 eval_rag.py。
+MIN_SCORE = float(os.environ.get("RAG_MIN_SCORE", "0.55"))
 
 
 def embed_query(embedder, text: str) -> list[float]:
@@ -23,51 +54,27 @@ def graph_muscle_exercises(store, muscle: str, limit: int = 8) -> list[dict]:
 
 
 def graph_family_alternatives(store, exercise_id: str) -> list[dict]:
-    """同族变体（可替代）：member_of → 同族其它动作。返回 [{"name","kind"}]。"""
+    """同族变体（可替代）：member_of → 同族其它动作。
+
+    返回 [{"id","name_zh","kind"}]，同主目标肌的排前面，且有上限（见
+    GraphStore.family_alternatives）。2026-09-14 前返回 [{"name","kind"}] 且
+    `name` 存的是动作 id、无上限（f001 会返回 48 条）。"""
     return store.family_alternatives(exercise_id)
 
 
-# ---- 混合编排 ----
-
-def hybrid_retrieve(store, embedder, query: str, top_k: int = 5,
-                    chunk_types: tuple[str, ...] | None = None,
-                    entity_hint: str | None = None,
-                    graph=None) -> dict:
-    """GraphRAG 混合：图上下文/替代（graph, 默认 GraphStore.get()）+ 向量召回（store）。
-    返回 {"graph": [...], "vector": [...]}；图/向量异常各自降级为 []。"""
-    out: dict = {"graph": [], "vector": []}
-
-    if entity_hint and graph is not None:         # 图部分
-        try:
-            gc = graph_context(graph, entity_hint, hops=1,
-                               rels=("pattern_of", "targets"))
-            out["graph"].extend(gc)
-            if any(x.get("kind") == "exercise" and x.get("depth") == 0
-                   for x in gc):
-                out["graph"].extend(graph_family_alternatives(
-                    graph, entity_hint))
-                mus = [x["name"] for x in gc
-                       if x.get("rel") == "targets"
-                       and x.get("kind") == "muscle"]
-                if mus:
-                    out["graph"].extend(graph_muscle_exercises(graph, mus[0]))
-        except Exception:
-            out["graph"] = []
-
-    try:                                          # 向量部分
-        qv = embed_query(embedder, query)
-        ename = getattr(embedder, "model", "bge-m3")
-        out["vector"] = vector_search(store, qv, ename, top_k=top_k,
-                                      chunk_types=chunk_types)
-    except Exception:
-        out["vector"] = []
-    return out
-
+# ---- 向量检索 ----
 
 def vector_search(store, query_vec: list[float], embedder_name: str,
                   top_k: int = 5, chunk_types: tuple[str, ...] | None = None,
-                  include_pending: bool = True) -> list[dict]:
-    """HNSW 余弦最近邻；返回证据 {content, source_ref, score, pending_review}。"""
+                  include_pending: bool = True,
+                  min_score: float | None = MIN_SCORE) -> list[dict]:
+    """HNSW 余弦最近邻；返回证据 {content, source_ref, score, pending_review}。
+
+    `min_score`：余弦相似度下限，低于它的命中直接丢弃（None = 不过滤）。
+
+    2026-09-14：此前没有门槛，只有 `ORDER BY <=> LIMIT k`——表里只要有任何一行，
+    就必然返回 k 条"最像的"，哪怕余弦 0.01。消费方是 `if hits:` 直接用 top1，于是
+    不相关的知识块会被当证据挂到答案上。默认门槛见 MIN_SCORE。"""
     sql = ("SELECT content, source_ref, pending_review, "
            "1 - (embedding <=> %s::vector) AS score FROM fitness.embeddings")
     params: list = [str(query_vec)]
@@ -77,6 +84,9 @@ def vector_search(store, query_vec: list[float], embedder_name: str,
         params.append(list(chunk_types))
     if not include_pending:
         conds.append("pending_review = FALSE")
+    if min_score is not None:
+        conds.append("1 - (embedding <=> %s::vector) >= %s")
+        params += [str(query_vec), float(min_score)]
     if conds:
         sql += " WHERE " + " AND ".join(conds)
     sql += " ORDER BY embedding <=> %s::vector LIMIT %s"
@@ -84,19 +94,10 @@ def vector_search(store, query_vec: list[float], embedder_name: str,
     with store.conn() as c, c.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
+    # 列序是 (content, source_ref, pending_review, score) —— 别按"score 在前"想当然。
+    # 2026-09-14 前这里取的是 r[2]/r[3]，于是 score 恒为 float(pending_review)
+    # （True→1.0，False→0.0）、pending_review 恒为 bool(score)，两个字段都是假的；
+    # 而旧断言 `all(h["score"] >= 0)` 永远为真，从没暴露过。
     return [{"content": r[0], "source_ref": dict(r[1]),
-             "score": round(float(r[2]), 4), "pending_review": bool(r[3])}
-            for r in rows]
-
-
-def text_search(store, text: str, top_k: int = 5) -> list[dict]:
-    """pg_trgm 文本相似兜底。"""
-    sql = ("SELECT content, source_ref, pending_review, "
-           "similarity(content, %s) AS score FROM fitness.embeddings "
-           "ORDER BY score DESC LIMIT %s")
-    with store.conn() as c, c.cursor() as cur:
-        cur.execute(sql, (text, top_k))
-        rows = cur.fetchall()
-    return [{"content": r[0], "source_ref": dict(r[1]),
-             "score": round(float(r[2]), 4), "pending_review": bool(r[3])}
+             "score": round(float(r[3]), 4), "pending_review": bool(r[2])}
             for r in rows]

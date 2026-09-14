@@ -5,3 +5,12 @@ pytest==9.1.1
 langgraph==1.2.11
 langchain-openai==1.3.3
 neo4j>=5.20,<6
+# /v1/asr 收 multipart 上传。本机一直装着所以从没暴露过缺失，
+# 但干净环境 `pip install -r` 后会在**路由定义期**就报
+# "Form data requires python-multipart to be installed."
+python-multipart==0.0.32
+
+# ⚠ 语音转写（POST /v1/asr）另需 openai-whisper + torch，**故意不列在这里**：
+# 它是 ~4.6GB 显存 / 数 GB 依赖的重家伙，不该让纯文本链路的部署被它拖累。
+# 本机按 editable 方式已装（openai-whisper 20250625 → E:\ASR\whisper）。
+# 装法见 docs/ 的语音接入说明；模型权重路径见 app/config/asr_config.json。

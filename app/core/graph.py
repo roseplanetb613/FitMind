@@ -105,7 +105,12 @@ def state_to_intent(intent_dict: dict):
 TITLE_ZH = {"qa": "知识问答", "teach": "动作教学", "plan": "训练计划",
             "plan_edit": "计划调整", "progress": "进度建议",
             "guard": "安全提示",
-            "smalltalk": "闲聊", "fallback": "回答"}
+            "smalltalk": "闲聊", "fallback": "回答",
+            # 偏好**陈述**（写入）——与"记忆查询"（读取）是两件事，标签也要分得开
+            "preference": "训练偏好",
+            # 档案**写入**（改目标/体重/身高…）——同 preference 的道理：
+            # 写档案与查档案是两件事，卡片标题要分得开
+            "profile_edit": "档案更新"}
 
 
 def build_structured(intent: dict | None, outcome: dict | None,

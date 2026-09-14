@@ -10,7 +10,7 @@ import json
 import re
 from datetime import date, timedelta
 
-from negation import has_negation  # 同库否定原语单源（lib 在 sys.path 上）
+from negation import has_negation, negated_at  # 同库否定原语单源（lib 在 sys.path 上）
 from functools import lru_cache
 from pathlib import Path
 
@@ -194,6 +194,111 @@ def extract_shift_days(text: str) -> int | None:
         return 1
     g = m.group(1)
     return int(g) if g.isdigit() else _SHIFT_NUM.get(g, 1)
+
+
+# 休息日恢复提示：pipeline 生成与 plan_skill 编辑**同一句话**，落在这里单源
+# （两边各写一份字面量必然漂移，用户会看到同一件事两种说法）。
+REST_NOTE = "睡眠 7-9 小时、蛋白质吃够、可做轻拉伸或散步"
+
+
+# 整天改休息日（2026-09-13 用户实测）。缺陷形态：助手自己建议「想整天空出来，就说
+# 『今天改成休息日』」，用户照说 → plan_skill._EDIT_REPLACE_RE 把句子切成
+# X=今天 / Y=休息日（**时间锚点当动作名、日类型当替换目标**）→「当前计划里没有
+# 「今天」这个动作」。能力不存在却已被承诺，是"假编辑"家族的第四例（前三次：
+# 假确认/假撤三头/假平移），故语法与定位一并沉到本层单源（分类层与技能层共用）。
+_REST_WORDS = ("休息日", "休息", "休整", "恢复日", "歇一天", "歇着")
+_REST_VERBS = ("改成", "改为", "换成", "换掉", "调成", "设成", "设为",
+               "排成", "变成", "安排成", "改")
+_DAY_TOKENS = (("今天", 0), ("今儿", 0), ("今日", 0),
+               ("明天", 1), ("明儿", 1), ("后天", 2))
+# 裸式：「今天不练」「今天不练了」。日词 + 不练 + **仅**语气词收尾——'今天不练三头'
+# 是部位级删除（走 _muscle_targets 撤三头动作），不是整天休，故必须收尾锚定。
+# 刻意**不**放过逗号后的补充（"今天不练了，改成练胸"读作改计划而非整天休）：破坏性
+# 且持久化的编辑宁可漏判（另有 parse_fail 提示句式兜底），也不误判整天。
+_REST_BARE_RE = re.compile(
+    r"(?:今天|今儿|今日|明天|明儿|后天)\s*(?:就)?\s*不练(?:了|啦|吧|咯|哟)?$")
+_DATE_IN_TEXT_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
+
+
+def _day_target(text: str) -> dict | None:
+    """句中日词/具体日期 → {"offset": n} 或 {"month","day"}；都没有 → None（缺省今天）。"""
+    for tok, off in _DAY_TOKENS:
+        if tok in text:
+            return {"offset": off}
+    m = _DATE_IN_TEXT_RE.search(text)
+    if m:
+        return {"month": int(m.group(1)), "day": int(m.group(2))}
+    return None
+
+
+def extract_rest_day(text: str) -> dict | None:
+    """整天改休息目的请求 → 目标日 spec（{"offset"} / {"month","day"} / None=今天）；
+    非此请求 → None。分类层据此判 plan_edit，plan_skill 据此定位条目。
+
+    **必须是指令形态**：带变更动词，或裸式「<日>不练[了]」。'我今天休息''我平时
+    休息两天' 是状态/习惯陈述，不是指令——破坏性编辑不认陈述（同 2026-09-11
+    否定式编辑误触的既有原则）。变更动词须**先于**休息词——'把休息日改成训练日'
+    是反向请求，不是这一支；取**首次**出现的动词，'改成休息日吧，别改了' 这类
+    尾巴上的重复动词才不会把目标词挤出窗口。动词前短窗口内的否定
+    （'今天别改成休息日'/'我不想改成休息日'）整句否决。"""
+    t = (text or "").strip()
+    if not t:
+        return None
+    bare = _REST_BARE_RE.search(t)
+    if bare:                       # 裸式的"不"就是指令本身，不做否定否决
+        return _day_target(bare.group(0)) or {"offset": 0}
+    pos = min((i for i in (t.find(v) for v in _REST_VERBS) if i >= 0),
+              default=-1)
+    if pos < 0 or not any(w in t[pos:] for w in _REST_WORDS):
+        return None
+    if negated_at(t, pos, win=3):
+        return None
+    return _day_target(t) or {"offset": 0}   # 无日词 → 缺省今天（"改成休息日吧"）
+
+
+def day_index(plan: dict, target: dict | None, today: date) -> int | None:
+    """目标日 → training.items 下标；定位不到（无 start_date/超出跨度）→ None。
+
+    按 `start_date + 序号` 算真实日期，**不解析 '今天（9月13日 周日）' 锚点串**——
+    锚点是生成时快照，隔日即错（D2）；序号才是稳定坐标。start_date 缺失（旧数据）
+    → None，调用方如实拒绝（同 _shift 的 no_base：无基准不猜）。"""
+    if target is None:
+        return None
+    if "index" in target:                     # 词面直接命中某个 day 名 → 已定位
+        return target["index"]
+    sd = plan.get("start_date")
+    if not sd:
+        return None
+    try:
+        start = date.fromisoformat(str(sd))
+    except (TypeError, ValueError):
+        return None
+    items = (plan.get("training") or {}).get("items") or []
+    for i in range(len(items)):
+        d = start + timedelta(days=i)
+        if "offset" in target and (d - today).days == target["offset"]:
+            return i
+        if "month" in target and (d.month, d.day) == (target["month"], target["day"]):
+            return i
+    return None
+
+
+def day_index_of_label(items: list, term: str) -> int | None:
+    """词面**恰好**是某个训练日的 day 名 → 下标（"今天不练推日" 的 day 级读法）。
+
+    只认全等（比对去掉括号后缀的日名），不认部分包含——'不练推' 不该被当成
+    '推日'：宁可如实说没找到，也不猜着撤掉一整天的训练。"""
+    from exercise_repo import norm_zh as _nz
+    want = _nz(str(term or ""))
+    if not want:
+        return None
+    for i, d in enumerate(items):
+        if (d or {}).get("type") == "rest":
+            continue
+        base = _nz(re.split(r"[（(]", str((d or {}).get("day") or ""))[0])
+        if base and want == base:
+            return i
+    return None
 
 
 def reanchor(plan: dict, today: date) -> dict:

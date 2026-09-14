@@ -3,7 +3,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -44,6 +44,10 @@ class CheckinResolveRequest(BaseModel):
     sets: int | None = None
     reps: int | None = None
     occurred_at: str | None = None
+    # 这次点选是为什么而点：`checkin`（补记训练）还是 `preference`（记偏好）。
+    # 缺省 checkin —— 老前端不带这个字段时行为逐字不变。
+    kind: str = "checkin"
+    value: str | None = None          # kind=preference 时的极性：喜欢 / 不喜欢
 
 
 def create_app() -> FastAPI:
@@ -52,6 +56,13 @@ def create_app() -> FastAPI:
     from app.skills import build_default_registry
 
     app = FastAPI(title="FitMind Agent")
+    # 压缩静态资源（2026-09-13）：手机首屏要下 670 KiB 的 JS + 543 KiB 的模型，
+    # 而 StaticFiles **默认一个字节都不压**（实测响应里没有 Content-Encoding）。
+    # 开 gzip 后 JS 约 179 KiB（3.7×），是首屏"白/半截"窗口里最大的单一杠杆。
+    # minimum_size=1024：小于 1 KiB 的不值得压（压完反而更大）。
+    # ⚠ 只压文本类；GLB 是二进制，收益很小但无害。
+    from fastapi.middleware.gzip import GZipMiddleware
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     agent = Agent(registry=build_default_registry(), llm=build_provider())
     app.state.agent = agent   # 测试/调用方可经此建档（Profile 进 Session）
 
@@ -165,6 +176,37 @@ def create_app() -> FastAPI:
         return {"muscle": muscle, "count": len(out),
                 "fallback": r["fallback"], "exercises": out}
 
+    @app.get("/v1/plan")
+    def plan(user_id: str = "local"):
+        """最新训练计划（计划表数据源）。
+
+        数据来自**图谱里的 PlanVersion**（`plan_skill._register_plan` 产出计划时
+        登记），不是重新算一遍——同一份计划在聊天、网页、后续编辑里必须是同一份，
+        重算会漂。取最新一条（`latest_plan` 已按 created_at 倒序）。
+
+        契约：
+          · 无计划 → **200 + plan:null**，不是 404——前端据此显示"还没有计划"，
+            与"接口坏了"区分开（404 会让前端把它当错误处理）
+          · 降级（图谱不可用）→ 200 + degraded:true + plan:null，同样是可渲染状态
+          · `content` **原样透传**，不重塑：计划内容是 plan_skill 的产物，在这里
+            重新拼一遍就会多一个会漂的平行结构（见 web/src/data/plan.ts 的说明）
+        """
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                raise RuntimeError("记忆图谱不可用")
+            got = m.latest_plan(user_id)
+        except Exception:
+            return {"user_id": user_id, "plan": None, "degraded": True}
+        if not got or not got.get("content"):
+            # 有计划记录但 content 为空（旧版本只存 hash）→ 同样按"没有计划"处理
+            return {"user_id": user_id, "plan": None, "degraded": False}
+        return {"user_id": user_id, "degraded": False,
+                "plan": {"plan_id": got.get("plan_id"),
+                         "created_at": got.get("created_at"),
+                         "content": got["content"]}}
+
     @app.post("/v1/checkin/resolve")
     def checkin_resolve(req: CheckinResolveRequest):
         """用户在消歧选择框里点定了一个动作 → 补记这次训练。
@@ -221,6 +263,23 @@ def create_app() -> FastAPI:
                 "ok": False,
                 "error": f"动作库里没有「{req.text or req.exercise_id}」——换个说法试试"})
         name = req.name_zh or rec.get("name_zh")
+        # —— 偏好点选：写**偏好**而不是打卡 ——
+        # 用户在"你想避开的「深蹲」是下面哪个？"里点定了一个动作，语义是
+        # "我（不）喜欢这个动作"，不是"我今天练了它"。写成打卡会凭空多出一次
+        # 训练记录，污染恢复度（这是最长的那根线：肌群恢复全靠打卡算）。
+        if req.kind == "preference":
+            val = req.value or "不喜欢"
+            hit = m.upsert_state(req.user_id, "preference", val, about=name)
+            if hit is None:
+                return JSONResponse(status_code=500, content={"ok": False,
+                                                              "error": "写入失败"})
+            # ack 文案走单源（memory_extract._ack_text）——另写一份必然与
+            # 自动抽取那条路漂移（同一个偏好，两种说法）
+            from app.graph.memory_extract import _ack_text
+            return {"ok": True, "kind": "preference", "exercise_id": eid_in,
+                    "name_zh": name, "value": val,
+                    "ack": "已记下：" + _ack_text(
+                        {"op": "preference", "value": val, "about": name})}
         mus = rec.get("muscles_canonical") or {}
         # 肌群与角色走单源：与打卡写入口径一致（target 主练 / 其余协同）
         roles = {}
@@ -331,6 +390,84 @@ def create_app() -> FastAPI:
             # 反代（nginx 等）默认会缓冲整个响应，那样"流式"就白做了
             "X-Accel-Buffering": "no",
         })
+
+    # ------------------------------------------------------------ 语音输入
+    # 端点定义写在 `app.mount("/app", ...)` **之前** —— mount 会把后续路由吞掉。
+    @app.get("/v1/asr/status")
+    def asr_status():
+        """转写能力探活。前端据此决定要不要显示麦克风按钮。
+
+        **不触发模型加载**（见 app/runtime/asr.py 的 status 说明）：探活本身
+        代价必须是零，否则"看一眼有没有麦克风"就等于把 4.6GB 模型拉进显存。
+        """
+        from app.runtime import asr
+        st = asr.status()
+        # 前端只需要一个二值判断，但排障需要知道**为什么**不可用，
+        # 所以把原始状态一起给出去，别让前端从 enabled 反推。
+        return {"available": st["enabled"] and st["model_exists"], **st}
+
+    @app.post("/v1/asr")
+    async def asr_transcribe(file: UploadFile = File(...)):
+        """音频 → 文本。前端把文本回填输入框，由用户确认后再走 /v1/chat。
+
+        ⚠ **必须是 async def**：`await file.read()` 是协程，写成同步 def 会被
+        Starlette 丢进线程池并把整个响应缓冲住（同 /v1/chat/stream 那条实测
+        结论，见上文）。转写本身是阻塞的，用 `to_thread` 让出事件循环 ——
+        否则一次转写会把 /v1/chat/stream 的阶段流一起卡住。
+        """
+        import asyncio
+        import os
+        import tempfile
+
+        from app.runtime import asr
+
+        if not asr.status()["enabled"]:
+            return JSONResponse(status_code=503, content={
+                "ok": False, "error": "语音转写未启用（asr_config.json 的 enabled=false）"})
+
+        data = await file.read()
+        if not data:
+            # 空录音是**用户操作问题**（按了开始没说话就按结束），不是服务错误。
+            # 422 + 一句人话，前端要把这句原样显示出来，别吞成"失败了"。
+            return JSONResponse(status_code=422, content={
+                "ok": False, "error": "没收到音频内容——是不是没说话就结束了？"})
+
+        # whisper 从**路径**读文件（内部再交给 ffmpeg），所以先落盘。
+        # 后缀保留原扩展名：ffmpeg 靠它判断容器格式，写成 .tmp 会解不出来。
+        from pathlib import Path as _Path
+        suffix = _Path(file.filename or "").suffix or ".webm"
+        fd, tmp = tempfile.mkstemp(suffix=suffix)
+        try:
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+            except Exception:
+                # 写盘失败（磁盘满等）：fdopen 没接手 fd 时得自己关，
+                # 否则每次失败都漏一个文件描述符。
+                os.close(fd)
+                raise
+            try:
+                out = await asyncio.to_thread(asr.transcribe, tmp)
+            except FileNotFoundError as e:
+                return JSONResponse(status_code=503, content={"ok": False, "error": str(e)})
+            except Exception as e:                        # noqa: BLE001
+                # **只回类型名，不回异常文本**。异常消息里常带服务器绝对路径
+                # （权重不存在时那句 FileNotFoundError 就含完整盘符路径），
+                # 对用户毫无意义却把内部结构透出去了 —— 实测这条被测试逮到过。
+                # 类型名够定位（显存不足=RuntimeError/OOM、权重坏=BadZipFile），
+                # 细节进服务端日志。
+                import logging
+                logging.getLogger("fitmind.asr").exception("转写失败")
+                return JSONResponse(status_code=503, content={
+                    "ok": False, "error": f"转写失败（{type(e).__name__}），详见服务端日志"})
+            return {"ok": True, "text": out["text"], "language": out["language"],
+                    "duration": out["duration"]}
+        finally:
+            # 临时音频必须删：里面是用户的语音，留在盘上没有任何理由。
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     @app.post("/v1/profile")
     def set_profile(req: ProfileRequest):

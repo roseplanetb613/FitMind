@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "model": "E:\\ASR\\model\\medium.pt",
+  "whisper_path": "E:\\ASR\\whisper",
+  "language": "zh",
+  "device": "auto",
+  "prompt": ""
+}

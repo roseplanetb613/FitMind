@@ -13,6 +13,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 from lib.negation import has_negation, negated_at, negated_prefix  # 否定原语单源
+from app.core.vocab import PROFILE_CHANGE_V       # 档案变更动词单源（见 vocab.py）
 from lib.parts import PART_CHARS as _PART_CHARS, PART_WORDS as _PART_WORDS
 from app.core.diag import bump            # 降级可观测
 
@@ -65,14 +66,19 @@ _QUESTION = ("怎么", "吗", "?", "？", "啥", "为什么", "能不能", "可�
 # 体重陈述句（E2E-01："我体重 82" → profile 同型替换；"斤" → 公斤）
 _WEIGHT_RE = re.compile(r"体重\s*(\d+(?:\.\d+)?)\s*(公斤|千克|kg|KG|斤)?")
 
+# 变更动词的正则片段（**从 vocab 单源派生**，不在这里另抄一份）：
+# 档案字段的祈使句（"把目标改成减脂"/"身高换成175"）靠它抽得出来。
+_CHANGE_V_RE = "|".join(PROFILE_CHANGE_V)
+
 # 档案陈述句扩展（2026-09-08 个性化）：数值区间+锚点护栏，宁缺毋滥
 _WEIGHT_STMT_RE = re.compile(
-    r"(?:我(?:现在)?(?:只有|是)?|现在|改成|改为)\s*(\d+(?:\.\d+)?)"
+    r"(?:我(?:现在)?(?:只有|是)?|现在|" + _CHANGE_V_RE + r")\s*(\d+(?:\.\d+)?)"
     r"\s*(公斤|千克|斤|kg|KG)")
 _WEIGHT_EXCLUDE = ("每公斤", "每千克", "每kg", "每KG")   # 营养剂量语境绝不抽
 # 全文粒度：句含剂量语境（“每公斤摄入…”）即整句不抽，宁缺毋滥
 _AGE_RE = re.compile(r"(?:我今年|今年|我)\s*(\d{1,3})\s*岁")
-_HEIGHT_ANCHOR_RE = re.compile(r"身高\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)?")
+_HEIGHT_ANCHOR_RE = re.compile(
+    r"身高\s*(?:" + _CHANGE_V_RE + r")?\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)?")
 _HEIGHT_UNIT_RE = re.compile(r"我\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|厘米)")
 _W_RANGE = (30.0, 300.0)
 _A_RANGE = (5, 120)
@@ -104,7 +110,11 @@ _SEX_RE = re.compile(
 _SEX_MAP = {"男生": "male", "男人": "male", "男孩": "male", "男的": "male",
             "男性": "male", "女生": "female", "女人": "female",
             "女孩": "female", "女的": "female", "女性": "female"}
-_GOAL_RE = re.compile(r"(?:我想|我要|目标是|目标)\s*(增肌|减脂|减肥|维持|保持)")
+# 「目标**改成**减脂」是祈使句（用户明确在改档案），此前 `\s*` 吃不下中间的
+# 变更动词 → 抽不出来 → 图谱没变、回复还说"当前计划里没有「目标」这个动作"。
+_GOAL_RE = re.compile(
+    r"(?:我想|我要|目标是|目标)\s*(?:" + _CHANGE_V_RE + r")?\s*"
+    r"(增肌|减脂|减肥|维持|保持)")
 _GOAL_MAP = {"增肌": "build_muscle", "减脂": "lose_fat", "减肥": "lose_fat",
              "维持": "maintain", "保持": "maintain"}
 _DIET_PREF_KW = ("清淡", "偏淡", "不吃辣", "少油", "少盐", "低油", "低盐",
@@ -231,12 +241,46 @@ def _resolve_exercise(text: str) -> dict | None:
         for r in repo.by_id.values():
             if (r.get("norm_name_zh") or "") == want:
                 return r
-        hits = repo.search_zh(t, limit=1)
-        if hits:
-            return hits[0]
+        # ⚠ **不再回落到 search_zh 首条**（2026-09-13 用户实测后改）。
+        #
+        # 那段"先找完全同名的"假设了同名条目存在；实际**库里没有裸的
+        # 「深蹲/卧推/硬拉/肩推」**——1324 条全是"器械+变体"复合名。于是完全同名
+        # 一次都没命中，每次都落到下面的模糊首条，而 search_zh 按**难度升序**返回
+        # → 难度 1 的弹力带永远胜出：
+        #     "深蹲" → 弹力带 单臂 单腿 分腿深蹲      "卧推" → 弹力带 卧推
+        #     "硬拉" → 弹力带 直腿硬拉              "肩推" → 弹力带 肩推
+        # 器械都不一样——**记的是一个用户没做过的动作**，而用户毫无察觉。
+        # /v1/checkin/resolve 的注释早已写明这个坑并做成了"need_pick 让用户点"，
+        # 抽取路径没跟上。现改为：**只认完全同名，其余返回 None**，由上层走消歧
+        # 问用户（宁缺毋滥——记错比不记更糟，见上方部位词那段同样的取舍）。
+        # 模糊候选仍会给出——但由 clarify_exercise 节点作为**选项**呈现，不是答案。
     except Exception:
         bump("memory_extract.norm_exercise")   # 静默失败可查（见 diag）
     return None
+
+
+def _has_exercise_candidates(text: str) -> bool:
+    """这个片段在动作库里**有没有像样的候选**——决定"该不该问用户"。
+
+    与 `_resolve_exercise` 分工不同：那个回答"**是哪一个**"（只认完全同名，
+    不确定就 None），这个只回答"**值不值得问**"。两者拆开是因为"抽不出来"
+    有两种，处置相反：
+
+        「卧推」「深蹲」→ 库里一堆变体       → 值得弹选择框问用户
+        「受伤」「吃辣」「个新计划」→ 库里什么都没有 → 问"是哪个动作"很荒唐
+
+    只做模糊检索、**不做决定**（选哪个是用户的事）。检索失败按"没有候选"处理
+    ——宁可不问，也不拿错误依赖去骚扰用户。
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    try:
+        from app.runtime.repos import exercise_repo
+        return bool(exercise_repo().search_zh(t, limit=1))
+    except Exception:
+        bump("memory_extract.has_exercise_candidates")
+        return False
 
 
 def _norm_exercise(text: str):
@@ -396,6 +440,22 @@ def _preference(text: str) -> dict | None:
             return None
         name = _norm_exercise(tail)
         if not name:
+            # **有像样候选才问**（2026-09-13）。库内没有裸的「深蹲/卧推/硬拉」
+            # （全是"器械+变体"复合名），口语动作名必然归一不中——以前直接
+            # return None，用户说了偏好却什么都没发生，且不报错。改成交给消歧：
+            # 带极性去问是哪一个，点定后由 /v1/checkin/resolve 按 kind=preference
+            # 写偏好。注意**不返回 ack**——还没写入，不许提前说"已记下"。
+            #
+            # ⚠ 但不能对任何尾巴都发问："我不想**受伤**""我不喜欢**吃辣**"也走
+            # 到这里，问"你想避开的「受伤」是下面哪个动作？"很荒唐。故以
+            # `_has_exercise_candidates` 为闸：库里毫无候选就**退回原行为**
+            # （return None，交给下方的食物/口味回退循环或彻底不抽）。
+            if _has_exercise_candidates(tail):
+                return {"op": "preference_pending",
+                        "value": "喜欢" if kw in _LIKE else "不喜欢",
+                        "unresolved": [{"raw": tail, "kind": "preference",
+                                        "value": ("喜欢" if kw in _LIKE
+                                                  else "不喜欢")}]}
             return None
         return {"op": "preference", "value": "喜欢" if kw in _LIKE else "不喜欢",
                 "about": name}
@@ -497,12 +557,24 @@ def _event(text: str) -> dict | None:
             # TARGETS 边都建不出来 → 3D 上什么都看不见，而用户以为记上了。
             #
             # 纯组次片段（"4组8次"）排除在外：它是量不是动作，拿去问用户很荒唐。
-            unresolved.append({k: it[k] for k in ("raw", "sets", "reps", "weight_kg")
-                               if k in it})
+            # `askable` 单独标出"库里有没有像样的候选"——下面 strict 护栏要用：
+            # 只有值得问的片段才配让整句活下来（见 _has_exercise_candidates）。
+            u = {k: it[k] for k in ("raw", "sets", "reps", "weight_kg")
+                 if k in it}
+            u["askable"] = _has_exercise_candidates(namepart)
+            unresolved.append(u)
     if not items:
         return None
-    if strict and not resolved:
-        return None      # 宽动词 + 无一条目命中动作 → 判为误抽，整句不记
+    if strict and not resolved and not any(u.get("askable") for u in unresolved):
+        # 严格动词 + 一条都没对上 + **也没什么东西值得问** → 判为误抽，整句不记。
+        #
+        # ⚠ 后半个条件是 2026-09-13 补的。原判据只看"有没有对上"，而解析改为
+        # **只认完全同名**后，"昨天推了卧推""昨天蹲了深蹲"这类再也对不上，
+        # 于是从"记成错误变体"变成**整句静默丢弃**——比记错还糟（用户以为
+        # 什么都没说）。这两句库里明明有一堆变体可问，属于该活下来那一类。
+        # 反过来，"我推了个新计划"的"个新计划"库里毫无候选 → 仍然整句不记，
+        # 不会拿它去骚扰用户。
+        return None
     about = next((i["name"] for i in items if i.get("name")), None)
     today = datetime.now(timezone.utc).date()
     occurred = (today - timedelta(days=time_hit[1])).isoformat()
@@ -602,11 +674,40 @@ def _split_preference(text: str) -> dict | None:
     return cmd
 
 
+def _is_skip(text: str) -> bool:
+    """情绪/假设/**意向**陈述 → 整句不抽。
+
+    ⚠ 否定豁免（2026-09-13 实测）：`_SKIP` 里的"想练/想吃/想喝"是**意向词**
+    （"我想练腿"是在说打算，不是偏好），但"**不**想练X"是否定偏好——本模块
+    文档第 5 行明写要支持"我喜欢/讨厌/**不想练** X"，而「不想练」把「想练」
+    当子串整个吃掉了：
+
+        我不喜欢练腿   _SKIP命中=[]        → 抽出 preference_part，reply 带"已记下"
+        我今天不想练杠铃卧推 _SKIP命中=['想练'] → extract=[]，什么都没记，
+                                           且落动作检索，答成"知识问答 · 杠铃 卧推"
+                                           （**把用户刚说不想练的动作列给他看**）
+
+    与 `_preference` 的「喜欢」⊂「不喜欢」（见其 docstring）是同一个坑，同样
+    栽在字面子串上。此处改用 lib/negation 的**动词前窗口**判定，不再靠字面包含。
+
+    边界：只有**紧邻**意向词的否定才豁免（"我今天不想练腿"的窗口覆盖"不想"）。
+    "我打算不练腿"仍按意向拦掉——否定不在意向词前，属宁缺毋滥的一侧。
+    """
+    for k in _SKIP:
+        idx = text.find(k)
+        if idx < 0:
+            continue
+        if negated_at(text, idx):      # "不/没/别/未" 紧跟在意向词前 → 否定偏好
+            continue
+        return True
+    return False
+
+
 def extract(text: str) -> list[dict]:
     """主入口：返回抽取指令列表（空=不抽）。问句/情绪/假设 一律跳过。"""
     if not text or _is_question(text):
         return []
-    if any(k in text for k in _SKIP):
+    if _is_skip(text):
         return []
     out: list[dict] = []
     if _FORGET_RE.search(text):
@@ -628,7 +729,12 @@ def extract(text: str) -> list[dict]:
                 cmds = _part_preference(rest, kw in _LIKE)
                 if cmds:
                     out.extend(cmds)
-                elif not dp and not any(k in text for k in _DIET_PREF_KW):
+                elif (not dp and not any(k in text for k in _DIET_PREF_KW)
+                        # 目标词不是食物（2026-09-13 实测：「我不想减脂」的"减脂"
+                        # 被 `_norm_food` 模糊首条命中了「减脂奶」，记成
+                        # "不喜欢 食物:减脂奶"）。目标词已由 _goal 处理，
+                        # 它拒绝否定形（"不想减脂"不写目标）之后不该被食物路径捡走。
+                        and not any(k in rest for k in _GOAL_MAP)):
                     # 口味词语境（吃辣/清淡…）不猜具体食物（宁缺毋滥）
                     fp = _food_preference(rest.strip(" ，。的、和跟练吃"),
                                           kw in _LIKE)
@@ -764,6 +870,10 @@ def apply_memory_extract(text: str, user_id: str,
                     # 主动肌与协同肌，否则"练了卧推"会把胸/三头/三角等权记账
                     muscle_roles=(m.muscle_roles_of_exercises(names)
                                   if names else None)))
+            elif cmd["op"] == "preference_pending":
+                # 归一不中的偏好：**不写**，带出去让用户点定具体动作
+                # （见 _preference）。刻意不 append ack —— 没写入就不能说"已记下"。
+                pending.extend(cmd.get("unresolved") or [])
             elif cmd["op"] == "preference_food":
                 ok = m.upsert_state(user_id, "preference", cmd["value"],
                                     about=cmd["about"]) is not None

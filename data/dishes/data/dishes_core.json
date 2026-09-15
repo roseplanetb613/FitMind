@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "note": "菜品 = 引用现有食材的配方。**不存营养值**：营养在 load 期由 lib/dish_repo.nutrition_from_recipe() 求和算出，避免与 foods_core.json 漂移。食用油一律引用 core 的 fdc_171410/fdc_171413/fdc_171016 —— cn_1920xx 整个植物油类目的 calories_kcal 全是 None（见 spec §2 实测三）。",
+  "note": "菜品 = 引用现有食材的配方。**不存营养值**：营养在 load 期由 lib/dish_repo.nutrition_from_recipe() 求和算出，避免与 foods_core.json 漂移。**食用油一律引 USDA fdc_* 条目，禁用 cn_1920xx**——理由见 docs/data_dictionary.md「食用油的 USDA 规则」。",
   "source": "手写配方，配比取自家常做法常识；非实测数据",
   "method": "per_serving = Σ(per_100g × grams / 100)，见 lib/dish_repo.py",
   "dishes": [
@@ -135,10 +135,11 @@
       "aliases": ["汉堡", "汉堡包"],
       "category": "快餐",
       "serving_zh": "一个",
-      "serving_g": 238,
+      "serving_g": 258,
       "recipe": [
         {"food_id": "fdc_325871", "grams": 90, "name_zh": "汉堡面包"},
         {"food_id": "cn_082103", "grams": 100, "name_zh": "牛肉"},
+        {"food_id": "fdc_328637", "grams": 20, "name_zh": "芝士"},
         {"food_id": "cn_045333", "grams": 20, "name_zh": "生菜"},
         {"food_id": "cn_043119", "grams": 20, "name_zh": "番茄"},
         {"food_id": "fdc_171410", "grams": 8, "name_zh": "花生油"}

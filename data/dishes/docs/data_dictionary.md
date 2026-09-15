@@ -12,7 +12,7 @@
 | `aliases` | 别名，同样参与精确匹配（不含子串匹配） |
 | `category` | 家常菜 / 主食 / 早餐 / 快餐 / 健身餐 |
 | `serving_zh` | 人读份量（"一份"/"一碗"） |
-| `serving_g` | 该份量的克数，恒等于配方总重 |
+| `serving_g` | **配方总生重（克）**，恒等于 `recipe` 各项 `grams` 之和。**≠ 成菜重量**：只算生重，不含汤水与煎炸吸油——如兰州牛肉面「一碗」= 254g 干面+牛肉+香料，实际一碗连汤 500g+ |
 | `recipe[].food_id` | 引用 `foods_core.json` / `foods_china.json` / `off_cn.json` 的条目 |
 | `recipe[].grams` | 生重克数 |
 | `recipe[].name_zh` | 冗余的中文名。**故意冗余**：库里 `name_zh` 不可读（"盐(table)"/"蜂蜜味"），配料表要给人看 |
@@ -24,8 +24,30 @@
 
 顶层信封：`version` / `note` / `aliases`。
 
-`aliases` 是「口语食材名 → food_id」的映射，消费者有两处：`validate_dishes.py`
-（校验引用的 food_id 存在且宏量完整）与 `vision.py` 的兜底接地路径。
+`aliases` 是「口语食材名 → food_id」的映射，消费者有三处：
+
+1. `DishRepo.resolve_ingredient`（**主要消费者**）：拆解食材时**先查本表**，未命中才回落
+   `foods_repo.search(score_floor=4)`，仍不中记 `missing`。
+2. `vision.py` 的兜底接地路径：同上表的同一逻辑，用于 VLM 输出的口语食材名。
+3. `validate_dishes.py`：对别名目标**只校验 food_id 存在，不校验宏量完整**（宏量完整性只对
+   `recipe[]` 行检查）。
+
+> 给未来的作者：**别照着中文表 `cn_1920xx` 抄食用油别名**。加进来会解析到 `calories_kcal:
+> None` 的条目，见下节。
+
+## 食用油的 USDA 规则
+
+**配方与别名表里的食用油，一律引用 USDA `fdc_*` 条目，禁用中文表 `cn_1920xx`。**
+
+理由是实测的、不是洁癖：中国数据集整个植物油类目（`cn_192004` 豆油、`cn_192014` 色拉油、
+`cn_192016` 玉米油……）的 `calories_kcal` **全是 `None`**。油在配方里通常是 8–15g、约
+70–130 kcal，是一份家常菜热量的可观部分；一旦解析到这类条目，宏量求和时会**静默按 0 计**，
+而克数照样进 `total_grams`。结果是卡片少报约 130 kcal 且不留任何痕迹——没有报错，没有
+`missing`，数字看起来完全正常。
+
+已实测的坑：`豆油` → `cn_192004`、`玉米油` → `cn_192016`、`色拉油` → `cn_192014`，
+三者 `calories_kcal` 均为 `None`；`调和油` / `菜油` 则完全无命中。这些口语词形已在
+`ingredient_aliases.json` 里显式绑到有完整宏量的 `fdc_*` 条目。
 
 ## 已知局限
 

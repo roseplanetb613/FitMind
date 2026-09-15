@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "model": "deepseek-v4-flash-vision-exp",
+  "base_url": "https://api.deepseek.com",
+  "detail": "low",
+  "timeout": 30
+}

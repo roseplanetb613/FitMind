@@ -1,160 +1,399 @@
 {
   "version": "1.0",
-  "note": "菜品 = 引用现有食材的配方。**不存营养值**：营养在 load 期由 lib/dish_repo.nutrition_from_recipe() 求和算出，避免与 foods_core.json 漂移。**食用油一律引 USDA fdc_* 条目，禁用 cn_1920xx**——理由见 docs/data_dictionary.md「食用油的 USDA 规则」。",
+  "note": "菜品 = 引用现有食材的配方。**不存营养值**：营养在 load 期由 lib/dish_repo.nutrition_from_recipe() 求和算出，避免与 foods_core.json 漂移。**食用油必须引宏量完整（calories_kcal 非 None）的条目，禁用 cn_1920xx**——真正的约束是「宏量完整」而非「必须 fdc_*」，理由见 docs/data_dictionary.md「食用油的引用规则」。",
   "source": "手写配方，配比取自家常做法常识；非实测数据",
   "method": "per_serving = Σ(per_100g × grams / 100)，见 lib/dish_repo.py",
   "dishes": [
     {
       "dish_id": "dish_hongshaorou",
       "name_zh": "红烧肉",
-      "aliases": ["东坡肉", "红烧五花肉"],
+      "aliases": [
+        "东坡肉",
+        "红烧五花肉"
+      ],
       "category": "家常菜",
       "serving_zh": "一份",
       "serving_g": 222,
       "recipe": [
-        {"food_id": "cn_081108", "grams": 180, "name_zh": "五花肉"},
-        {"food_id": "fdc_171410", "grams": 15, "name_zh": "花生油"},
-        {"food_id": "fdc_746784", "grams": 12, "name_zh": "白砂糖"},
-        {"food_id": "fdc_174277", "grams": 10, "name_zh": "酱油"},
-        {"food_id": "cn_047301", "grams": 5, "name_zh": "姜"}
+        {
+          "food_id": "cn_081108",
+          "grams": 180,
+          "name_zh": "五花肉"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 15,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "fdc_746784",
+          "grams": 12,
+          "name_zh": "白砂糖"
+        },
+        {
+          "food_id": "fdc_174277",
+          "grams": 10,
+          "name_zh": "酱油"
+        },
+        {
+          "food_id": "cn_047301",
+          "grams": 5,
+          "name_zh": "姜"
+        }
       ]
     },
     {
       "dish_id": "dish_fanqiechaodan",
       "name_zh": "番茄炒蛋",
-      "aliases": ["西红柿炒鸡蛋", "西红柿炒蛋"],
+      "aliases": [
+        "西红柿炒鸡蛋",
+        "西红柿炒蛋"
+      ],
       "category": "家常菜",
       "serving_zh": "一份",
       "serving_g": 343,
       "recipe": [
-        {"food_id": "cn_043119", "grams": 200, "name_zh": "番茄"},
-        {"food_id": "cn_111101x", "grams": 120, "name_zh": "鸡蛋"},
-        {"food_id": "fdc_171410", "grams": 15, "name_zh": "花生油"},
-        {"food_id": "fdc_746784", "grams": 5, "name_zh": "白砂糖"},
-        {"food_id": "fdc_173468", "grams": 3, "name_zh": "食盐"}
+        {
+          "food_id": "cn_043119",
+          "grams": 200,
+          "name_zh": "番茄"
+        },
+        {
+          "food_id": "cn_111101x",
+          "grams": 120,
+          "name_zh": "鸡蛋"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 15,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "fdc_746784",
+          "grams": 5,
+          "name_zh": "白砂糖"
+        },
+        {
+          "food_id": "fdc_173468",
+          "grams": 3,
+          "name_zh": "食盐"
+        }
       ]
     },
     {
       "dish_id": "dish_gongbaojiding",
       "name_zh": "宫保鸡丁",
-      "aliases": ["宫爆鸡丁"],
+      "aliases": [
+        "宫爆鸡丁"
+      ],
       "category": "家常菜",
       "serving_zh": "一份",
       "serving_g": 228,
       "recipe": [
-        {"food_id": "cn_091112", "grams": 150, "name_zh": "鸡胸肉"},
-        {"food_id": "cn_072005", "grams": 20, "name_zh": "花生仁"},
-        {"food_id": "cn_043108", "grams": 5, "name_zh": "干辣椒"},
-        {"food_id": "fdc_171410", "grams": 15, "name_zh": "花生油"},
-        {"food_id": "fdc_746784", "grams": 8, "name_zh": "白砂糖"},
-        {"food_id": "fdc_174277", "grams": 10, "name_zh": "酱油"},
-        {"food_id": "cn_044206", "grams": 20, "name_zh": "大葱"}
+        {
+          "food_id": "cn_091112",
+          "grams": 150,
+          "name_zh": "鸡胸肉"
+        },
+        {
+          "food_id": "cn_072005",
+          "grams": 20,
+          "name_zh": "花生仁"
+        },
+        {
+          "food_id": "cn_043108",
+          "grams": 5,
+          "name_zh": "干辣椒"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 15,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "fdc_746784",
+          "grams": 8,
+          "name_zh": "白砂糖"
+        },
+        {
+          "food_id": "fdc_174277",
+          "grams": 10,
+          "name_zh": "酱油"
+        },
+        {
+          "food_id": "cn_044206",
+          "grams": 20,
+          "name_zh": "大葱"
+        }
       ]
     },
     {
       "dish_id": "dish_mapodoufu",
       "name_zh": "麻婆豆腐",
-      "aliases": ["麻辣豆腐"],
+      "aliases": [
+        "麻辣豆腐"
+      ],
       "category": "家常菜",
       "serving_zh": "一份",
       "serving_g": 346,
       "recipe": [
-        {"food_id": "cn_031301x", "grams": 250, "name_zh": "豆腐"},
-        {"food_id": "cn_081110", "grams": 50, "name_zh": "瘦猪肉"},
-        {"food_id": "fdc_171410", "grams": 15, "name_zh": "花生油"},
-        {"food_id": "fdc_169698", "grams": 8, "name_zh": "淀粉"},
-        {"food_id": "cn_044101", "grams": 8, "name_zh": "大蒜"},
-        {"food_id": "cn_047301", "grams": 5, "name_zh": "姜"},
-        {"food_id": "fdc_174277", "grams": 10, "name_zh": "酱油"}
+        {
+          "food_id": "cn_031301x",
+          "grams": 250,
+          "name_zh": "豆腐"
+        },
+        {
+          "food_id": "cn_081110",
+          "grams": 50,
+          "name_zh": "瘦猪肉"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 15,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "fdc_169698",
+          "grams": 8,
+          "name_zh": "淀粉"
+        },
+        {
+          "food_id": "cn_044101",
+          "grams": 8,
+          "name_zh": "大蒜"
+        },
+        {
+          "food_id": "cn_047301",
+          "grams": 5,
+          "name_zh": "姜"
+        },
+        {
+          "food_id": "fdc_174277",
+          "grams": 10,
+          "name_zh": "酱油"
+        }
       ]
     },
     {
       "dish_id": "dish_danchaofan",
       "name_zh": "蛋炒饭",
-      "aliases": ["蛋炒飯", "炒饭"],
+      "aliases": [
+        "蛋炒飯",
+        "炒饭"
+      ],
       "category": "主食",
       "serving_zh": "一份",
       "serving_g": 383,
       "recipe": [
-        {"food_id": "cn_012402", "grams": 250, "name_zh": "米饭"},
-        {"food_id": "cn_111101x", "grams": 100, "name_zh": "鸡蛋"},
-        {"food_id": "fdc_171410", "grams": 15, "name_zh": "花生油"},
-        {"food_id": "cn_044206", "grams": 15, "name_zh": "大葱"},
-        {"food_id": "fdc_173468", "grams": 3, "name_zh": "食盐"}
+        {
+          "food_id": "cn_012402",
+          "grams": 250,
+          "name_zh": "米饭"
+        },
+        {
+          "food_id": "cn_111101x",
+          "grams": 100,
+          "name_zh": "鸡蛋"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 15,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "cn_044206",
+          "grams": 15,
+          "name_zh": "大葱"
+        },
+        {
+          "food_id": "fdc_173468",
+          "grams": 3,
+          "name_zh": "食盐"
+        }
       ]
     },
     {
       "dish_id": "dish_lanzhouyrm",
       "name_zh": "兰州牛肉面",
-      "aliases": ["牛肉面", "牛肉拉面"],
+      "aliases": [
+        "牛肉面",
+        "牛肉拉面"
+      ],
       "category": "主食",
       "serving_zh": "一碗",
       "serving_g": 254,
       "recipe": [
-        {"food_id": "cn_011301x", "grams": 150, "name_zh": "挂面"},
-        {"food_id": "cn_082103", "grams": 80, "name_zh": "牛肉"},
-        {"food_id": "cn_047301", "grams": 5, "name_zh": "姜"},
-        {"food_id": "cn_044206", "grams": 15, "name_zh": "大葱"},
-        {"food_id": "fdc_173468", "grams": 4, "name_zh": "食盐"}
+        {
+          "food_id": "cn_011301x",
+          "grams": 150,
+          "name_zh": "挂面"
+        },
+        {
+          "food_id": "cn_082103",
+          "grams": 80,
+          "name_zh": "牛肉"
+        },
+        {
+          "food_id": "cn_047301",
+          "grams": 5,
+          "name_zh": "姜"
+        },
+        {
+          "food_id": "cn_044206",
+          "grams": 15,
+          "name_zh": "大葱"
+        },
+        {
+          "food_id": "fdc_173468",
+          "grams": 4,
+          "name_zh": "食盐"
+        }
       ]
     },
     {
       "dish_id": "dish_xiaolongbao",
       "name_zh": "小笼包",
-      "aliases": ["小笼汤包", "灌汤包"],
+      "aliases": [
+        "小笼汤包",
+        "灌汤包"
+      ],
       "category": "早餐",
       "serving_zh": "一笼（8 个）",
       "serving_g": 213,
       "recipe": [
-        {"food_id": "cn_011201x", "grams": 100, "name_zh": "小麦粉"},
-        {"food_id": "cn_081110", "grams": 80, "name_zh": "瘦猪肉"},
-        {"food_id": "cn_044206", "grams": 15, "name_zh": "大葱"},
-        {"food_id": "cn_047301", "grams": 5, "name_zh": "姜"},
-        {"food_id": "fdc_174277", "grams": 8, "name_zh": "酱油"},
-        {"food_id": "fdc_171410", "grams": 5, "name_zh": "花生油"}
+        {
+          "food_id": "cn_011201x",
+          "grams": 100,
+          "name_zh": "小麦粉"
+        },
+        {
+          "food_id": "cn_081110",
+          "grams": 80,
+          "name_zh": "瘦猪肉"
+        },
+        {
+          "food_id": "cn_044206",
+          "grams": 15,
+          "name_zh": "大葱"
+        },
+        {
+          "food_id": "cn_047301",
+          "grams": 5,
+          "name_zh": "姜"
+        },
+        {
+          "food_id": "fdc_174277",
+          "grams": 8,
+          "name_zh": "酱油"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 5,
+          "name_zh": "花生油"
+        }
       ]
     },
     {
       "dish_id": "dish_jianbingguozi",
       "name_zh": "煎饼果子",
-      "aliases": ["煎饼"],
+      "aliases": [
+        "煎饼"
+      ],
       "category": "早餐",
       "serving_zh": "一个",
       "serving_g": 170,
       "recipe": [
-        {"food_id": "cn_011201x", "grams": 80, "name_zh": "小麦粉"},
-        {"food_id": "cn_111101x", "grams": 60, "name_zh": "鸡蛋"},
-        {"food_id": "fdc_171410", "grams": 12, "name_zh": "花生油"},
-        {"food_id": "cn_044206", "grams": 15, "name_zh": "大葱"},
-        {"food_id": "fdc_173468", "grams": 3, "name_zh": "食盐"}
+        {
+          "food_id": "cn_011201x",
+          "grams": 80,
+          "name_zh": "小麦粉"
+        },
+        {
+          "food_id": "cn_111101x",
+          "grams": 60,
+          "name_zh": "鸡蛋"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 12,
+          "name_zh": "花生油"
+        },
+        {
+          "food_id": "cn_044206",
+          "grams": 15,
+          "name_zh": "大葱"
+        },
+        {
+          "food_id": "fdc_173468",
+          "grams": 3,
+          "name_zh": "食盐"
+        }
       ]
     },
     {
       "dish_id": "dish_cheeseburger",
       "name_zh": "芝士汉堡",
-      "aliases": ["汉堡", "汉堡包"],
+      "aliases": [
+        "汉堡",
+        "汉堡包"
+      ],
       "category": "快餐",
       "serving_zh": "一个",
       "serving_g": 258,
       "recipe": [
-        {"food_id": "fdc_325871", "grams": 90, "name_zh": "汉堡面包"},
-        {"food_id": "cn_082103", "grams": 100, "name_zh": "牛肉"},
-        {"food_id": "fdc_328637", "grams": 20, "name_zh": "芝士"},
-        {"food_id": "cn_045333", "grams": 20, "name_zh": "生菜"},
-        {"food_id": "cn_043119", "grams": 20, "name_zh": "番茄"},
-        {"food_id": "fdc_171410", "grams": 8, "name_zh": "花生油"}
+        {
+          "food_id": "fdc_325871",
+          "grams": 90,
+          "name_zh": "汉堡面包"
+        },
+        {
+          "food_id": "cn_082103",
+          "grams": 100,
+          "name_zh": "牛肉"
+        },
+        {
+          "food_id": "fdc_328637",
+          "grams": 20,
+          "name_zh": "芝士"
+        },
+        {
+          "food_id": "cn_045333",
+          "grams": 20,
+          "name_zh": "生菜"
+        },
+        {
+          "food_id": "cn_043119",
+          "grams": 20,
+          "name_zh": "番茄"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 8,
+          "name_zh": "花生油"
+        }
       ]
     },
     {
       "dish_id": "dish_yanmainiunai",
       "name_zh": "燕麦牛奶碗",
-      "aliases": ["燕麦牛奶", "牛奶燕麦"],
+      "aliases": [
+        "燕麦牛奶",
+        "牛奶燕麦"
+      ],
       "category": "健身餐",
       "serving_zh": "一碗",
       "serving_g": 310,
       "recipe": [
-        {"food_id": "cn_019012", "grams": 60, "name_zh": "燕麦"},
-        {"food_id": "cn_101101x", "grams": 250, "name_zh": "牛奶"}
+        {
+          "food_id": "cn_019012",
+          "grams": 60,
+          "name_zh": "燕麦"
+        },
+        {
+          "food_id": "cn_101101x",
+          "grams": 250,
+          "name_zh": "牛奶"
+        }
       ]
     }
   ]

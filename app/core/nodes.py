@@ -194,7 +194,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         if r.ok and r.data.get("blocked"):
             d = r.data
             out = {"blocked": True, "guard_data": d, "mode_used": "guard",
-                   "reply": f"风险提示：{d.get('level_label', '')}。{d.get('advice', '')}",
+                   # `reply` 允许技能自带：查询类回复（如"看下我的伤痛状态"）不是
+                   # 风险提示，硬套前缀会读成"你的记录本身就是个风险"。缺省仍走
+                   # 风险话术模板，行为不变。
+                   "reply": d.get("reply")
+                            or f"风险提示：{d.get('level_label', '')}。{d.get('advice', '')}",
                    "provenance": r.provenance}
         return out
 

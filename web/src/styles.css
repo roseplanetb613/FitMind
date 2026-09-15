@@ -241,7 +241,10 @@ html, body {
   border: 1px solid rgba(224, 164, 88, .42);
 }
 .chat-guard-label { font-size: 11px; font-weight: 600; color: #e0a458; margin-bottom: 4px; }
-.chat-guard-advice { margin: 0; font-size: 12px; }
+/* pre-line：只让 `\n` 生效（合并多余空格），不动其它排版。
+   伤痛记录这类**清单**式内容必须逐行显示，挤成一行读不出条目边界；
+   现有的单行话术不受影响。 */
+.chat-guard-advice { margin: 0; font-size: 12px; white-space: pre-line; }
 .chat-error-line { margin: 6px 0 0; font-size: 12px; color: #e0a458; }
 
 /* 阶段进度：等回复时才有内容 */

@@ -107,6 +107,48 @@ def _normalize_signal(text: str) -> str:
 
 # ---- D4 2026B 数值红线（心率/睡眠/脱水阈值）----
 import re as _re
+from datetime import datetime as _datetime, timezone as _timezone
+
+# ---- 伤痛状态查询（只读）----
+# 用户主动查"我记过什么伤"。
+#
+# 为什么需要单独一条路（2026-09-15 用户报）："看下我的伤痛状态"含 GUARD_SYMPTOMS
+# 里的单字"痛"，原先直接命中症状自报分支、回一句"出现症状建议暂停训练、充分休息
+# 并咨询医生，切勿硬撑"——用户是在**查记录**，被当成了**报症状**，于是他记过什么、
+# 什么时候记的，一个字也看不到。已有的 `guard#query.self` 只认"…吗"式疑问句，
+# 认不出"看下/查一下"这种祈使式查询。
+#
+# **两段式判定**（话题 ∧ 查看意图），不是一串短语。实测过的边界：
+#
+#   | 句子                 | 话题 | 意图 | 结果  | 为什么                          |
+#   |----------------------|------|------|-------|---------------------------------|
+#   | 看下我的伤痛状态     | ✓    | ✓    | 查询  | 用户报的那句                    |
+#   | 我之前有什么伤       | ✓    | ✓    | 查询  | 靠 "有什么"（裸"什么"不算）     |
+#   | 我伤病好了           | ✓    | ✗    | 不是  | **必须**落回康复确认去关记录    |
+#   | 我的旧伤又疼了       | ✓    | ✗    | 不是  | 这是报**新发**症状，不是查记录  |
+#   | 什么伤不能练         | ✓    | ✗    | 不是  | 知识提问，不该列个人记录        |
+#   | 我腰疼 / 膝盖疼看下  | ✗    | -    | 不是  | 话题里没有裸"疼/痛"，防误判     |
+#
+# 注意最后一行：话题**刻意不含裸的"疼"/"痛"** —— 它们是自报症状的主力词。
+# 要覆盖"看下我哪疼"就收"哪疼/哪儿疼"这类带疑问的复合形式。
+_INJURY_QUERY_TOPIC = ("伤", "病", "不适", "症状", "哪疼", "哪儿疼", "哪里疼",
+                       "哪痛", "哪儿痛")
+_INJURY_QUERY_HINT = ("看下", "看看", "看一", "查看", "看我的", "看看我",
+                      "查下", "查查", "查一", "查我的", "回顾",
+                      "记录", "状态", "情况", "病史", "清单", "汇总",
+                      "有什么", "有哪些")
+
+
+def _parse_ts(v) -> "_datetime | None":
+    """Neo4j 的时点字段可能是 datetime 也可能是 ISO 串；解析失败返回 None。"""
+    if v is None:
+        return None
+    if isinstance(v, _datetime):
+        return v
+    try:
+        return _datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 _HR_RE = _re.compile(r"(?:心率|心跳|心跳率)\s*[:：]?\s*(\d{2,3})")
 _SLEEP_RE = _re.compile(r"睡\s*(\d{1,2})\s*(?:个)?小时")
@@ -153,10 +195,20 @@ class GuardSkill(Skill):
     def execute(self, ctx, params) -> SkillResult:
         signal = _normalize_signal(str(params.get("signal", "")))   # D3：词法伪装归一化
         uid = self._uid_for(ctx)                   # F4：记忆归属 = 会话 user_id
+        m = self._memory_or_none()
+        # ---- 记忆：伤痛状态查询（**只读**，排在症状自报之前）----
+        # 排在 `_memory_record` 之前是承重的：查询句含"痛"，先走记录那一步会给
+        # 只查不报的人**凭空写一条 injury** —— 只读操作不得有副作用。
+        # 判定已排除"我伤病好了"（它没有查看意图），那类必须落回下面的康复流程
+        # 去**真的关掉记录**，而不是只把记录列出来给用户看。
+        if m is not None:
+            status = self._injury_status(signal, m, uid)
+            if status is not None:
+                return SkillResult(ok=True, data=status,
+                                   provenance=["guard#memory.status"])
         # ---- 记忆：症状自报 → injury 写入（静默，不回读，不影响规则链）----
         self._memory_record(signal, uid)
         # ---- 记忆：失效/续期句与过期确认流程（先于症状模板，防"我好了"被黄拦）----
-        m = self._memory_or_none()
         if m is not None:
             flow = self._injury_flow(signal, m, uid)
             if flow is not None:
@@ -411,6 +463,70 @@ class GuardSkill(Skill):
                 diag.bump("guard.link_injury_muscle")
         except Exception:
             diag.bump("guard.memory_record")    # 部位抽取/写入失败 → 可查
+
+    def _injury_status(self, signal: str, m, uid: str) -> dict | None:
+        """伤痛状态查询（只读）。返回 None = "这不是一次查询"，交回原规则链。
+
+        三条数据诚实约束，都是本仓栽过跟头的地方：
+
+          1. **读失败（None）与确实没有（[]）必须分开。** 混在一起就会在记忆
+             服务连不上时告诉用户"你没有记录"—— 那是把"不知道"说成了"没有"，
+             比沉默更坏（同 `current_rows` 与 `current` 分家的理由）。
+          2. **过期记录单独标出**，不和 active 混作一团：30 天前提的腰伤和昨天
+             记的腰伤，对"明天能不能练"的意义完全不同。过期 ≠ 好了，只是
+             "系统不再据此拦截"，仍要问一句。
+          3. **写明来源与边界** —— 这些是"你自己提到过的部位"，**不是诊断**。
+             与 `_memory_intercept` 里"只念部位、不念病名"同一条约定：
+             `screening.contraindication(部位)` 那些病名是内部启发式，不能念给用户。
+        """
+        if not (any(k in signal for k in _INJURY_QUERY_TOPIC)
+                and any(k in signal for k in _INJURY_QUERY_HINT)):
+            return None
+        # 用 current_rows 而不是 current —— 见约束 1
+        rows = m.current_rows(uid, "injury", include_expired=True)
+        if rows is None:
+            return {"blocked": True, "level_label": "伤痛记录",
+                    "advice": "暂时读不到你的记录——记忆服务这会儿连不上，稍后再试一次。",
+                    "blocks": [],
+                    "reply": "暂时读不到你的伤痛记录（记忆服务这会儿连不上）。"}
+
+        now = _datetime.now(_timezone.utc)
+        active, stale = [], []
+        for r in rows:
+            exp = _parse_ts(r.get("expires_at"))
+            (stale if (exp is not None and exp < now) else active).append(r)
+
+        if not active and not stale:
+            return {"blocked": True, "level_label": "伤痛记录",
+                    "advice": ("还没有任何记录。\n"
+                               "在对话里告诉我哪里不舒服（比如「我腰有点疼」），"
+                               "我就会记下来 —— 之后排训练时会主动避开它。"),
+                    "blocks": [],
+                    "reply": "你目前没有伤痛记录。"}
+
+        def desc(r: dict, mark: str) -> str:
+            part = str(r.get("about") or "未指明部位")
+            since = _parse_ts(r.get("valid_from"))
+            when = f"{since.month}月{since.day}日" if since else "之前"
+            return f"{part} · 不适（{when}记录{mark}）"
+
+        def parts_of(rs: list) -> str:
+            return "、".join(str(r.get("about") or "未指明部位") for r in rs)
+
+        lines = [desc(r, "") for r in active]
+        lines += [desc(r, "，已过期，待确认") for r in stale]
+        advice = "\n".join(lines) + (
+            "\n以上是你自己在对话里提到过的部位，不是诊断。"
+            "已经好了就告诉我，我会更新记录；仍不适建议先暂停相关训练并咨询医生。")
+        if active:
+            reply = f"你目前有 {len(active)} 处记录：{parts_of(active)}。"
+            if stale:
+                reply += f"另有 {len(stale)} 处已过期，需要你确认现在还有没有不适。"
+        else:
+            reply = (f"有效期内没有记录，但有 {len(stale)} 处已过期、待你确认："
+                     f"{parts_of(stale)}。")
+        return {"blocked": True, "level_label": "伤痛记录",
+                "advice": advice, "blocks": [], "reply": reply}
 
     @staticmethod
     def _find_injury(m, uid: str, site_zh: str) -> dict | None:

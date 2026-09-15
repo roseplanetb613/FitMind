@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
-import { applyStars, buildStarField } from './star-field'
+import { applyStars, buildStarField, setStarMotion, tickStars } from './star-field'
 import { buildHeartGlow, prefersReducedMotion, pulseGlow, pulseHeartEmissive } from './glow'
 import { emptyMap, muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
@@ -328,6 +328,11 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   const stars = buildStarField(body)
   scene.add(stars)
 
+  // 用户在系统里开了"减少动效"：星点**不闪**（但仍在，静态星云一样能读出密度），
+  // 心脏**不呼吸**（但辉光仍在）。两处共用这一个判断，不各调一次。
+  const reduced = prefersReducedMotion()
+  setStarMotion(stars, !reduced)
+
   // **首帧之前先落一次"还没有数据"的状态。**
   // 不落的话第一帧用的是加载期的初始材质：星点已由 buildStarField 归零，但肌肉
   // 仍是 assembleBody 给的 `color: OTHER_TISSUE_COLOR, opacity: 1` —— 一具**不透明**
@@ -347,8 +352,8 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   const hearts = body.children.filter((c) => c.userData.muscleId === 'cardio_system')
   const glow = hearts.length ? buildHeartGlow(hearts) : null
   if (glow) scene.add(glow)
-  // 用户在系统里开了"减少动效"就不呼吸，只留静态辉光
-  const breathe = glow !== null && !prefersReducedMotion()
+  // 减少动效时只留静态辉光（`reduced` 在上面与星点共用同一次判断）
+  const breathe = glow !== null && !reduced
 
   // 地面网格线**已移除**（用户口径「把 3d 脚下的网格线去掉」）。
   // 原先那圈 GridHelper 是把模型锚在地上的"地板"，但它同时也在深底上画出一片
@@ -375,12 +380,18 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   let raf = 0
   const loop = (): void => {
     raf = requestAnimationFrame(loop)
+    // 一帧内两处动效用**同一个时间戳**：分两次取 performance.now() 会引入微小相位差，
+    // 虽然看不出来，但没有理由要它。
+    const now = performance.now()
     // 呼吸：光斑改尺寸+不透明度、心脏本体改自发光。都很便宜（一次 set + 写字段），
     // 且都在基准值上重算，不累积。
     if (breathe) {
-      pulseGlow(glow!, performance.now())
-      pulseHeartEmissive(hearts, performance.now(), NON_MUSCLE_EMISSIVE_INTENSITY)
+      pulseGlow(glow!, now)
+      pulseHeartEmissive(hearts, now, NON_MUSCLE_EMISSIVE_INTENSITY)
     }
+    // 闪烁：只写一个**共享** uniform 的 value —— 28 个星点材质引用同一批对象
+    // （见 star-field.ts），所以这里是 O(1) 而不是 O(材质数)。
+    if (!reduced) tickStars(stars, now)
     controls.update()
     renderer.render(scene, camera)
   }

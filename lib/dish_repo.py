@@ -137,3 +137,108 @@ def _norm_dish(s) -> str:
     多收一种不花钱，漏掉却会让同一句话时灵时不灵。"""
     s = re.sub(r"[（(\[【［][^）)\]】］]*[）)\]】］]", "", str(s or ""))
     return re.sub(r"\s+", "", s).strip().lower()
+
+
+class DishRepo:
+    """菜品库。只读，无状态（除装配结果）。
+
+    `resolve_ingredient` 的优先级是实测逼出来的：别名表 > search。
+    反过来的话「食用油」会落空（实测 0 命中）。
+    """
+
+    def __init__(self, foods_repo, dish_dir: Path = DISH_DIR):
+        self.foods_repo = foods_repo
+        self._dir = Path(dish_dir)
+
+        def _read(name):
+            with open(self._dir / name, encoding="utf-8") as f:
+                return json.load(f)
+
+        self.by_id = {d["dish_id"]: d for d in _read("dishes_core.json")["dishes"]}
+        self.ingredient_aliases = _read("ingredient_aliases.json")["aliases"]
+        # 归一索引：一次建好，匹配是 O(1)
+        self._name_index = {}
+        for d in self.by_id.values():
+            for n in [d["name_zh"], *(d.get("aliases") or [])]:
+                self._name_index.setdefault(_norm_dish(n), d)
+
+    def get(self, dish_id: str):
+        return self.by_id.get(dish_id)
+
+    def match_exact(self, name: str):
+        """只认**逐字相等**（去括号去空白）。不做子串、不做前缀。
+
+        理由见 spec §2 实测一：模糊匹配在菜品上会静默错配（"红烧排骨"命中
+        "康师傅红烧排骨面"），错配比落空更坏——落空会走空结果分支，错配会
+        安静地给出错数字。宁可走兜底路径，也不猜一个相近菜名。
+        """
+        key = _norm_dish(name)
+        return self._name_index.get(key) if key else None
+
+    def nutrition(self, dish_id: str) -> dict:
+        return nutrition_from_recipe(self.by_id[dish_id]["recipe"], self.foods_repo)
+
+    @staticmethod
+    def _usable(rec) -> bool:
+        """这条记录能不能拿来算营养。
+
+        **`calories_kcal` 为 None 的条目一律判不可用**，而不是"算了但标记缺值"。
+        实测（Task 1 评审发现）：`cn_1920xx` 植物油 19 条的 `calories_kcal` 全是
+        None，而别名表是按**口语名**匹配的——「豆油」「玉米油」「色拉油」都会落到
+        那里。一条 15g 的油按 0 kcal 计入却照样进 `total_grams`，会让番茄炒蛋从
+        349 掉到 216（−38%），而且卡片上看不出任何异常。
+
+        宁可判 `missing`（"这部分没算进去，总热量是下界"），也不要给一个安静偏低
+        的数字 —— 后者是比"算不出"更坏的失败。
+
+        **闸门只卡 `calories_kcal` 一项，是刻意的，别扩到四宏量**：另有 751 条
+        （1.59%）记录能过这道闸，但 protein/fat/carbs 里有一个是 None。扩成四项
+        会连「鸡胸肉」一起拒掉（它的碳水本就≈0，故为 None），整份食材直接丢失
+        —— 那比少一个宏量字段更坏。
+        """
+        return rec is not None and (rec.get("per_100g") or {}).get(
+            "calories_kcal") is not None
+
+    def resolve_ingredient(self, name: str):
+        """口语食材名 → `(food_id, 记录)`。查不到返回 `(None, None)`，**不猜**。
+
+        ① 别名单源（实测必需：「食用油」在 `search()` 里 0 命中）
+        ② `search(score_floor=4)` —— 只收精确/前缀，**不收子串**。默认
+           `score_floor=1` 会放进子串命中，实测会把「食盐」匹到「烘烤豌豆零食盐」
+        ③ 都没有 → `(None, None)`，调用方记 `missing`
+
+        ①② 命中的条目都要过 `_usable`。②取 `limit=3` 是为了让排在前面的
+        不可用条目能被跳过，而不是直接放弃这个食材。
+
+        注：`hits[0]` 不可用时，这里接受的是**排名更后**的命中。实测探过 69 例，
+        被接受的替代项无一例外是**同一食材的另一个来源**（「油花生」→ 花生油、
+        「椰子油」→ 椰子油），故不必为此加宽或收紧 `limit`。
+        """
+        key = str(name or "").strip()
+        if not key:
+            return None, None
+        fid = self.ingredient_aliases.get(key)
+        if fid:
+            rec = self.foods_repo.get(fid)
+            if self._usable(rec):
+                return fid, rec
+        for hit in self.foods_repo.search(key, limit=3, score_floor=4):
+            if self._usable(hit):
+                return hit["food_id"], hit
+        return None, None
+
+    def recipe_from_ingredients(self, ingredients) -> list:
+        """VLM 拆出的食材 → 配方（`food_id` 可解析的填上，解析不了的置 None）。"""
+        out = []
+        for it in ingredients or []:
+            name = (it or {}).get("name") or ""
+            grams = (it or {}).get("grams")
+            try:
+                grams = float(grams)
+            except (TypeError, ValueError):
+                continue
+            if grams <= 0:
+                continue
+            fid, _ = self.resolve_ingredient(name)
+            out.append({"food_id": fid, "name_zh": name, "grams": grams})
+        return out

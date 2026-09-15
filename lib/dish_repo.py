@@ -7,6 +7,12 @@
 
 对齐 `lib/portion_reference.py` 的先例：业务层算出来的值用 `method` 与库中实测值
 **严格区分**，不冒充实测。
+
+**舍入策略：一律 `round(x, 2)`（Python 内置，IEEE754 就近舍入），不做十进制进位。**
+这条必须写明是因为它踩过一次：测试里手算 `99.9 × 15 / 100 = 14.985` 写成期望值
+`14.99`，而 `round` 给出 `14.98`（该乘积的 float64 值略低于 14.985）。当时没人
+规定过按哪种舍入，于是"实现错了"和"测试写错了"看起来一模一样。卡片只显示到整数
+或一位小数，两位精度远超需要，故取内置 `round`，不为它引 Decimal。
 """
 from __future__ import annotations
 
@@ -24,15 +30,20 @@ ALLERGEN_KEYS = ["contains_gluten", "contains_dairy", "contains_nuts",
 def _present(values):
     """求和：全缺返回 None；否则跳过缺值相加。
 
-    **缺值不能当 0**（spec §2 实测三）：`cn_1920xx` 植物油 20 条的
+    **缺值不能当 0**（spec §2 实测三）：`cn_1920xx` 植物油 19 条的
     `calories_kcal` 全是 None，当 0 会让一道红烧肉静默少算 ~130kcal ——
     这比"算不出"更坏，因为它安静地给出一个偏低的数字。
+
+    ⚠ **判据是"列表非空"，不是"和是否为真"**。`_present([0.0, None])` 必须返回
+    `0.0` 而不是 `None` —— 食盐的热量是**真 0**，不是缺值，两者在卡片上显示
+    不同（`0` vs `—`）。写成 `sum(got) or None` 就会把这个真 0 吞成缺值。
     """
     got = [v for v in values if v is not None]
     return sum(got) if got else None
 
 
 def _scale(value, factor):
+    """按比例缩放并舍入。舍入策略见模块 docstring（一律 round(x, 2)）。"""
     return None if value is None else round(value * factor, 2)
 
 

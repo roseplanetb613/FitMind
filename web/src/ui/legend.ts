@@ -13,7 +13,11 @@ export function legendGradient(): string {
   return `linear-gradient(to right, ${stops.join(', ')})`
 }
 
-/** 色阶图例：显式画出 0.5 零线基准，否则双色调的方向用户读不出来。 */
+/** 色阶图例：显式画出 0.5 零线基准，否则双色调的方向用户读不出来。
+ *
+ * ⚠ 方向读法（2026-09-15 反转后）：**左端 0% 是暖金、右端 100% 是冷蓝**。
+ * 这行文字是**承重的** —— 它写反了，整条色轴就会被反过来读（而这不会有任何报错）。
+ * `tests/legend.test.ts` 钉住了它。 */
 export function createLegend(container: HTMLElement): HTMLElement {
   const box = document.createElement('div')
   box.className = 'legend'
@@ -23,7 +27,7 @@ export function createLegend(container: HTMLElement): HTMLElement {
     <div class="legend-axis">
       <span>0%</span><span>50% 基准</span><span>100%</span>
     </div>
-    <div class="legend-note">暖亮 = 恢复好 · 冷暗 = 需休息</div>
+    <div class="legend-note">冷 = 恢复好 · 暖 = 需休息</div>
     <div class="legend-note">* 按次数估算（缺组次数据）</div>
     <div class="legend-note">线框 = 无记录，不等于已恢复</div>
   `

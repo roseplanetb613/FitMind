@@ -43,7 +43,10 @@ function toValue(v: unknown): string {
 }
 
 export function createProfileForm(deps: ProfileFormDeps): ProfileForm {
-  const load = deps.load ?? ((sid: string) => fetchProfile(sid))
+  // 默认实现把 `userId` 一起带上：读路径在会话缓存缺失时要靠它从图谱取档案
+  // （见 data/profile.ts 的 fetchProfile）。注入的 `load` 保持单参签名，
+  // 现有测试不必跟着改。
+  const load = deps.load ?? ((sid: string) => fetchProfile(sid, deps.userId))
   const save = deps.save ?? ((sid, p, uid) => saveProfile(sid, p, uid))
   let open = false
 

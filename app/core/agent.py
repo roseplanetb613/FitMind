@@ -122,6 +122,47 @@ class Agent:
         except Exception:
             diag.bump("agent.project_profile")   # 投影失败 → 会话用旧档案
 
+    def get_profile(self, session_id: str,
+                    user_id: str | None = None) -> dict | None:
+        """读档案。**与对话路径同源**：记忆图谱的 current 态是真相源。
+
+        `user_id` 只在会话缓存缺失时才用得上（那时没有 `sess.user_id` 可依，
+        只能由调用方告知归属）。**不传就照旧返回 None** —— 猜一个 'local'
+        在多用户下等于读错人的档案，宁可不显示也不显示错的。
+        """
+        sess = self.sessions.get(session_id)
+        if sess is not None:
+            # 读路径**也要投影**。原先这里直接 `dict(sess.profile)`，而投影只在
+            # `run` 里发生 —— 于是"会话缓存没了、图谱还在"时读出来是空档案，
+            # 聊一句又冒出来。用户实测报的正是这个（2026-09-15）。
+            #
+            # `SessionManager` 是**纯内存**（无任何持久化），图谱是落盘的，
+            # 两者不同步的窗口很宽：后端重启 / 换浏览器 / 清 localStorage / 换设备。
+            # 用户看到的不是"档案丢了"，是**读不出来** —— 而且他自己说句话就能
+            # "修好"，所以很容易被当成偶发。
+            self._project_memory_profile(sess)
+            return dict(sess.profile)
+
+        if not user_id:
+            return None
+        # 会话不在缓存里（刚重启 / 换浏览器 / 新 id）：直接从图谱读一次。
+        #
+        # **刻意不创建会话** —— GET 若能建会话，任何人拿任意 id 反复打这个端点
+        # 都能让内存表无上限增长，那是个不用认证的 DoS 面。多查一次图谱便宜得多。
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                return None                    # 图谱不可用 → 降级为"没有"
+            p = m.current_profile_checked(user_id)
+            # None（没读到）与 {}（确实为空）在这里都算"没有档案"：
+            # 前者不能当空（那会误导），后者本来就是空。两种都回 404，
+            # 前端据此开一张空表单。
+            return dict(p) if p else None
+        except Exception:
+            diag.bump("agent.profile_read")    # 读失败 → 当作没有，绝不抛
+            return None
+
     def update_profile(self, session_id: str, profile: dict,
                        user_id: str | None = None) -> dict:
         """合并更新会话档案（未传字段保留）；非法字段抛 ValueError（details 列表）。
@@ -133,6 +174,12 @@ class Agent:
             session_id, user_id=user_id)
         if user_id:
             sess.user_id = user_id
+        # **先投影再合并，顺序不能反。** 新会话的缓存是空的，直接 `update` 的话
+        # 缓存里就只剩这次提交的字段，返回值与后续 GET 都缺其余项 —— 用户的感受是
+        # "我只改了个体重，其他信息怎么全没了"。
+        # 先投影把图谱里的完整档案拉回来，合并之后 `upsert_profile` 写回去的
+        # 也是完整那一份。
+        self._project_memory_profile(sess)
         sess.profile.update(profile)
         try:
             from app.graph.memory import MemoryStore
@@ -145,10 +192,6 @@ class Agent:
             # /health 的 degraded 里看见 —— 此前是裸 pass，分叉了也没人知道。
             diag.bump("agent.profile_write")
         return dict(sess.profile)
-
-    def get_profile(self, session_id: str) -> dict | None:
-        sess = self.sessions.get(session_id)
-        return dict(sess.profile) if sess else None
 
 
 def _split_known(v) -> bool:

@@ -126,9 +126,17 @@ export function validateValues(values: Record<string, string>): Record<string, s
 
 export async function fetchProfile(
   sessionId: string,
+  userId?: string,
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<Profile | null> {
-  const res = await fetchImpl(`/v1/profile/${encodeURIComponent(sessionId)}`)
+  // `user_id` 只有**会话缓存缺失**时才会被后端用到（后端重启 / 换浏览器 / 清缓存
+  // —— `SessionManager` 是纯内存，档案却在落盘的图谱里）。那种情况下后端没有
+  // `sess.user_id` 可依，只能靠这里告诉它档案挂在谁名下。
+  //
+  // 不带的话，点开「我的信息」拿到 404 → 空表单，而随便说一句话又冒出来
+  // （实测复现过的 bug）。平时会话在缓存里时，这个参数被忽略。
+  const q = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
+  const res = await fetchImpl(`/v1/profile/${encodeURIComponent(sessionId)}${q}`)
   // 404 = 会话还不存在（没聊过也没建过档）—— 空档案，不是错误
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`读取档案失败：HTTP ${res.status}`)

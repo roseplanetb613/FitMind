@@ -539,8 +539,16 @@ def create_app() -> FastAPI:
         return {"session_id": req.session_id, "profile": profile}
 
     @app.get("/v1/profile/{session_id}")
-    def get_profile(session_id: str):
-        profile = agent.get_profile(session_id)
+    def get_profile(session_id: str, user_id: str | None = None):
+        """读档案。
+
+        `user_id` 是**可选**的，只在会话缓存缺失时起作用：`SessionManager` 是纯内存，
+        后端一重启（或用户换浏览器 / 清 localStorage）缓存就没了，而档案在落盘的
+        图谱里。那时后端没有 `sess.user_id` 可依，只能由前端告知归属 ——
+        不带的话这一步回 404，用户点开「我的信息」看到空表单、聊一句又冒出来
+        （实测复现过的 bug）。
+        """
+        profile = agent.get_profile(session_id, user_id=user_id)
         if profile is None:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "会话不存在"})

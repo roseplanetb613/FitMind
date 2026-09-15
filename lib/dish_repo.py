@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -194,8 +195,9 @@ class DishRepo:
         **闸门只卡 `calories_kcal` 一项，是刻意的，别扩到四宏量**：另有 751 条
         （1.59%）记录能过这道闸，但 protein/fat/carbs 里有一个是 None —— 例如
         `fdc_2727569`（生鸡肉味胸肉，133kcal 但 `carbs_g` 为 None）。扩成四项会
-        把这 751 条一起拒掉（含 82 条肉类、71 条乳品），整份食材直接丢失，那比
-        少一个宏量字段更坏。
+        把这 751 条一起拒掉，整份食材直接丢失，那比少一个宏量字段更坏。
+        按 `category_unified` 分布：dairy 90、oils_fats 59、meat 46、vegetables 59、
+        fruits 66、snacks_sweets 121、condiments 54、other 110（实测口径）。
 
         而且这类记录**不是静默的**：缺的那个宏量由 `_present` 跳过，该食材进
         `incomplete`，卡片上显示 `—` 并给出提示；而热量（头条数字）取自它自己
@@ -226,7 +228,15 @@ class DishRepo:
         key = str(name or "").strip()
         if not key:
             return None, None
-        fid = self.ingredient_aliases.get(key)
+        # 别名表按**归一后**的名字查：同一个 VLM 在食材上也会带限定词
+        #（"五花肉（带皮）"、"番茄（大）"），而表里存的是干净口语名。
+        # _norm_dish 只去括号/去空白/小写，对全部 92 个键**无一改动**（实测），
+        # 所以归一不会破坏任何既有映射，只多接住带限定词的说法。
+        #
+        # ⚠ 但下面的 `search` 仍用**原样**的 key：它匹配的是库里的真实名字，
+        # 而归一会把 "olive oil" 变成 "oliveoil"，反而让英文搜索落空。
+        # 两处口径不同是有意的，别"统一"掉。
+        fid = self.ingredient_aliases.get(_norm_dish(key))
         if fid:
             rec = self.foods_repo.get(fid)
             if self._usable(rec):
@@ -248,12 +258,24 @@ class DishRepo:
             # VLM 偶尔在 ingredients 里塞裸字符串，`"abc".get` 会抛 AttributeError。
             if not isinstance(it, dict):
                 continue
-            name = it.get("name") or ""
+            # 名字必须是**非空字符串**。不校验的话模型给个数组（`["五花肉", 100]`）
+            # 会被原样存进 name_zh、再流进 missing[].name，最后在卡片上渲染成一个
+            # JSON 数组 —— 不崩，但用户看到的是乱码。这函数是形状边界，两边都要管。
+            name = it.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            name = name.strip()
             try:
                 grams = float(it.get("grams"))
             except (TypeError, ValueError):
                 continue
-            if grams <= 0:
+            # **必须挡 NaN/Inf**：`float("nan")` 成功，而 `nan <= 0` 是 False、
+            # `inf <= 0` 也是 False，所以只判 `<= 0` 拦不住。漏过去之后 NaN 会在
+            # 求和里扩散成整片 NaN，最后在响应序列化时炸掉 —— Starlette 的
+            # JSONResponse 用 `allow_nan=False`，直接 500。而 `json.loads`
+            # **接受**裸 `NaN`/`Infinity` 字面量，模型真能吐出来（`"1e999"` 也行）。
+            # 这正是本函数存在的意义：形状不对就丢，绝不把异常抛到边界外。
+            if not math.isfinite(grams) or grams <= 0:
                 continue
             fid, _ = self.resolve_ingredient(name)
             out.append({"food_id": fid, "name_zh": name, "grams": grams})

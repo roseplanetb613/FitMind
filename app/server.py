@@ -469,6 +469,63 @@ def create_app() -> FastAPI:
             except OSError:
                 pass
 
+    # ---------------- 食物识别（拍照 → 营养卡片） ----------------
+    @app.get("/v1/vision/food/status")
+    def vision_status():
+        """食物识别探活。前端据此决定要不要渲染相机按钮。
+
+        **零代价**：不构造 client、不发请求（见 app/runtime/vision.status）。
+        探活要是会调模型，"看一眼有没有这个功能"就等于花钱。
+        """
+        from app.runtime import vision
+        st = vision.status()
+        return {"available": st["enabled"] and st["key_configured"], **st}
+
+    @app.post("/v1/vision/food")
+    async def vision_food(file: UploadFile = File(...)):
+        """餐食照片 → 营养卡片。**无状态，不落库。**
+
+        ⚠ **必须是 async def + to_thread**：`await file.read()` 是协程（同
+        /v1/asr 的理由），而 VLM 调用是阻塞的——直接调会把 /v1/chat/stream
+        的阶段流一起卡住，用户会觉得整个面板死了。
+        """
+        import asyncio
+
+        from app.runtime import vision
+
+        # 先查可用性、再读文件（对齐 /v1/asr 的做法）。
+        # ⚠ 这一步**不能省**、也不能只靠下面那个 "vision#error" 判断：
+        # 未启用 / 缺 key 时 `recognize()` 是**早返回**，provenance 为空，
+        # 只判 "vision#error" 会把"服务不可用"当成正常结果回 200 ——
+        # 计划 Task 7 Step 3 的原稿正是如此，被 test_disabled_returns_503 逮住。
+        st = vision.status()
+        if not (st["enabled"] and st["key_configured"]):
+            return JSONResponse(status_code=503, content={
+                "ok": False, "error": st["error"] or "食物识别不可用"})
+
+        data = await file.read()
+        if not data:
+            # 空文件是**用户操作问题**（选错了/取消了一半），不是服务错误。
+            # 422 + 一句人话，前端原样显示，别吞成"失败了"。
+            return JSONResponse(status_code=422, content={
+                "ok": False, "error": "没收到图片内容——重新选一张试试？"})
+
+        mime = (file.content_type or "image/png").split(";")[0].strip()
+        if not mime.startswith("image/"):
+            return JSONResponse(status_code=422, content={
+                "ok": False,
+                "error": f"这个格式（{mime}）认不了，发张图片（JPG/PNG/WebP）吧"})
+
+        result = await asyncio.to_thread(vision.recognize, data, mime)
+
+        if not result.get("ok"):
+            # 「这不是食物」是**有效判断**（200），与「调用失败」（503）是两回事：
+            # 前者是识别结果，后者是服务故障 —— 前端给的提示完全不同。
+            failed = result.get("provenance", [])[-1:] == ["vision#error"]
+            if failed:
+                return JSONResponse(status_code=503, content=result)
+        return result
+
     @app.post("/v1/profile")
     def set_profile(req: ProfileRequest):
         from fastapi.responses import JSONResponse

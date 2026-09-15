@@ -17,6 +17,11 @@
 </head>
 <body>
   <div id="app">
+    <!-- 拖拽尾流的背景层。**必须排在 #stage 之前** —— 本仓的叠层靠 DOM 顺序，
+         不写 z-index（#boot 是唯一例外，见 styles.css）。它是独立的一块 WebGL
+         画布，`pointer-events: none`，不吃 OrbitControls 的拖拽。
+         3D 画布必须透明才透得出它（见 render/scene.ts 的 alpha 设置）。 -->
+    <canvas id="fluid" aria-hidden="true"></canvas>
     <canvas id="stage"></canvas>
     <div id="labels"></div>
     <div id="legend"></div>

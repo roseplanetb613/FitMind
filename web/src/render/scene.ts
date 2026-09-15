@@ -290,14 +290,20 @@ export interface SceneHandle {
 
 export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandle> {
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color('#0f1419')
+  // **刻意不设 scene.background。** 画布底下压着一层拖拽尾流（`#fluid`），
+  // 设了不透明背景就会把它整层盖死。底色改由 html/body 的 `#0f1419` 提供，
+  // 视觉结果不变（见 index.html 的叠层说明与 styles.css 的 #app/#fluid）。
+  scene.background = null
 
   const initial = framingFor('front')
   const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
   camera.position.set(...initial.position)
   camera.lookAt(...initial.target)
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+  // **alpha: true 是拖拽尾流那层能透出来的前提**（配合上面的 scene.background=null）。
+  // 两者缺一，背景层就被这块画布整个盖住 —— 页面看着"没生效"，且不报任何错。
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
+  renderer.setClearColor(0x000000, 0)
   // **渲染分辨率上限。** 原先是 2，在 4K + 高 DPI 下 backing store 可达 3300 万像素；
   // 而本场景有 shell / 背景组织 / 27 块半透明肌肉 / 星场好几层叠加 ——
   // 半透明丢掉 early-z，每片元都要混合，片元开销随像素量线性上涨。
@@ -344,9 +350,10 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 用户在系统里开了"减少动效"就不呼吸，只留静态辉光
   const breathe = glow !== null && !prefersReducedMotion()
 
-  // 地面参考——给体积感一个锚，否则模型飘在虚空里
-  const grid = new THREE.GridHelper(6, 24, 0x2a323c, 0x1c232b)
-  scene.add(grid)
+  // 地面网格线**已移除**（用户口径「把 3d 脚下的网格线去掉」）。
+  // 原先那圈 GridHelper 是把模型锚在地上的"地板"，但它同时也在深底上画出一片
+  // 可见的格网，和新加的流体背景层叠在一起显得脏。体积感改由三点布光 + 心脏辉光
+  // 提供——模型悬在虚空里才是这套视觉想要的。别再把它加回来。
 
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.target.set(...initial.target)

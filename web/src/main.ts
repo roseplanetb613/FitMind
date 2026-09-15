@@ -12,6 +12,7 @@ import { fetchPicks } from './data/exercises'
 import { type MuscleMapData } from './data/types'
 import { createLabelLayer } from './render/labels'
 import { createScene, framingFor, musclesUnderCursor, nextPickIndex, pickMuscleId, setHover, type PickState } from './render/scene'
+import { attachFluidTrail } from './render/fluid-trail'
 import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
@@ -35,6 +36,15 @@ const uid = params.get('user_id') ?? 'local'
 const days = Number(params.get('days') ?? 7)
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
+
+// 拖拽尾流（RosePlanet 作品页那颗 SplashCursor 的移植，参数按用户口径缩小一半）。
+// 挂在自己的 `#fluid` 画布上，DOM 顺序在 #stage 之前 → 就在 3D 模型**背后**。
+//
+// 拿不到 WebGL、或用户在系统里开了"减少动效" → `attachFluidTrail` 返回 null，
+// 页面照常跑（本仓"全降级"传统）。不保存 handle：这是整页应用，文档卸载时
+// RAF 与监听随文档一起消失，没有"运行期销毁再重建"的路径；handle 留给测试与复用。
+const fluidCanvas = document.querySelector<HTMLCanvasElement>('#fluid')
+if (fluidCanvas) attachFluidTrail(fluidCanvas)
 
 // **先发起、不在这里 await**（2026-09-13）。createScene 要异步加载 ~543 KiB 的
 // 肌肉模型，而原写法把它 await 在模块顶部，于是**下面每一行都被它卡住** ——

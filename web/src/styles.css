@@ -5,6 +5,13 @@ html, body {
   font: 13px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 #app { position: relative; width: 100vw; height: 100vh; }
+/* 拖拽尾流背景层。position:absolute 让它脱离文档流、由 DOM 顺序压在 #stage 下。
+   pointer-events:none 是**必须的**：它铺满整屏，不设的话会把 OrbitControls
+   的拖拽、以及画布上所有点选事件全吃掉（点肌肉、悬停高亮都会失效）。 */
+#fluid {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  display: block; pointer-events: none;
+}
 #stage { width: 100%; height: 100%; display: block; }
 
 .label-layer { position: absolute; inset: 0; pointer-events: none; }

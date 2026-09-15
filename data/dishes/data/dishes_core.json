@@ -221,7 +221,7 @@
       ],
       "category": "主食",
       "serving_zh": "一碗",
-      "serving_g": 254,
+      "serving_g": 264,
       "recipe": [
         {
           "food_id": "cn_011301x",
@@ -232,6 +232,11 @@
           "food_id": "cn_082103",
           "grams": 80,
           "name_zh": "牛肉"
+        },
+        {
+          "food_id": "fdc_171410",
+          "grams": 10,
+          "name_zh": "花生油"
         },
         {
           "food_id": "cn_047301",

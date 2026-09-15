@@ -192,9 +192,18 @@ class DishRepo:
         的数字 —— 后者是比"算不出"更坏的失败。
 
         **闸门只卡 `calories_kcal` 一项，是刻意的，别扩到四宏量**：另有 751 条
-        （1.59%）记录能过这道闸，但 protein/fat/carbs 里有一个是 None。扩成四项
-        会连「鸡胸肉」一起拒掉（它的碳水本就≈0，故为 None），整份食材直接丢失
-        —— 那比少一个宏量字段更坏。
+        （1.59%）记录能过这道闸，但 protein/fat/carbs 里有一个是 None —— 例如
+        `fdc_2727569`（生鸡肉味胸肉，133kcal 但 `carbs_g` 为 None）。扩成四项会
+        把这 751 条一起拒掉（含 82 条肉类、71 条乳品），整份食材直接丢失，那比
+        少一个宏量字段更坏。
+
+        而且这类记录**不是静默的**：缺的那个宏量由 `_present` 跳过，该食材进
+        `incomplete`，卡片上显示 `—` 并给出提示；而热量（头条数字）取自它自己
+        的值，不受影响。所以放宽到一项的代价可控，收紧到四项的代价是丢食材。
+
+        ⚠ 曾在这里写过「扩成四项会连鸡胸肉一起拒掉（它的碳水本就≈0，故为 None）」
+        —— **那是编的**。实测三条 `鸡胸` 记录（含别名目标 `cn_091112`）四宏量
+        齐全，`cn_091112` 的 `carbs_g` 是 0.6。结论没变，但论据必须是真的。
         """
         return rec is not None and (rec.get("per_100g") or {}).get(
             "calories_kcal") is not None
@@ -228,13 +237,20 @@ class DishRepo:
         return None, None
 
     def recipe_from_ingredients(self, ingredients) -> list:
-        """VLM 拆出的食材 → 配方（`food_id` 可解析的填上，解析不了的置 None）。"""
+        """VLM 拆出的食材 → 配方（`food_id` 可解析的填上，解析不了的置 None）。
+
+        这是**不可信输入**的入口（模型输出），所以逐项防御：形状不对就丢，
+        绝不抛 —— 抛出去会让整张卡片失败，而丢一项只是少算一个食材。
+        """
         out = []
         for it in ingredients or []:
-            name = (it or {}).get("name") or ""
-            grams = (it or {}).get("grams")
+            # 非 dict 直接丢。写成 `(it or {}).get(...)` 挡不住**真值**非 dict：
+            # VLM 偶尔在 ingredients 里塞裸字符串，`"abc".get` 会抛 AttributeError。
+            if not isinstance(it, dict):
+                continue
+            name = it.get("name") or ""
             try:
-                grams = float(grams)
+                grams = float(it.get("grams"))
             except (TypeError, ValueError):
                 continue
             if grams <= 0:

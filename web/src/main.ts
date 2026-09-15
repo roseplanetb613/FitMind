@@ -20,9 +20,11 @@ import { createDetailFlow } from './ui/detail-flow'
 import { MUSCLE_IDS } from './body/load-model'
 import { postCheckinResolve, streamChat } from './data/chat'
 import { asrStatus, postAsr } from './data/asr'
+import { postFoodPhoto, visionStatus } from './data/vision'
 import { createChatFlow } from './ui/chat-flow'
 import { createChatPanel } from './ui/chat-panel'
 import { createVoiceFlow, type RecorderLike } from './ui/voice-flow'
+import { createPhotoFlow } from './ui/photo-flow'
 import { createProfileForm } from './ui/profile-form'
 import { createPlanPanel } from './ui/plan'
 import { saveProfile } from './data/profile'
@@ -328,6 +330,15 @@ const profileForm = createProfileForm({
  */
 const asrInfo = await asrStatus()
 
+/**
+ * 食物识别能不能用 —— 同上，**决定要不要渲染相机按钮**。
+ *
+ * 与语音同一套约定：**探活必须在建面板之前**（`onPhoto` 传不传是在构造时定的），
+ * 探活失败按"不可用"处理、不抛错，于是结果是"没有按钮"而不是"坏按钮"。
+ * 见 app/runtime/vision.py 的 status —— 探活不调模型，所以这次请求不花钱。
+ */
+const visionInfo = await visionStatus()
+
 const chatPanel = createChatPanel({
   root: chatEl,
   // 28 个 id 的**单源**就是 load-model 的 MUSCLE_IDS —— 卡片里扫肌肉名时用它比对，
@@ -344,6 +355,7 @@ const chatPanel = createChatPanel({
   onOpenProfile: () => void profileForm.open(),
   // 不可用就**不传**，按钮整个不渲染 —— 不给一个点了才报错的按钮
   ...(asrInfo.available ? { onMic: () => void voiceFlow.toggle() } : {}),
+  ...(visionInfo.available ? { onPhoto: () => void photoFlow.pick() } : {}),
   onSubmit: (text) => void chatFlow.send(text),
 })
 
@@ -357,6 +369,23 @@ const voiceFlow = createVoiceFlow({
   // 转写结果**只回填、不自动发**：语音必然有听错的，给用户改字的机会
   onText: (text) => chatPanel.setInput(text),
   onChange: (s) => chatPanel.setVoiceStatus(s.status, s.error),
+})
+
+const photoFlow = createPhotoFlow({
+  // 文件选择器。用 <input type=file accept=image/*>，移动端会直接给拍照选项。
+  pickFile: () => new Promise<File | null>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.addEventListener('change', () => resolve(input.files?.[0] ?? null))
+    // 取消选择不会触发 change（浏览器差异），但也不会让 promise 悬挂出问题：
+    // 用户取消就当作没有操作，下一次点击重新开一个 input 即可。
+    input.click()
+  }),
+  upload: (file) => postFoodPhoto(file),
+  // 卡片作为**本地消息**进流 —— 图片没有文本意图，不走 /v1/chat
+  onCard: (card) => chatFlow.addFoodCard(card),
+  onChange: (s) => chatPanel.setPhotoStatus(s.status, s.error),
 })
 
 const chatFlow = createChatFlow({

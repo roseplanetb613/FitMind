@@ -9,7 +9,9 @@
  */
 import type { Structured, StructuredItem, StructuredOption } from '../data/types'
 import { muscleIdInItem, stageText, type ChatMessage, type ChatState } from './chat-flow'
+import type { FoodCard } from '../data/vision'
 import type { VoiceStatus } from './voice-flow'
+import type { PhotoStatus } from './photo-flow'
 
 /** 点结构化卡片时回调。返回 null 表示这块肌肉在 3D 里找不到，**不给链接**。 */
 export type MuscleLinkHandler = (muscleId: string) => void
@@ -31,6 +33,11 @@ export interface ChatPanelOptions {
    * 或走了非 https/localhost）宁可没有按钮，也不要一个点了就报错的按钮。
    */
   onMic?: () => void
+  /**
+   * 点相机按钮，拍餐识别。**不传就不渲染这个按钮** —— 识别服务不可用时
+   * 宁可没有入口，也不要一个点了才报错的按钮（与 onMic 同一条约定）。
+   */
+  onPhoto?: () => void
   onSubmit: (text: string) => void
 }
 
@@ -50,6 +57,8 @@ export interface ChatPanel {
   setInput: (text: string) => void
   /** 录音/转写状态 → 按钮外观与提示文字。逻辑在 voice-flow，这里只管画。 */
   setVoiceStatus: (status: VoiceStatus, error: string | null) => void
+  /** 拍餐状态 → 按钮外观与提示文字。逻辑在 photo-flow，这里只管画。 */
+  setPhotoStatus: (status: PhotoStatus, error: string | null) => void
 }
 
 /** 元素的创建收口在这里，测试的 DOM stub 只需要支持这几步。 */
@@ -190,6 +199,55 @@ export function renderOptions(
   container.appendChild(box)
 }
 
+/**
+ * 营养卡片。
+ *
+ * **诚实降级要显眼**：`missing`（没算进去的食材）非空时总热量是**下界**，
+ * 这一点必须写在卡片上 —— 一个偏低的数字如果不标注，用户会当成事实。
+ * `—` 表示"缺值"而不是 0，两者不能混。
+ */
+export function renderFoodCard(container: HTMLElement, card: FoodCard): void {
+  const box = el('div', 'chat-food')
+  if (!card.ok) {
+    box.appendChild(el('p', 'chat-error-line', card.error ?? '识别失败'))
+    container.appendChild(box)
+    return
+  }
+  box.appendChild(el('h4', 'chat-food-title', card.dish))
+  const sub = [
+    card.portion_g ? `按 ${Math.round(card.portion_g)}g 估算` : '',
+    card.dish_id ? '成分库匹配' : '按食材估算',
+  ].filter(Boolean).join(' · ')
+  if (sub) box.appendChild(el('div', 'chat-food-sub', sub))
+
+  const ps = card.nutrition?.per_serving ?? {}
+  const ul = el('ul', 'chat-items')
+  const rows: Array<[string, string | number | null | undefined]> = [
+    ['热量', ps.calories_kcal],
+    ['蛋白质', ps.protein_g],
+    ['脂肪', ps.fat_g],
+    ['碳水', ps.carbs_g],
+  ]
+  for (const [label, v] of rows) {
+    const li = el('li', 'chat-item')
+    li.appendChild(el('span', 'chat-item-name', label))
+    // 缺值渲染成 —，**不是 0**：0 会读成"没有"，— 才是"不知道"
+    li.appendChild(el('span', 'chat-item-value',
+                      v == null ? '—' : `${Math.round(Number(v) * 10) / 10}${label === '热量' ? ' kcal' : ' g'}`))
+    ul.appendChild(li)
+  }
+  box.appendChild(ul)
+
+  for (const w of card.warnings ?? []) {
+    box.appendChild(el('p', 'chat-food-warn', w))
+  }
+  if (card.allergens?.length) {
+    box.appendChild(el('p', 'chat-food-allergen',
+                       `含过敏原：${card.allergens.map((a) => a.replace('contains_', '')).join('、')}`))
+  }
+  container.appendChild(box)
+}
+
 function renderMessage(
   list: HTMLElement,
   msg: ChatMessage,
@@ -216,6 +274,8 @@ function renderMessage(
 
   renderGuard(bubble, msg.guard)
   if (msg.role === 'assistant') {
+    // 本地卡片（拍照识餐）与后端 structured 可以共存，先画卡片
+    if (msg.foodCard) renderFoodCard(bubble, msg.foodCard)
     renderStructured(bubble, msg.structured, ids, onMuscleClick)
     renderOptions(bubble, msg.structured,
                   onChooseOption ? (o) => onChooseOption(o, at) : undefined,
@@ -285,8 +345,20 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
     mic.addEventListener('click', () => opts.onMic?.())
   }
 
+  // 拍餐。**必须 type='button'**：form 里 type 缺省是 submit，
+  // 点一下会顺带把半截文字发出去（同麦克风的理由）。
+  let photo: HTMLButtonElement | null = null
+  if (opts.onPhoto) {
+    photo = el('button', 'chat-photo')
+    photo.setAttribute('type', 'button')
+    photo.setAttribute('aria-label', '拍照识餐')
+    photo.textContent = '📷'
+    photo.addEventListener('click', () => opts.onPhoto?.())
+  }
+
   const row: HTMLElement[] = [input]
   if (mic) row.push(mic)   // 不传 onMic 就没有它，顺序不能错乱
+  if (photo) row.push(photo)   // 不传 onPhoto 就没有它，顺序不能错乱
   row.push(send)
   form.append(...row)
   form.addEventListener('submit', (ev) => {
@@ -328,6 +400,8 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
     send.disabled = state.pending
     // 麦克风跟着一起禁 —— agent 应答期间再录一段，回来会和当前这轮抢输入框
     if (mic) mic.disabled = state.pending
+    // 相机同理：应答期间再发一张，会和当前这轮抢面板
+    if (photo) photo.disabled = state.pending
     root.classList.toggle('is-busy', state.pending)
 
     // 有回复就先滚动到最新
@@ -365,6 +439,30 @@ export function createChatPanel(opts: ChatPanelOptions): ChatPanel {
       // 错误要显眼（红），录音/转写是正常态（安静一点）
       voiceLine.classList.toggle('is-on', Boolean(text))
       voiceLine.classList.toggle('is-error', Boolean(error))
+    },
+    /**
+     * 拍餐的状态反馈**必须可见**：识别是秒级（网络往返 + 模型推理），
+     * 中间毫无提示的话用户会以为按钮坏了，然后再点一次 —— 那次要花钱。
+     * 复用 `voiceLine` 那一行（role=status，读屏能读到）。
+     */
+    setPhotoStatus(status: PhotoStatus, error: string | null) {
+      if (status === 'picking') {
+        voiceLine.textContent = '选择照片…'
+        voiceLine.classList.toggle('is-on', true)
+        voiceLine.classList.remove('is-error')
+      } else if (status === 'analyzing') {
+        voiceLine.textContent = '正在识别…'
+        voiceLine.classList.toggle('is-on', true)
+        voiceLine.classList.remove('is-error')
+      } else if (error) {
+        voiceLine.textContent = error
+        voiceLine.classList.toggle('is-on', true)
+        voiceLine.classList.add('is-error')
+      } else {
+        voiceLine.textContent = ''
+        voiceLine.classList.remove('is-on', 'is-error')
+      }
+      if (photo) photo.classList.toggle('is-busy', status === 'analyzing')
     },
   }
 }

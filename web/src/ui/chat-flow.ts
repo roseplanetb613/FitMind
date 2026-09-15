@@ -12,6 +12,7 @@
 
 import type { ChatRequest, ChatResponse, ChatStage, CheckinResolveResponse } from '../data/chat'
 import type { GuardPayload, Structured, StructuredItem, StructuredOption } from '../data/types'
+import type { FoodCard } from '../data/vision'
 
 /** 后端阶段值 → 中文文案。**未知阶段原样显示**，不编一个好听的说法。 */
 export const STAGE_TEXT: Record<string, string> = {
@@ -58,6 +59,9 @@ export interface ChatMessage {
    * 挂在回复上，事后也能回头看它做了什么。
    */
   trace?: string[]
+  /** 拍照识餐的结果卡片。**本地消息**：不经后端、不进对话上下文，
+   *  只是一张挂在流里的展示卡。 */
+  foodCard?: FoodCard
 }
 
 export interface ChatState {
@@ -102,6 +106,9 @@ export interface ChatFlow {
   chooseOption: (option: StructuredOption, at: number) => Promise<void>
   /** 候选都不是 → 自己打一个动作名。后端会再解析一次；解析不中就如实说没找到。 */
   submitCustom: (text: string, at: number) => Promise<void>
+  /** 把一张营养卡片作为助手消息追加进流里。拍照识别用——
+   *  它不经 /v1/chat（图片没有文本意图），所以不走 send()。 */
+  addFoodCard: (card: FoodCard) => void
 }
 
 export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
@@ -170,8 +177,17 @@ export function createChatFlow(deps: ChatFlowDeps): ChatFlow {
     emit()
   }
 
+  function addFoodCard(card: FoodCard): void {
+    // 本仓 flow 用的是模块内的 `messages` 数组 + `emit()` 通知（不是
+    // `state.messages` + `notify()`）—— 照实际名字走，语义不变：
+    // 追加一条本地助手消息并重绘。
+    messages.push({ role: 'assistant', text: '', foodCard: card })
+    emit()
+  }
+
   return {
     state: snapshot,
+    addFoodCard,
 
     async send(text: string): Promise<void> {
       const trimmed = text.trim()

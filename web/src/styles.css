@@ -524,3 +524,34 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .boot-spinner { animation: none; }
 }
+
+/* 拍照按钮：与 .chat-mic 完全同款（两个并列的次要入口，视觉上不该分主次） */
+.chat-photo {
+  padding: 9px 12px; border-radius: 12px; cursor: pointer; font: inherit;
+  color: #cfe9e4; line-height: 1;
+  background: rgba(0, 0, 0, .28);
+  border: 1px solid rgba(160, 240, 230, .2);
+}
+.chat-photo:disabled { opacity: .5; cursor: default; }
+/* 分析中：呼吸，和录音中同一套节奏（都是"正在处理"） */
+.chat-photo.is-busy {
+  border-color: rgba(160, 240, 230, .7);
+  animation: chat-pulse 1.2s ease-in-out infinite;
+}
+
+/* 营养卡片。**必须与普通回答长得明显不同**（理由同 .chat-guard）：
+   营养数字是结构化事实，混在气泡文本里会被当成又一段闲聊。 */
+.chat-food {
+  margin-top: 8px; padding: 12px 14px; border-radius: 14px;
+  background: rgba(160, 240, 230, .07);
+  border: 1px solid rgba(160, 240, 230, .22);
+}
+.chat-food-title { margin: 0 0 2px; font-size: 15px; color: #eafaf7; }
+.chat-food-sub { margin: 0 0 8px; font-size: 12px; color: #8fb8b2; }
+/* 降级提示要显眼：missing 非空时总热量是**下界**，不标注就会被当成事实 */
+.chat-food-warn {
+  margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: #e8c98a;
+}
+.chat-food-allergen {
+  margin: 6px 0 0; font-size: 12px; color: #e0685f;
+}

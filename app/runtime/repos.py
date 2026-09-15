@@ -21,3 +21,15 @@ def foods_repo():
         from foods_repo import FoodsRepo
         _FR = FoodsRepo()
     return _FR
+
+
+_DR = None
+
+
+def dish_repo():
+    """DishRepo 单例。依赖 foods_repo 单例（10 道菜的配方引用它的条目）。"""
+    global _DR
+    if _DR is None:
+        from dish_repo import DishRepo
+        _DR = DishRepo(foods_repo())
+    return _DR

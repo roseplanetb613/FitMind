@@ -143,3 +143,95 @@ def _call_vision(image: bytes, mime: str, cfg: dict) -> dict:
     resp = _provider(cfg).invoke([("user", blocks)])
     text = getattr(resp, "content", None) or ""
     return _parse(text)
+
+
+def ground(payload: dict, dishes) -> dict:
+    """识别结果 → 营养卡片。**两条路径，同一个求和函数。**
+
+    ① 菜品库精确命中 → 用库里配方（校对过的，优先）
+    ② 未命中 → VLM 拆的食材组临时配方 → `nutrition_from_recipe()`（同一个）
+
+    VLM 全程不参与营养计算。
+    """
+    from dish_repo import nutrition_from_recipe
+
+    if not payload.get("is_food"):
+        return {"ok": False, "error": "照片里没看出食物——换一张只拍餐食的试试？",
+                "provenance": ["vision#is_food=false"]}
+
+    name = payload.get("dish_name") or ""
+    conf = payload.get("confidence")
+    portion = payload.get("portion_g")
+    try:
+        portion = float(portion) if portion else None
+    except (TypeError, ValueError):
+        portion = None
+
+    dish = dishes.match_exact(name)
+    warnings: list[str] = []
+
+    if dish is not None:
+        nutrition = dishes.nutrition(dish["dish_id"])
+        base_g = float(dish.get("serving_g") or 0) or nutrition["total_grams"]
+        # 按 VLM 的份量估计缩放。模型没给就按配方自己的份量，不瞎补。
+        portion = portion or base_g
+        factor = (portion / base_g) if base_g else 1.0
+        if abs(factor - 1.0) > 0.01:
+            nutrition = dict(nutrition)
+            nutrition["per_serving"] = {
+                k: (None if v is None else round(v * factor, 2))
+                for k, v in nutrition["per_serving"].items()}
+            warnings.append(
+                f"按 {portion:.0f}g 估算，已从配方基准 {base_g:.0f}g 等比折算")
+        dish_id, provenance = dish["dish_id"], [
+            f"dish_repo#{dish['dish_id']}", "dish_repo#nutrition_from_recipe"]
+    else:
+        recipe = dishes.recipe_from_ingredients(payload.get("ingredients"))
+        if not recipe:
+            return {"ok": False,
+                    "error": f"认出来是「{name or '某种食物'}」，但既不在菜品库里、"
+                             f"也没拆出可用的食材，给不出营养数字。",
+                    "provenance": ["vision#no_grounding"]}
+        nutrition = nutrition_from_recipe(recipe, dishes.foods_repo)
+        portion = nutrition["total_grams"]
+        dish_id, provenance = None, ["vision#ingredients", "dish_repo#nutrition_from_recipe"]
+        warnings.append("这道菜不在菜品库里，按识别出的食材估算，仅供参考")
+
+    if nutrition["missing"]:
+        names = "、".join(m["name"] for m in nutrition["missing"][:4])
+        warnings.append(f"以下食材没在成分库里找到，**未计入**：{names}"
+                        f"（总热量是下界）")
+    if nutrition["incomplete"]:
+        warnings.append("部分食材缺少某些营养项，卡片上以 — 显示，未按 0 计算")
+
+    return {"ok": True, "dish_id": dish_id, "dish": name,
+            "portion_g": round(portion, 1) if portion else None,
+            "confidence": conf, "method": nutrition["method"],
+            "nutrition": {k: nutrition[k] for k in
+                          ("per_serving", "per_100g", "breakdown", "missing",
+                           "incomplete", "total_grams")},
+            "allergens": nutrition["allergens"],
+            "provenance": provenance, "warnings": warnings}
+
+
+def recognize(image: bytes, mime: str = "image/png", dishes=None) -> dict:
+    """图片 → 营养卡片（对外唯一入口）。失败**不返回半成品卡片**。"""
+    cfg = load_config()
+    if not cfg["enabled"]:
+        return {"ok": False, "error": "食物识别未启用（vision_config.json）",
+                "provenance": []}
+    if not _api_key():
+        return {"ok": False, "error": "食物识别未配置（缺 DEEPSEEK_API_KEY）",
+                "provenance": []}
+    if dishes is None:
+        from app.runtime.repos import dish_repo
+        dishes = dish_repo()
+    try:
+        payload = _call_vision(image, mime, cfg)
+    except Exception as e:                      # 超时/网络/JSON 不合规 一视同仁
+        return {"ok": False,
+                "error": f"识别服务调用失败：{type(e).__name__}",
+                "provenance": ["vision#error"]}
+    out = ground(payload, dishes)
+    out["provenance"] = [f"vision#{cfg['model']}", *out.get("provenance", [])]
+    return out

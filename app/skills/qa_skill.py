@@ -442,36 +442,126 @@ class QaSkill(Skill):
         except Exception:
             return False, []
 
+    # 省略式追问：这几个字单独拿去检索**必然为空**（实测回"没有找到相关内容。
+    # 可以换个关键词试试，比如[进阶 深蹲]"），可它的意思再清楚不过 ——
+    # 接着刚才那批往下要。触发口径**窄**（与 `nodes._affirm_plan_intent` 同一取向）：
+    # 只认明确表达"还要/更难"的说法，且只在这句**自己不带走题**时才补全。
+    _FOLLOWUP_KW = ("更进阶", "进阶的", "进阶一点", "更难", "难一点", "难度更高",
+                    "挑战一点", "高级一点", "高阶", "还有吗", "还有别的",
+                    "还有没有", "还有其它", "还有其他", "再来几个", "再来点",
+                    "再来一些", "多来几个", "换几个", "其他的呢", "别的呢")
+
+    def _followup(self, ctx, ex, query: str) -> SkillResult | None:
+        """省略式追问 → 用上一轮的主题补全再检索。返回 None = 不适用，交回原逻辑。
+
+        复现（2026-09-15 用户报）：上一轮「推荐几个练腿动作」→ 这一轮
+        「有没有更进阶的」→ 拿这七个字去检索必然为空 → 回「没有找到相关内容。
+        可以换个关键词试试」。用户想说的是"在刚才那批的基础上要更难的"，
+        系统却把两轮当成两件不相干的事。
+
+        **两个前提缺一不可**，否则宁可不接：
+          · 这句**自己不带主题**。「推荐更进阶的练腿动作」自带部位，直接检索就行；
+            走这条路反而会把它改写成"上一轮的主题"，那是错的。
+          · 历史里**找得到主题**。找不到就交回原逻辑 —— 那时回"没有找到"是诚实的。
+        """
+        q = (query or "").strip()
+        if not any(k in q for k in self._FOLLOWUP_KW):
+            return None
+        from lib.parts import PART_CHARS, PART_WORDS
+        if any(c in q for c in PART_CHARS) or any(w in q for w in PART_WORDS):
+            return None                       # 自带主题 → 不是省略式追问
+        muscle = self._last_topic(getattr(getattr(ctx, "session", None), "history", None))
+        if muscle is None:
+            return None
+        try:
+            recs = ex.recommend(muscle, count=8)
+        except Exception:
+            return None                       # 降级：交回原逻辑，不抛
+        rows = recs.get("recommendations") or []
+        if not rows:
+            return None
+
+        def _diff(r: dict) -> int:
+            try:
+                return int(r.get("difficulty") or 0)
+            except Exception:
+                return 0
+
+        # 问"更进阶"就是要难的 —— 按难度从高到低取，不做别的猜测。
+        # 难度会原样出现在卡片的器械/难度那一行（"弹力带 · 进阶"），
+        # 所以"库里最高只到新手档"这件事用户自己看得出来，不必另写一句话解释。
+        rows = sorted(rows, key=_diff, reverse=True)[:5]
+        items = [self._exercise_item(r) for r in rows]
+        return SkillResult(ok=True, data={"items": items},
+                           provenance=[f"ex:{it['id']}" for it in items])
+
+    @staticmethod
+    def _last_topic(history) -> str | None:
+        """最近一条**用户**消息里的部位词 → 肌群 id；找不到返回 None。
+
+        **倒着回溯而不是只看最后一条**：连着追问两轮时（"有没有更进阶的" →
+        "还有吗"），最后一条用户消息里同样没有主题 —— 一路回溯到真正说了
+        部位的那轮才对。
+        """
+        from lib.parts import PART_CHARS, PART_WORDS, muscle_of
+        for h in reversed(history or []):
+            if not isinstance(h, dict) or h.get("role") != "user":
+                continue
+            text = str(h.get("text") or "")
+            for w in sorted(PART_WORDS, key=len, reverse=True):
+                if w in text:
+                    m = muscle_of(w)
+                    if m:
+                        return m
+            for c in PART_CHARS:
+                if c in text:
+                    m = muscle_of(c)
+                    if m:
+                        return m
+        return None
+
+    @staticmethod
+    def _exercise_item(e: dict) -> dict:
+        """检索命中 → 卡片条目。
+
+        **正常检索与归一化兜底两条路共用这一个。** 原先各自拼一份、字段集靠人
+        维护一致 —— 那正是 `clarify_exercise` 与 `/v1/checkin/resolve` 两处组装
+        漂移过的同一个坑（漏字段不报错，只是界面上少个东西）。新增字段只改这里。
+
+        `image` / `gif_url` 是**相对 `data/exercises-dataset/` 的路径**，前端拼
+        `/media` 前缀。库内 1324 条 100% 有这两个字段；不带的话卡片只剩光秃秃的
+        名字，而动作名是逐词直译的（"摆臂 悬垂 直腿s"），光看名字挑不出是哪一个。
+        ⚠ 素材 © Gym visual：授权只到 180×180，且**每次使用都要带署名**。
+        """
+        sug = e.get("suggested") or {}
+        return {"id": e["id"], "name_zh": e.get("name_zh"),
+                "difficulty": e.get("difficulty"),
+                "pattern": e.get("movement_pattern"),
+                "equipment": e.get("normalized_equipment"),
+                "sets": sug.get("sets"), "reps": sug.get("reps"),
+                "rest_sec": sug.get("rest_sec"),
+                "image": e.get("image"), "gif_url": e.get("gif_url")}
+
     def _exercises(self, ctx, ex, query: str) -> SkillResult:
         # 中文检索已下沉 exercise_repo.search_zh（qa/teach 单源）：
         # 复合切分+修饰剥离+别名归一+双向匹配，装配期预计算归一名。
         # W5：图谱 approved 别名优先（静态 NAME_ALIASES 退居降级位）
         from app.core.graphalias import graph_alias_for
         q = graph_alias_for(query, "exercise") or query
+        # 省略式追问先补全（"有没有更进阶的"）—— 补不上就原样检索，
+        # 那时的空结果是诚实的。见 _followup
+        fu = self._followup(ctx, ex, q)
+        if fu is not None:
+            return fu
         matched = ex.search_zh(q, limit=5)
-        items = []
-        for e in matched:
-            sug = e.get("suggested") or {}
-            items.append({"id": e["id"], "name_zh": e.get("name_zh"),
-                          "difficulty": e.get("difficulty"),
-                          "pattern": e.get("movement_pattern"),
-                          "equipment": e.get("normalized_equipment"),
-                          "sets": sug.get("sets"), "reps": sug.get("reps"),
-                          "rest_sec": sug.get("rest_sec")})
+        items = [self._exercise_item(e) for e in matched]
         if not items:
             # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱
             adopted, hits = self._normalize_fallback(
                 ctx, query, "exercise",
                 lambda q: ex.search_zh(q, limit=5))
             if adopted:
-                for e in hits:
-                    sug = e.get("suggested") or {}
-                    items.append({"id": e["id"], "name_zh": e.get("name_zh"),
-                                  "difficulty": e.get("difficulty"),
-                                  "pattern": e.get("movement_pattern"),
-                                  "equipment": e.get("normalized_equipment"),
-                                  "sets": sug.get("sets"), "reps": sug.get("reps"),
-                                  "rest_sec": sug.get("rest_sec")})
+                items = [self._exercise_item(e) for e in hits]
         if not items:
             return SkillResult(ok=True, data={"items": [], "empty": True,
                                               "data_kind": "data",

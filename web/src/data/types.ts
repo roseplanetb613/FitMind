@@ -102,6 +102,34 @@ export interface StructuredItem {
   /** `teach` 分支独有：**canonical 肌肉 id**（如 `quadriceps`），用来联动 3D 视图。
    *  其它分支没有这个字段 —— 见 `muscleIdInItem` 的兜底策略。 */
   target?: string
+  /**
+   * 动作条目的示例图：**相对 `data/exercises-dataset/` 的路径**（如
+   * `images/1004-Ab3x9.jpg`），渲染时拼 `/media` 前缀（见 `data/exercises.ts`
+   * 的 `mediaUrl`）。
+   *
+   * 只有动作检索（后端 `qa._exercises`）的条目带它 —— 档案/记忆/肌肉面板的条目
+   * 都不带。前端就是靠这个字段分派"画成卡片"还是"画成一行文本"：**判据是数据
+   * 自带的能力，不是另设一个类型名**，所以后端哪天给别的条目也配上图，
+   * 那边自动也会变成卡片，不需要前端同步改。
+   *
+   * ⚠ 素材 © Gym visual，授权只到 180×180 且每次使用须带署名（NOTICE.md）。
+   */
+  image?: string | null
+  gif_url?: string | null
+  /**
+   * 以下字段只有**动作条目**（后端 `qa._exercises`）会带，用来画卡片：
+   * `name_zh` + 剂量 + 器械/难度。档案/记忆/肌肉面板的条目没有它们。
+   *
+   * ⚠ 显示动作名要读 `name_zh` 而**不是 `name`** —— 动作条目的中文名在这个键上
+   * （`name` 是给别的条目用的通用键）。读错的表现是"卡片里一排空行"，
+   * 不报错、也不缺元素，光看 DOM 结构看不出来。
+   */
+  name_zh?: string
+  equipment?: string | null
+  difficulty?: number | string | null
+  sets?: string | number
+  reps?: string | number
+  rest_sec?: string | number
   [k: string]: unknown
 }
 

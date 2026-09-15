@@ -173,6 +173,31 @@ html, body {
 }
 .chat-item-name.is-link:hover { color: #8ff0e2; border-bottom-color: #8ff0e2; }
 
+/* 动作卡片：缩略图 + 名称 + 器械难度 + 剂量。
+   与 .chat-item 的一行文本并列存在 —— 动作名是**逐词直译**的
+   （"摆臂 悬垂 直腿s"、"辅助 仰卧 小腿拉伸"），没有图根本挑不出是哪一个。
+   视觉与 .chat-option-media 那一套一致是**有意的**（同一种东西该长同一样），
+   但类名独立：那边是"点了就选中"的选项，这边是只读展示，语义不同。 */
+.chat-exercises { display: flex; flex-direction: column; gap: 9px; }
+.chat-exercise { display: flex; align-items: center; gap: 9px; }
+/* 44×44 缩略图；点一下**原地**摊开成 180×180 动图。
+   ⚠ 180 是授权上限（素材 © Gym visual），别往上调 —— 见 NOTICE.md 的分辨率条款 */
+.chat-exercise-media {
+  flex: none; width: 44px; height: 44px; padding: 0; overflow: hidden;
+  display: block; border-radius: 8px; font: inherit;
+  background: rgba(0, 0, 0, .24);
+  border: 1px solid rgba(160, 240, 230, .18);
+}
+button.chat-exercise-media { cursor: zoom-in; }
+.chat-exercise-media.is-open { width: 180px; height: 180px; }
+button.chat-exercise-media:hover { border-color: rgba(95, 212, 196, .5); }
+.chat-exercise-img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.chat-exercise-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-exercise-name { font-size: 12px; }
+.chat-exercise-meta, .chat-exercise-dose { font-size: 11px; color: #9aa6b2; }
+/* 署名不是装饰：授权要求每次使用都带（data/exercises-dataset/NOTICE.md） */
+.chat-exercise-credit { margin: 8px 0 0; font-size: 10px; color: #6f7d86; }
+
 /* 调用轨迹：这一轮用了哪些技能 / 工具。等宽 + 弱化，读作"过程日志"而非正文。
    颜色仍用 teal 一族；**避开 cyan 196°**（恢复度冷端），理由见文件顶部 */
 .chat-trace {

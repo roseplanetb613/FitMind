@@ -94,6 +94,14 @@ export function renderStructured(
   }
   if (!Array.isArray(items) || items.length === 0) return
 
+  // 带示例图的条目（只有动作检索会给）→ 画成卡片；其余走一行文本的列表。
+  // 判据是**条目自带的能力**而不是另设一个类型名：后端哪天给别的条目也配了图，
+  // 那边自动变卡片，前端不需要同步改。
+  if (items.some((it) => typeof it.image === 'string' && it.image)) {
+    renderExerciseCards(container, structured, items)
+    return
+  }
+
   const box = el('div', 'chat-card')
   if (structured.title) box.appendChild(el('h4', 'chat-card-title', structured.title))
 
@@ -117,6 +125,81 @@ export function renderStructured(
     ul.appendChild(li)
   }
   box.appendChild(ul)
+  container.appendChild(box)
+}
+
+/**
+ * 动作条目 → 卡片：缩略图 + 名称 + 器械/难度 + 剂量。
+ *
+ * 为什么动作不能沿用一行文本的列表：库里的中文名是**逐词直译**的
+ * （"摆臂 悬垂 直腿s"、"辅助 仰卧 小腿拉伸"），光看名字根本挑不出是不是自己
+ * 要找的那个 —— **图是这一步唯一可靠的信息**。档案/记忆条目的 `name` 本身就是
+ * 人话（"年龄"、"训练记录"），列表够用；动作不够。
+ *
+ * 交互照抄消歧选项那套：缩略图 44×44，点一下**原地**摊开成 180×180 动图。
+ * ⚠ **180 是授权上限**（素材 © Gym visual），别往上调；整组末尾必须带署名 ——
+ * 授权要求"每次使用都要带"，不是可选的礼貌（`data/exercises-dataset/NOTICE.md`）。
+ */
+export function renderExerciseCards(
+  container: HTMLElement,
+  structured: Structured,
+  items: StructuredItem[],
+): void {
+  const box = el('div', 'chat-card')
+  if (structured.title) box.appendChild(el('h4', 'chat-card-title', structured.title))
+
+  const list = el('div', 'chat-exercises')
+  for (const it of items) {
+    const row = el('div', 'chat-exercise')
+
+    const still = mediaUrl(it.image)
+    if (still) {
+      const img = el('img', 'chat-exercise-img')
+      img.src = still
+      img.alt = String(it.name_zh ?? '')
+      img.loading = 'lazy' // 一次 5 条，不该一进对话就把图全拉了
+      const gif = mediaUrl(it.gif_url)
+      if (gif) {
+        // 换 src 而不是再挂一个 <img>：GIF 均 100KB，只有用户点开那一刻才加载
+        const btn = el('button', 'chat-exercise-media')
+        btn.setAttribute('type', 'button')
+        btn.setAttribute('aria-label', `看「${img.alt}」的动图`)
+        btn.appendChild(img)
+        // 用闭包变量而不是 `classList.contains` 记开合状态：node 侧的 DOM stub
+        // 只实现了 toggle/add/remove（真实 DOM 才有 contains）。卡片每次都是
+        // 重建的，闭包自己记最省事，也不多依赖一项 stub 能力。
+        let open = false
+        btn.addEventListener('click', () => {
+          open = !open
+          btn.classList.toggle('is-open', open)
+          img.src = open ? gif : still
+        })
+        row.appendChild(btn)
+      } else {
+        // 没有动图就只画图，**不做成按钮** —— 点了没反应的按钮比没有按钮更糟
+        const wrap = el('span', 'chat-exercise-media')
+        wrap.appendChild(img)
+        row.appendChild(wrap)
+      }
+    }
+
+    const text = el('div', 'chat-exercise-text')
+    text.appendChild(el('span', 'chat-exercise-name', String(it.name_zh ?? '')))
+    const meta = [equipmentLabel(it.equipment), difficultyLabel(it.difficulty)]
+      .filter(Boolean).join(' · ')
+    if (meta) text.appendChild(el('span', 'chat-exercise-meta', meta))
+    const dose = [
+      it.sets ? `${it.sets} 组` : null,
+      it.reps ? `${it.reps} 次` : null,
+      it.rest_sec ? `休息 ${it.rest_sec} 秒` : null,
+    ].filter(Boolean).join(' · ')
+    if (dose) text.appendChild(el('span', 'chat-exercise-dose', dose))
+    row.appendChild(text)
+    list.appendChild(row)
+  }
+  box.appendChild(list)
+  // 画了图就必须署名 —— 本函数只在条目带 image 时被调用，所以这里是无条件的
+  box.appendChild(el('p', 'chat-exercise-credit', MEDIA_CREDIT))
   container.appendChild(box)
 }
 

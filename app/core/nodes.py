@@ -180,7 +180,11 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         from app.core.session import Session as _Session
         return ExecutionContext(
             session=_Session(id=state.get("session_id", ""),
-                             user_id=state.get("user_id", "local")),
+                             user_id=state.get("user_id", "local"),
+                             # 历史要带进技能层：省略式追问（"有没有更进阶的"）
+                             # 只有靠上一轮说了什么才补得全 —— 技能拿不到历史就只能
+                             # 拿这五个字去检索，必然为空。见 qa_skill._followup
+                             history=list(state.get("history") or [])),
             profile=state.get("profile") or {}, mode=mode, skill_log=[])
 
     # ---------------- guard（无条件前置） ----------------

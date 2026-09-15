@@ -16,30 +16,49 @@
  * ⚠ 本文件除 `buildHeartGlow` 外均为纯函数，可在 node 里断言。
  */
 import * as THREE from 'three'
-import { NON_MUSCLE_COLOR } from './palette'
+import { HEART_GLOW_COLOR } from './palette'
 
 /** 辉光贴图的边长（像素）。64 够用 —— 它会被拉成几十个世界单位，看不到锯齿。 */
 export const GLOW_TEX_SIZE = 64
 
-/** 辉光相对心脏包围盒最长边的放大倍数。1 = 与心脏同大。 */
-export const GLOW_SCALE = 2.4
+/**
+ * 辉光相对心脏包围盒最长边的放大倍数。1 = 与心脏同大。
+ *
+ * **2.4 实测太"贴"了**：贴图的 alpha 是三次方衰减，等效可见半径只有
+ * sprite 半径的 ~1/3，所以 2.4 倍画出来只在心脏边缘外多出一点点红，
+ * 看着像心脏边缘脏了，不像发光。3.2 之后可见光晕才真正探出心脏轮廓。
+ *
+ * 也别再往上加：心脏 12.7cm 时 sprite 已达 41cm，超过胸腔宽度，
+ * 再大就变成"整个上半身在发光"，把临近肌肉的恢复度颜色也糊掉。
+ */
+export const GLOW_SCALE = 3.2
 
 /** 辉光光斑的不透明度。加色混合，所以这个值直接决定"亮多少"。 */
-export const GLOW_OPACITY = 0.55
+export const GLOW_OPACITY = 0.75
 
 /** 画在所有东西之后（肌肉 0 / other -1 / 外壳 -2）。见 buildHeartGlow 的 depthTest 说明。 */
 export const GLOW_RENDER_ORDER = 10
 
 /**
- * 呼吸周期（毫秒）。4 秒一次完整的明暗循环。
+ * 呼吸周期（毫秒）。3.4 秒一次完整的明暗循环。
  *
- * **刻意慢、幅度刻意小。** 这是个装饰性动效，压着整屏的解剖数据看，
- * 忽快忽闪会抢注意力；《Web 内容无障碍指南》对闪烁的阈值也远低于这个频率。
+ * **刻意慢、幅度刻意小**（原来是 4s / ±12%）。这是压着整屏解剖数据看的
+ * 装饰性动效，忽快忽闪会抢注意力；《Web 内容无障碍指南》对闪烁的阈值也远低于
+ * 这个频率。3.4s 仍在"安静的呼吸"区间里 —— 平均心率 60 的搏动是 1s，
+ * 那才叫闪，不是呼吸。
  */
-export const PULSE_PERIOD_MS = 4000
+export const PULSE_PERIOD_MS = 3400
 
-/** 呼吸幅度（相对值）：0.12 即尺寸与亮度在 ±12% 之间摆动。 */
-export const PULSE_AMPLITUDE = 0.12
+/**
+ * 呼吸幅度（相对值）：0.25 即尺寸与亮度在 ±25% 之间摆动。
+ *
+ * 原值 0.12 在实测里"看不出来在呼吸"（用户报的），所以放大一倍多。
+ * **上限受不透明度约束**：`pulseGlow` 里 `opacity = GLOW_OPACITY × k` 会在 1 处
+ * 截断，一旦 `GLOW_OPACITY × (1 + 幅度) > 1`，波峰就被削平 —— 亮度变成
+ * "涨上去、卡一会儿、掉下来"，读起来是卡顿而不是呼吸。0.75 × 1.25 = 0.9375，
+ * 留了余量，改这两个常量时请一起算。
+ */
+export const PULSE_AMPLITUDE = 0.25
 
 /**
  * 一张径向衰减的白色贴图，用作光斑的形状。
@@ -81,11 +100,27 @@ export interface GlowPlacement {
  * 抽成纯函数是为了能在 node 里断言 —— `buildHeartGlow` 要建 Sprite（需要 GPU 侧的
  * 材质），而"位置算得对不对"这件事不该因此失去守卫。
  *
+ * **接受一组对象，取并集包围盒。** 源 FBX（`muscle-map.json` 里的 `cardio_system`）
+ * 把心脏拆成 20+ 个网格：心室/心房/瓣膜/主动脉根/冠状动脉…。`build-muscles.mjs`
+ * 会把它们合并，所以**当前装配结果只有 1 块**，收数组与收单个等价。
+ *
+ * 之所以仍然收数组：辉光的正确性不该依赖"构建后恰好只剩一块"这个巧合。
+ * 合并策略一改（或换模型），单对象版本会静默照着"心脏的某一小瓣"摆光斑 ——
+ * 尺寸和位置都不对，而且不报任何错。多写六行换掉这个隐患是划算的。
+ *
  * 尺寸取包围盒**最长边**：心脏是立体的，按 X 定尺寸会在某些角度露出光斑边界。
  */
-export function heartGlowPlacement(heart: THREE.Object3D, scale = GLOW_SCALE): GlowPlacement {
-  heart.updateWorldMatrix(true, true)
-  const b = new THREE.Box3().setFromObject(heart)
+export function heartGlowPlacement(
+  heart: THREE.Object3D | readonly THREE.Object3D[],
+  scale = GLOW_SCALE,
+): GlowPlacement {
+  const parts = (Array.isArray(heart) ? heart : [heart]) as THREE.Object3D[]
+  const b = new THREE.Box3()
+  for (const p of parts) {
+    p.updateWorldMatrix(true, true)
+    // 并集：空盒 ∪ 任一盒 = 那个盒，所以首轮不需要特判
+    b.union(new THREE.Box3().setFromObject(p))
+  }
   if (b.isEmpty()) return { center: [0, 0, 0], size: 0 }
   const c = b.getCenter(new THREE.Vector3())
   const extent = Math.max(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z)
@@ -159,13 +194,15 @@ export function pulseGlow(sprite: THREE.Sprite, ms: number): void {
  *
  * 几何不可用时返回 `null` 而不是抛错：辉光是装饰，不该让整个场景挂掉。
  */
-export function buildHeartGlow(heart: THREE.Object3D): THREE.Sprite | null {
+export function buildHeartGlow(
+  heart: THREE.Object3D | readonly THREE.Object3D[],
+): THREE.Sprite | null {
   const { center, size } = heartGlowPlacement(heart)
   if (!(size > 0)) return null
   const sprite = new THREE.Sprite(
     new THREE.SpriteMaterial({
       map: glowTexture(),
-      color: NON_MUSCLE_COLOR,
+      color: HEART_GLOW_COLOR,
       blending: THREE.AdditiveBlending,
       transparent: true,
       depthWrite: false,
@@ -180,4 +217,31 @@ export function buildHeartGlow(heart: THREE.Object3D): THREE.Sprite | null {
   sprite.renderOrder = GLOW_RENDER_ORDER
   sprite.name = 'heart-glow' // 供测试与调试定位
   return sprite
+}
+
+/**
+ * 让**心脏本体**的自发光与光斑同相呼吸。**每帧调用。**
+ *
+ * 为什么不能只让光斑呼吸：光斑是加色的，心脏本体那颗基色红是恒定的，
+ * 光斑扫过去只是"外面亮一圈" —— 看起来像有人在心脏后面晃手电，
+ * 不像心脏自己在搏动。把本体自发光一起摆，整个心才跟着明暗。
+ *
+ * `base` 由调用方传入（`scene.ts` 的 `NON_MUSCLE_EMISSIVE_INTENSITY`），
+ * **刻意不 import 进来**：那个常量住在 `scene.ts`，而 `scene.ts` 已经 import 本
+ * 模块，反向引会成环 —— 与 `NON_MUSCLE_COLOR` 当时搬去 `palette.ts` 同一个理由。
+ *
+ * 与 `pulseGlow` 一样，**基准值由调用方给、每帧重算**，绝不在当前值上累乘。
+ */
+export function pulseHeartEmissive(
+  meshes: readonly THREE.Object3D[],
+  ms: number,
+  base: number,
+): void {
+  if (!(Number.isFinite(base) && base > 0)) return
+  const v = base * pulseAt(ms)
+  for (const m of meshes) {
+    const mat = (m as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined
+    // 材质可能被换过 / 不是 Standard（例如加载中的占位）——跳过而不是抛
+    if (mat && 'emissiveIntensity' in mat) mat.emissiveIntensity = v
+  }
 }

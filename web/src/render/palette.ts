@@ -58,6 +58,19 @@ export const NON_MUSCLE_COLOR = '#d93a2b'
 /** 心脏的自发光：暗红，让它在半透明肌肉后面透出来。 */
 export const NON_MUSCLE_EMISSIVE = '#6e1008'
 
+/**
+ * 心脏**辉光**的颜色。**刻意比基色亮**，不是 `NON_MUSCLE_COLOR`。
+ *
+ * 辉光是加色混合的（`AdditiveBlending`）：屏幕值 ≈ 背景 + 颜色 × 不透明度。
+ * 用基色那颗中调红（`#d93a2b`，明度约 51%）加出来是一片**暗而浑**的红，
+ * 亮部根本提不上去 —— 实测表现就是"加了辉光但看着像心脏边缘脏了一块"，
+ * 而不是"心脏在发光"。发光体要的是**亮核**，所以取一个更亮更饱和的红。
+ *
+ * ⚠ 上限别越过去：再亮就会往粉/白走，那时它既不再读作"红心"，也会和恢复度色轴
+ * 的冷端（青）在低饱和区靠近。`#ff5340` 的色相仍在 8° 附近，与基色同族。
+ */
+export const HEART_GLOW_COLOR = '#ff5340'
+
 function hslToHex(h: number, s: number, l: number): string {
   const sn = s / 100
   const ln = l / 100

@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { build } from '../body/build'
 import { loadBody } from '../body/load-model'
 import { applyStars, buildStarField } from './star-field'
-import { buildHeartGlow, prefersReducedMotion, pulseGlow } from './glow'
+import { buildHeartGlow, prefersReducedMotion, pulseGlow, pulseHeartEmissive } from './glow'
 import { emptyMap, muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
 
@@ -334,8 +334,12 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 心脏辉光。**加在 scene 上而不是 body.children 里** —— 与星场同一个理由：
   // applyStates / setHover / interactiveMeshes / buildStarField 都会遍历
   // body.children，多一个 Sprite 进去就得逐处加过滤，且点选射线可能打到它。
-  const heart = body.children.find((c) => c.userData.muscleId === 'cardio_system')
-  const glow = heart ? buildHeartGlow(heart) : null
+  //
+  // ⚠ 用 `filter` 取全部、而不是 `find` 取第一个。实测当前装配结果里心脏**只有
+  // 1 块**（`build-muscles.mjs` 合并过），两者等价；这么写是为了不依赖"合并后
+  // 恰好只剩一块"这个巧合 —— 合并策略一变，find 会静默只照着一小瓣摆光斑。
+  const hearts = body.children.filter((c) => c.userData.muscleId === 'cardio_system')
+  const glow = hearts.length ? buildHeartGlow(hearts) : null
   if (glow) scene.add(glow)
   // 用户在系统里开了"减少动效"就不呼吸，只留静态辉光
   const breathe = glow !== null && !prefersReducedMotion()
@@ -364,8 +368,12 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   let raf = 0
   const loop = (): void => {
     raf = requestAnimationFrame(loop)
-    // 呼吸：一次 set + 一次改 opacity，成本可忽略
-    if (breathe) pulseGlow(glow!, performance.now())
+    // 呼吸：光斑改尺寸+不透明度、心脏本体改自发光。都很便宜（一次 set + 写字段），
+    // 且都在基准值上重算，不累积。
+    if (breathe) {
+      pulseGlow(glow!, performance.now())
+      pulseHeartEmissive(hearts, performance.now(), NON_MUSCLE_EMISSIVE_INTENSITY)
+    }
     controls.update()
     renderer.render(scene, camera)
   }

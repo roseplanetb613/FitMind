@@ -2,6 +2,9 @@
 
 ## dishes_core.json
 
+顶层信封：`version` / `note`（数据出处与局限）/ `source` / `method`（**公式字符串**，
+说明营养怎么算）/ `dishes`（下面的数组）。
+
 | 字段 | 含义 |
 |---|---|
 | `dish_id` | 唯一 id，`dish_` 前缀 |
@@ -19,11 +22,16 @@
 
 ## ingredient_aliases.json
 
+顶层信封：`version` / `note` / `aliases`。
+
 `aliases` 是「口语食材名 → food_id」的映射，消费者有两处：`validate_dishes.py`
 （校验引用的 food_id 存在且宏量完整）与 `vision.py` 的兜底接地路径。
 
 ## 已知局限
 
-- 配方是生重求和，**不含煎炸吸油与汤汁损耗**，故 `method` 标 `recipe_estimated`，
-  不冒充实测值。
+- 配方是生重求和，**不含煎炸吸油与汤汁损耗**。因此 `nutrition_from_recipe()`
+  **返回的字典**里 `method` 取值 `recipe_estimated`，与库中实测值严格区分
+  （对齐 `lib/portion_reference.py` 的 `method='reference'` 先例）。
+  注意这跟本文档上方的 `dishes_core.json` 顶层 `method` 键不是一回事——那个是
+  公式字符串，描述"怎么算"，不是"这个值有多可信"。
 - 10 道菜覆盖面极小，本波目的是打通链路与钉死 schema。

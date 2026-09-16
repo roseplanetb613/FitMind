@@ -13,6 +13,16 @@
 结构：每个检索器先把每条 query 的 **top1(id, score) 算一次**，之后阈值只是纯过滤——
 否则每换一个阈值就要重跑一遍 embed。
 
+已测结论（2026-09-14，science_doc 25 正 / 12 负）：
+    检索器          Acc    证据准  召回   WRONG  LEAK   备注
+    dense           0.76   0.74   0.68    5      1     生产现状（MIN_SCORE=0.55）
+    字符bigram BM25  0.65   0.63   0.48    7      0     词法在此语料偏弱
+    hybrid(RRF)     0.54   0.48   0.64    9      8     **比单路差**：融合稀释强路
+    ce_rerank       0.81   0.79   0.76    4      1     提升来自**弃权分数**而非排序
+  · 天花板：正确答案 **100% 落在稠密 top-5 内**（80% 在 top-1）→ 错误全是排序错误
+  · 但 cross-encoder 的 argmax 只修好 3 条、弄坏 3 条（净 0）——**够不到天花板**
+  · llm_rerank（qwen3:8b）实测会把本机 Ollama 压垮，见该函数注释，勿用
+
 判据（每 query 一个格子）：
     expected 有值 且 returned == expected → TP
     expected 有值 但 returned 是别的块     → WRONG  ← 危险格：挂了错证据
@@ -120,22 +130,165 @@ class LexIndex:
             self.df.update(set(g))
         self.n = len(self.corpus) or 1
 
-    def top1(self, query: str) -> tuple[str | None, float]:
+    def ranked(self, query: str, n: int | None = None) -> list[tuple[str, float]]:
+        """按 BM25 降序的全部（或前 n 个）(id, score)。RRF 融合需要排名而非仅 top1。"""
         if not self.corpus:
-            return None, 0.0
-        tf_list = [Counter(g) for g in self.corpus]
-        best_id, best_s = None, -1.0
-        for doc_id, tf, dl in zip(self.ids, tf_list, self.lens):
+            return []
+        qterms = _grams(query)
+        scored = []
+        for doc_id, g, dl in zip(self.ids, self.corpus, self.lens):
+            tf = Counter(g)
             s = 0.0
-            for term in _grams(query):
+            for term in qterms:
                 if term not in self.df:
                     continue
                 idf = math.log(1 + (self.n - self.df[term] + 0.5) / (self.df[term] + 0.5))
                 s += idf * tf[term] * (self.k1 + 1) / (
                     tf[term] + self.k1 * (1 - self.b + self.b * dl / self.avg))
-            if s > best_s:
-                best_id, best_s = doc_id, s
-        return best_id, best_s
+            scored.append((doc_id, s))
+        scored.sort(key=lambda kv: -kv[1])
+        return scored[:n] if n else scored
+
+    def top1(self, query: str) -> tuple[str | None, float]:
+        r = self.ranked(query, 1)
+        return r[0] if r else (None, 0.0)
+
+
+# ---------------- LLM rerank（本地 Ollama，零下载） ----------------
+
+_RERANK_PROMPT = (
+    "下面是一个健身相关问题，以及 {n} 段候选知识。请选出最能回答该问题的候选编号。\n"
+    "只能回答一个数字：候选编号（1-{n}）；如果都不相关，回答 0。不要解释。\n\n"
+    "问题：{q}\n\n{cands}\n编号：")
+
+
+def _parse_pick(text: str, n: int) -> int:
+    """从模型输出抽出候选编号，落在 1..n 才接受，否则 0（都不相关）。
+
+    解析失败一律当 0 —— **宁可弃权也不猜**（与项目"错证据比没证据更糟"一致）。
+    模型输出不是裸数字时，只在**输出很短**（≤12 字，如"编号：3"）时才从里面抠数字；
+    长输出里可能含"5 段都不相关"这种会把 5 误当选择的句子，一律拒绝。"""
+    import re
+    t = (text or "").strip()
+    if t.isdigit():
+        v = int(t)
+        return v if 1 <= v <= n else 0
+    if len(t) <= 12:
+        m = re.search(r"\d+", t)
+        if m:
+            v = int(m.group())
+            return v if 1 <= v <= n else 0
+    return 0
+
+
+def _ollama_pick(query: str, cands: list[tuple[str, str]], model: str) -> tuple[int, str]:
+    """问本地模型选哪条。返回 (编号, 原始输出)。网络/解析异常一律 (0, 原因)。"""
+    import urllib.request
+    body = "\n".join(f"{i}. {c}" for i, (_, c) in enumerate(cands, 1))
+    prompt = _RERANK_PROMPT.format(n=len(cands), q=query, cands=body)
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:11434/api/generate",
+            data=json.dumps({"model": model, "prompt": prompt, "stream": False,
+                             "think": False,
+                             "options": {"temperature": 0}}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=180) as r:
+            raw = json.loads(r.read()).get("response", "")
+    except Exception as e:
+        return 0, f"<err {type(e).__name__}>"
+    return _parse_pick(raw, len(cands)), raw
+
+
+def llm_rerank_top1(store, emb, rows: list[dict], n: int = 5,
+                    model: str = "qwen3:8b") -> list[tuple]:
+    """稠密取 top-N → 本地 LLM 从 N 条里选 1 条（或选 0 = 都不相关）。
+
+    ⚠ **实测在本机不可用**（2026-09-14）：跑全量时把 WSL 里的 Ollama **压垮了**
+    （8GB 显存的 4060 Laptop 装不下 qwen3:8b 5GB + 已加载的 bge-m3）。单条调用
+    ~8s，37 条中途服务就没了。**别在生产路径上用它**；要 LLM 判断力请用
+    ce_rerank（BERT-base 量级、不生成 token）。保留此实现只为记录这条负面结论。
+
+    天花板依据：实测正确答案 **100% 落在稠密 top-5 内**，所以错误全是排序错误。
+
+    返回的 score 只编码"选没选"：选中=1.0、选 0=-1.0。这样
+    `apply_threshold(..., 0.0)` 就等于"LLM 说弃权就弃权"，**弃权由模型判断，
+    不再用余弦门槛**（余弦门槛与 rerank 排序是两套不兼容的判据）。"""
+    from app.rag import retriever
+    out = []
+    for r in rows:
+        hits = retriever.vector_search(
+            store, emb.embed_one(r["query"]), "bge-m3", top_k=n,
+            chunk_types=(r["chunk_type"],), min_score=None)
+        cands = [(h["source_ref"].get("id"), h["content"]) for h in hits]
+        if not cands:
+            out.append((r.get("expected"), None, -1.0))
+            continue
+        pick, _raw = _ollama_pick(r["query"], cands, model)
+        out.append((r.get("expected"),
+                    cands[pick - 1][0] if pick else None,
+                    1.0 if pick else -1.0))
+    return out
+
+
+# ---------------- Cross-encoder rerank（bge-reranker-base，本地权重） ----------------
+
+# 两段式解耦（本机约束）：cross-encoder 与 Ollama 同时活跃会压垮 Ollama
+# （8GB 卡 + 主机内存紧张，实测连续三次）。所以支持先把稠密候选 dump 到文件，
+# 再由只加载 cross-encoder 的进程读取 —— 两个模型永不同时驻留。
+CAND_DUMP: Path | None = None
+
+
+def dump_candidates(store, emb, rows: list[dict], n: int, path: Path) -> None:
+    """把每条 query 的稠密 top-N（含正文）落盘，供 CE 阶段离线重排。"""
+    from app.rag import retriever
+    data = {}
+    for r in rows:
+        hits = retriever.vector_search(
+            store, emb.embed_one(r["query"]), "bge-m3", top_k=n,
+            chunk_types=(r["chunk_type"],), min_score=None)
+        data[f"{r['chunk_type']}	{r['query']}"] = [
+            [h["source_ref"].get("id"), h["content"], h["score"]] for h in hits]
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def ce_rerank_top1(store, emb, rows: list[dict], n: int = 5) -> list[tuple]:
+    """稠密取 top-N → cross-encoder 重排 → 取最高分。
+
+    与 llm_rerank 的区别：不生成 token、只做一次前向，慢一个数量级都不止；
+    而且**模型缺失时会安静退回稠密排序**（不抛、不崩服务）。
+
+    分数是 sigmoid 后的相关性 [0,1] —— 有界，所以能像余弦一样扫阈值。
+    这一点优于 RRF：RRF 的融合分把弃权信号洗掉了（实测 abstain_accuracy 0.33）。"""
+    from app.rag import retriever
+    from app.rag.reranker import Reranker
+    rr = Reranker.get()
+    cached = (json.loads(CAND_DUMP.read_text(encoding="utf-8"))
+              if CAND_DUMP and CAND_DUMP.exists() else None)
+    out = []
+    for r in rows:
+        if cached is not None:                       # 从 dump 读，不碰 Ollama
+            cands = cached.get(f"{r['chunk_type']}	{r['query']}") or []
+            ids = [c[0] for c in cands]
+            texts = [c[1] for c in cands]
+            dense_score = cands[0][2] if cands else -1.0
+        else:
+            hits = retriever.vector_search(
+                store, emb.embed_one(r["query"]), "bge-m3", top_k=n,
+                chunk_types=(r["chunk_type"],), min_score=None)
+            ids = [h["source_ref"].get("id") for h in hits]
+            texts = [h["content"] for h in hits]
+            dense_score = hits[0]["score"] if hits else -1.0
+        if not ids:
+            out.append((r.get("expected"), None, -1.0))
+            continue
+        scores = rr.score(r["query"], texts) if rr else []
+        if scores:                                   # 正常：交叉编码器重排
+            bi = max(range(len(scores)), key=lambda i: scores[i])
+            out.append((r.get("expected"), ids[bi], scores[bi]))
+        else:                                        # 降级：退回稠密 top1
+            out.append((r.get("expected"), ids[0], dense_score))
+    return out
 
 
 # ---------------- 标注集 ----------------
@@ -203,6 +356,59 @@ def lexical_top1(store, rows: list[dict]) -> list[tuple]:
     return out
 
 
+def _rrf(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
+    """Reciprocal Rank Fusion：score = Σ 1/(k + rank)。
+
+    只用**排名**，不用分数——所以不必把 cosine（有界 0~1）与 BM25（无界）的尺度
+    对齐，这正是 RRF 存在的理由。k=60 取原论文（Cormack et al. 2009）默认值。
+
+    ⚠ 代价：融合分数对**无关 query 也恒有值**（每条路都会返回 top-N），所以它
+    没有"该弃权"的信息。RRF 的分数适合排序，不适合当门槛——门槛应继续用稠密的
+    余弦（见 hybrid_top1 的注释与 eval 报表里 threshold=0 那一列）。"""
+    agg: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, doc_id in enumerate(ranking):
+            if doc_id:
+                agg[doc_id] = agg.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(agg.items(), key=lambda kv: -kv[1])
+
+
+def _lex_index(store, chunk_type: str) -> LexIndex:
+    from exercise_repo import norm_zh
+    with store.conn() as c, c.cursor() as cur:
+        cur.execute("SELECT source_ref->>'id', content FROM "
+                    "fitness.embeddings WHERE chunk_type=%s", (chunk_type,))
+        return LexIndex([(i, norm_zh(x)) for i, x in cur.fetchall()])
+
+
+def hybrid_top1(store, emb, rows: list[dict], n: int = 10,
+                k: int = 60) -> list[tuple]:
+    """dense(top-N) + 字符 bigram BM25(top-N) 做 RRF 融合，取融合后的 top1。
+
+    两条路都取 **top-N** 再融合——只取 top1 没有融合可言。`n` 同时是"错块必须落在
+    池子里才可能被救回来"的上限，所以它是这个方案的关键旋钮。
+
+    返回的 score 是**融合分**（用于排序）。看排序质量请读报表里 threshold=0 那列；
+    看"该闭嘴时能不能闭嘴"要看稠密自己的余弦，融合分会把弃权信号洗掉。"""
+    from app.rag import retriever
+    from exercise_repo import expand_aliases, norm_zh
+    idx: dict[str, LexIndex] = {}
+    out = []
+    for r in rows:
+        t = r["chunk_type"]
+        if t not in idx:
+            idx[t] = _lex_index(store, t)
+        dense = [h["source_ref"].get("id") for h in retriever.vector_search(
+            store, emb.embed_one(r["query"]), "bge-m3", top_k=n,
+            chunk_types=(t,), min_score=None)]
+        lex = [i for i, _ in idx[t].ranked(
+            norm_zh(expand_aliases(r["query"])), n)]
+        fused = _rrf([dense, lex], k)
+        rid, s = fused[0] if fused else (None, -1.0)
+        out.append((r.get("expected"), rid, s))
+    return out
+
+
 def abstain_top1(rows: list[dict]) -> list[tuple]:
     return [(r.get("expected"), None, -1.0) for r in rows]
 
@@ -239,11 +445,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--emit", action="store_true")
     ap.add_argument("--retriever", default="all",
-                    choices=["all", "dense", "lexical", "abstain", "random"])
+                    choices=["all", "dense", "lexical", "hybrid", "ce_rerank",
+                             "llm_rerank", "abstain", "random"])
     ap.add_argument("--chunk-type", default=None)
     ap.add_argument("--split", type=float, default=0.0,
                     help="留出比例：dev 上选阈值，报 test 成绩（0 = 不分，阈值即在报告集上选，偏乐观）")
     ap.add_argument("--grid", default=None, help="逗号分隔阈值，覆盖自动网格")
+    ap.add_argument("--dump", default=None,
+                    help="把稠密 top-N 候选落盘到此路径后退出（两段式第一步）")
+    ap.add_argument("--cands", default=None,
+                    help="从该 dump 读候选，不再调用 Ollama（两段式第二步）")
     args = ap.parse_args()
 
     if args.emit:
@@ -256,10 +467,19 @@ def main() -> None:
         print("标注集为空。先跑 --emit，并补齐人工负样本。")
         sys.exit(1)
 
+    global CAND_DUMP
+    if args.cands:
+        CAND_DUMP = Path(args.cands)
+        print(f"候选来自 dump: {CAND_DUMP}（本阶段不碰 Ollama）")
+
     from app.rag.store import PgStore
     from app.rag.embedder import OllamaEmbedder
     store, emb = PgStore(), OllamaEmbedder()
-    if not emb.healthy():
+    if args.dump:
+        dump_candidates(store, emb, labels, 5, Path(args.dump))
+        print(f"已 dump 稠密 top-5 -> {args.dump}（两段式第一步完成）")
+        return
+    if CAND_DUMP is None and not emb.healthy():
         print("[FAIL] Ollama 不可达 —— 评估**不能**静默降级成 skip，否则报告会假绿")
         sys.exit(2)
 
@@ -289,8 +509,8 @@ def main() -> None:
     n_pos = sum(1 for r in test if r.get("expected"))
     print(f"标注集 {len(labels)} 条（正 {n_pos} / 负 {len(test) - n_pos}）\n")
 
-    names = (["dense", "lexical", "abstain", "random"] if args.retriever == "all"
-             else [args.retriever])
+    names = (["dense", "lexical", "hybrid", "abstain", "random"]
+             if args.retriever == "all" else [args.retriever])
 
     for name in names:
         if name == "abstain":
@@ -313,11 +533,25 @@ def main() -> None:
 
         if name == "dense":
             dev_t1, test_t1 = dense_top1(store, emb, dev), dense_top1(store, emb, test)
+        elif name == "hybrid":
+            dev_t1 = hybrid_top1(store, emb, dev)
+            test_t1 = hybrid_top1(store, emb, test)
+        elif name == "llm_rerank":
+            dev_t1 = llm_rerank_top1(store, emb, dev)
+            test_t1 = llm_rerank_top1(store, emb, test)
+        elif name == "ce_rerank":
+            dev_t1 = ce_rerank_top1(store, emb, dev)
+            test_t1 = ce_rerank_top1(store, emb, test)
         else:
             dev_t1, test_t1 = lexical_top1(store, dev), lexical_top1(store, test)
 
-        grid = ([float(x) for x in args.grid.split(",")] if args.grid
-                else auto_grid([s for _, _, s in dev_t1 if s >= 0]))
+        if args.grid:
+            grid = [float(x) for x in args.grid.split(",")]
+        elif name == "llm_rerank":
+            # 分数只编码"选没选"（选中=1.0 / 弃权=-1.0），没有连续尺度可扫
+            grid = [-1.0, 0.0]
+        else:
+            grid = auto_grid([s for _, _, s in dev_t1 if s >= 0])
 
         # 阈值在 dev 上选，按 accuracy。
         # 不要用"precision 优先、再比 recall"——precision 对阈值单调不减，那个规则会把

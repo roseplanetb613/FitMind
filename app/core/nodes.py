@@ -320,34 +320,37 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
             # 兜底仍然保留：search_zh("完腿") == [] → 落回 recommend(quadriceps)，
             # 与调换前逐字一致（那条路径的实测依据见下方 recommend 的说明）。
             if raw:
-                cands = ex.search_zh(raw, limit=MAX_CLARIFY_OPTIONS * 2)
+                cands = ex.search_zh(raw, limit=CLARIFY_CANDIDATE_POOL)
+            if not cands and raw:
+                # **LLM 归一化兜底（对齐 qa/teach 的空结果路径）**：raw 抽段后
+                # 可能有残渣（「一下倒蹬机」），字面检索必空——LLM 改写成库内
+                # 标准说法（「腿举」）再检；有候选 → 照常出选项框（消歧节点
+                # 本来就是"问一下用户"，比回"没找到"多救回一路）。
+                # Normalizer.attempt 会把改写写回图谱别名，下次直接字面命中。
+                try:
+                    from app.core.normalize import Normalizer
+                    from app.core.llm import build_provider
+                    adopted, hits2 = Normalizer(build_provider()).attempt(
+                        None, raw, "exercise",
+                        lambda q: ex.search_zh(q, limit=CLARIFY_CANDIDATE_POOL))
+                    if adopted:
+                        cands = list(hits2)
+                except Exception:
+                    cands = cands or []
             if not cands and muscle:
                 # **用 recommend 而不是 filter。** filter 会把该肌群的**全部**
                 # 205 条按文件顺序倒出来，头几条是"分臂 绕环 触趾"这类热身/拉伸；
                 # recommend 是既有的推荐口径（主目标优先、去变体重复、难度递进），
                 # 3D 视图的"点肌肉看推荐"用的也是它 —— 两处同源，口径不会分家。
                 # 多取一倍，留给下面的偏好重排。
-                cands = ex.recommend(muscle, count=MAX_CLARIFY_OPTIONS * 2)["recommendations"]
+                cands = ex.recommend(muscle, count=CLARIFY_CANDIDATE_POOL)["recommendations"]
             # 都没有 → **不给选项，只问**（编一组不相干的动作比空着更糟）
         except Exception:
             cands = []
 
-        # 常练的排前面：用户第二次遇到就不用翻了。
-        # 排序只在这一处做（前端不再排），避免两边口径不一致。
-        recent: dict = {}
-        try:
-            store = MemoryStore.get()
-            if store is not None:
-                recent = store.recent_exercises(uid, days=30)
-        except Exception:
-            recent = {}
-        cands.sort(key=lambda c: -recent.get(str(c.get("id")), 0))
-
-        options = [{"id": c.get("id"), "name_zh": c.get("name_zh"),
-                    "equipment": c.get("normalized_equipment"),
-                    "difficulty": c.get("difficulty"),
-                    "recent_count": recent.get(str(c.get("id")), 0)}
-                   for c in cands[:MAX_CLARIFY_OPTIONS]]
+        # 组装（含"常练的排前面"的排序）只在 clarify_options 那一处 ——
+        # 与 /v1/checkin/resolve 的 need_pick 分支共用同一份字段集。
+        options = build_clarify_options(cands, uid)
 
         where = f"「{raw}」" if raw else "这个动作"
         # 措辞按 kind 分：偏好问的是"你要避开的/你偏好的**是哪一个**"，

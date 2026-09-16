@@ -527,6 +527,11 @@ def _event(text: str) -> dict | None:
             continue
         m = _SETS_RE.search(part)
         namepart = _SETS_RE.sub("", part).strip(" 的了。")
+        # 量词残留（2026-09-16）：「练了一下倒蹬机」split("练了")[-1] = "一下倒蹬机"
+        # —— strip 字符集不能加「下」（会误伤「下斜卧推」这类真名），用 startswith
+        # 精确剥「一下」量词前缀，否则「腿举」这个真检索键被「一下」顶住必空。
+        if namepart.startswith("一下"):
+            namepart = namepart[2:].strip(" 的了。")
         if not namepart:
             # 纯组次段（"卧推 60kg 4x8" 里的 "4x8"）→ 挂到前一个**尚无组次**的条目上
             # （此前直接 continue → 组次静默丢失，实测该句式退化为 [{'raw':'卧推'}]

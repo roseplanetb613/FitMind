@@ -235,6 +235,13 @@ class LLMProvider(ABC):
         抽象基类默认降级：子类未实现 = 不可用（上层按 None 静默走原逻辑）。"""
         return None
 
+    def resolve_followup(self, text: str, history: list) -> dict | None:
+        """省略式追问判定（qa 检索为空时的兜底）：结合对话历史判断这句话
+        是不是在接着上文要东西，并给出主题对应的身体部位词。
+        返回 {"is_followup": bool, "part": str|None, "kind": str} 或 None（失败）。
+        抽象基类默认降级：子类未实现 = 不可用（上层按 None 静默走原逻辑）。"""
+        return None
+
 
 class StubProvider(LLMProvider):
     """规则实现：分类/计划/渲染全确定，供测试与无 LLM 环境。"""
@@ -753,6 +760,38 @@ class DeepSeekProvider(LLMProvider):
                     "confidence": float(data.get("confidence") or 0.0),
                     "evidence": ev,
                     "dropped": list(data.get("dropped") or [])}
+        except Exception:
+            return None
+
+    def resolve_followup(self, text: str, history: list) -> dict | None:
+        """省略式追问判定：结合历史判断这句话是不是接着上文要东西。
+        返回 {"is_followup","part","kind"} 或 None（任何失败——上层静默走原逻辑）。"""
+        self.calls.append("resolve_followup")
+        sys_p = (
+            "你是 FitMind 的对话上下文判定器。判断用户的这句话是不是「省略式追问」："
+            "单独看不知道在要什么，但结合最近的对话历史能确定（例如上一轮在聊练腿"
+            "动作，这句说「有没有更进阶的」「最难的是哪些」「再来几个」）。\n"
+            "只输出 JSON：{\"is_followup\": true/false, \"part\": \"部位词或null\", "
+            "\"kind\": \"advanced|hardest|easier|mid|more\"}。\n"
+            "约束：\n"
+            "1) part 只能从这些词里选（确定不了就填 null）：腿、肩、背、胸、臂、"
+            "手臂、胳膊、二头、三头、前臂、腹、腹肌、核心、腰、臀、髋、大腿、小腿、脚踝\n"
+            "2) 主题必须在**历史**里、且这句话是接着它往下要，才算追问；"
+            "这句话自己带了主题（如「推荐进阶的练背动作」）→ is_followup=false；"
+            "历史里找不到共同主题 → 也算 false\n"
+            "3) kind：advanced=要更难的/进阶的，hardest=要看最难的，"
+            "easier=要更简单的/初级的，mid=要中级/中等难度的，more=还要更多/再来几个")
+        hist = "\n".join(
+            f"{'用户' if isinstance(h, dict) and h.get('role') == 'user' else '教练'}: "
+            f"{h.get('text', '') if isinstance(h, dict) else ''}"
+            for h in (history or [])[-6:])
+        user = f"最近对话：\n{hist or '（无）'}\n\n用户这句话：{text}"
+        try:
+            data = self._invoke_json(sys_p, user, "is_followup",
+                                     llm=self._models["classify"])
+            return {"is_followup": bool(data.get("is_followup")),
+                    "part": data.get("part") or None,
+                    "kind": str(data.get("kind") or "")}
         except Exception:
             return None
 

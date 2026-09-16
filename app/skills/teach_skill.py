@@ -243,6 +243,14 @@ class TeachSkill(Skill):
                                provenance=["teach#scene_kb"])
         items = [_out_item(e) for e in self._search(query)]
         if not items:
+            # 词表没接住的省略式追问 → LLM 结合历史判断（qa/teach 共用第二层）。
+            # 「家里没器械还能怎么练腿」这类问法意图常落 teach，但它同样是
+            # "接着上文要动作"——词表与字面检索都够不着，交给 LLM 判定。
+            # 只在字面检索为空后调（正常路径零 LLM 成本）；失败静默走原逻辑。
+            from app.skills.qa_skill import QaSkill
+            fu = QaSkill()._followup_llm(ctx, _repo(), query)
+            if fu is not None:
+                return fu
             # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱 + audit 留痕
             try:
                 from app.core.llm import build_provider

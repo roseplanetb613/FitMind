@@ -184,7 +184,10 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
                              # 历史要带进技能层：省略式追问（"有没有更进阶的"）
                              # 只有靠上一轮说了什么才补得全 —— 技能拿不到历史就只能
                              # 拿这五个字去检索，必然为空。见 qa_skill._followup
-                             history=list(state.get("history") or [])),
+                             history=list(state.get("history") or []),
+                             # 同上，但要的是**结构**而不是文本：追问"最难的是哪些"
+                             # 得知道刚给过哪一档（文本读不回结构，只能猜）
+                             last_structured=state.get("last_structured") or None),
             profile=state.get("profile") or {}, mode=mode, skill_log=[])
 
     # ---------------- guard（无条件前置） ----------------

@@ -217,6 +217,31 @@ button.chat-exercise-media:hover { border-color: rgba(95, 212, 196, .5); }
    顺序由后端给（近 30 天练过的在前），前端只画。 */
 .chat-options { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
 .chat-options-hint { font-size: 11px; color: #9aa6b2; margin-bottom: 2px; }
+
+/* 一行 = 图示 + 动作按钮。**这是两个独立命中区**：点图是"看动图"，
+   点右边才是"就记这个"。合成一个按钮的话，想看图的人会顺手把训练记错。 */
+.chat-option-row { display: flex; align-items: center; gap: 8px; }
+.chat-option-row .chat-option { flex: 1; min-width: 0; }
+/* 名字和"器械 · 难度"错行；min-width:0 让长名字能省略而不是把行撑破 */
+.chat-option-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.chat-option-meta { font-size: 10px; color: #9aa6b2; }
+
+/* 图示：库里的 180×180 缩略图压到 44×44；点一下摊开成动图。
+   ⚠ **180px 是授权上限**，往后改样式也别越过去（见 NOTICE.md 的分辨率条款）。 */
+.chat-option-media {
+  flex: none; width: 44px; height: 44px; padding: 0; overflow: hidden;
+  display: block; border-radius: 8px; font: inherit;
+  background: rgba(0, 0, 0, .24);
+  border: 1px solid rgba(160, 240, 230, .18);
+}
+button.chat-option-media { cursor: zoom-in; }
+.chat-option-media.is-open { width: 180px; height: 180px; }
+button.chat-option-media:hover { border-color: rgba(95, 212, 196, .5); }
+.chat-option-img { width: 100%; height: 100%; display: block; object-fit: cover; }
+
+/* 素材署名。授权要求**每次使用都要带**，不是装饰 —— 别删（NOTICE.md）。 */
+.chat-options-credit { font-size: 10px; color: #6f7d86; }
+
 .chat-option {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
   text-align: left; cursor: pointer; font: inherit; font-size: 12px;

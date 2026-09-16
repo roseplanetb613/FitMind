@@ -474,19 +474,99 @@ class QaSkill(Skill):
         if muscle is None:
             return None
         try:
-            # **直接 filter 全量，不能用 recommend(count=N) 再排序** ——
-            # recommend 内部按"难度升序"凑数（先给简单的），count=8 时高难度
-            # 动作根本进不了候选，"更进阶"就变成"又来一遍最简单的"（首轮实测
-            # 正中此坑）。filter 拿到该肌群全部动作后自己按难度降序取。
             rows = ex.filter(muscle=muscle)
         except Exception:
             return None                       # 降级：交回原逻辑，不抛
-        # 排除拉伸/柔韧（同 recommend 的默认口径）：问"更进阶"问的是训练动作
-        rows = [r for r in rows if r.get("exercise_type") != "stretch_mobility"]
-        if not rows:
+        pool = self._pool(rows)
+        if not pool:
             return None
-        # 变体去重（family 优先，无 family 用小写名）—— 否则同一动作的 5 个变体
-        # 会把名额占满，用户看到的是"同一个动作的复制粘贴"
+        if level is not None:
+            return self._pick_level(ctx, pool, level, muscle)
+        return self._pick_harder(ctx, pool,
+                                 hardest=any(k in q for k in self._HARDEST_KW))
+
+    def _followup_llm(self, ctx, ex, query: str) -> SkillResult | None:
+        """词表没接住的省略式追问 → LLM 结合历史判断（**第二层兜底**）。
+
+        分层路由（用户口径）：词表只维护常用词（零成本、确定性高），词表 miss
+        时交给 LLM 覆盖长尾——「有没有适合女生的」「家里没器械练什么」这类说法
+        词表永远追不全，而它们与「有没有更进阶的」是同一件事。
+        三层护栏：
+          1. 只在**字面检索为空后**调用 —— 正常路径零额外 LLM 成本；
+          2. LLM 不可用 / 判定非追问 / 部位无效 → 返回 None 交回原逻辑，
+             那时回「没有找到」是诚实的；
+          3. 部位词经 `muscle_of` 收敛到 canonical 肌群，选取复用词表层的
+             `_pick_harder` / `_pick_level` —— **LLM 只出意图，动作仍由代码出**
+             （与 `guard` 的记忆交叉同一分工）。
+        """
+        try:
+            from app.core.llm import build_provider
+            verdict = build_provider().resolve_followup(
+                query, getattr(getattr(ctx, "session", None), "history", None))
+        except Exception:
+            return None
+        if not verdict or not verdict.get("is_followup"):
+            return None
+        part = verdict.get("part")
+        from lib.parts import muscle_of
+        muscle = muscle_of(part) if part else None
+        if muscle is None:
+            return None                        # 部位词不在表内 → 不猜
+        try:
+            pool = self._pool(ex.filter(muscle=muscle))
+        except Exception:
+            return None
+        if not pool:
+            return None
+        kind = verdict.get("kind") or "advanced"
+        # 判定留痕（学 Normalizer.attempt）：哪句话走了 LLM 兜底、判成什么，
+        # 出问题可回溯 —— 词表层命中天然可见（走哪条路），LLM 层不然。
+        if ctx is not None:
+            try:
+                ctx.skill_log.append({"event": "followup_llm",
+                                      "query": query, "part": part, "kind": kind})
+            except Exception:
+                pass
+        # 「再来几个/别的」与「更进阶」的检索口径一致：都是"该部位再来一批"，
+        # 难度降序保证优先给质量高的 —— 所以 more 与 advanced 同一条选取路。
+        if kind == "easier":
+            return self._pick_level(ctx, pool, 1, muscle)
+        if kind == "mid":
+            return self._pick_level(ctx, pool, 2, muscle)
+        return self._pick_harder(ctx, pool, hardest=(kind == "hardest"))
+
+    @classmethod
+    def _level_of(cls, q: str) -> int | None:
+        """难度档位词 → difficulty（1/2）；没提档位返回 None。
+
+        口径同样窄：只有**明确说出一档**才算。3（高级）不在此列 —— "高级/更进阶"
+        本来就走 `_FOLLOWUP_KW` 那条"按难度降序"的路，同一件事不开第二条实现。
+        """
+        for lv, words in cls._LEVEL_KW:
+            if any(w in q for w in words):
+                return lv
+        return None
+
+    @staticmethod
+    def _diff(r: dict) -> int:
+        try:
+            return int(r.get("difficulty") or 0)
+        except Exception:
+            return 0
+
+    @classmethod
+    def _pool(cls, rows: list[dict]) -> list[dict]:
+        """某肌群的候选池：去拉伸/柔韧 + 变体去重 + 难度降序。
+
+        **直接 filter 全量，不能用 recommend(count=N) 再排序** —— recommend 内部
+        按"难度升序"凑数（先给简单的），count=8 时高难度动作根本进不了候选，
+        "更进阶"就变成"又来一遍最简单的"（首轮实测正中此坑）。
+
+        变体去重（family 优先，无 family 用小写名）—— 否则同一动作的 5 个变体
+        会把名额占满，用户看到的是"同一个动作的复制粘贴"。
+        """
+        # 排除拉伸/柔韧（同 recommend 的默认口径）：问"更进阶/最难"问的是训练动作
+        rows = [r for r in rows if r.get("exercise_type") != "stretch_mobility"]
         seen, uniq = set(), []
         for r in rows:
             key = r.get("family") or str(r.get("name")).lower()
@@ -567,6 +647,12 @@ class QaSkill(Skill):
         matched = ex.search_zh(q, limit=5)
         items = [self._exercise_item(e) for e in matched]
         if not items:
+            # 词表没接住的省略式追问 → LLM 结合历史判断（第二层）。
+            # **只在字面检索为空后调**：正常路径零 LLM 成本，且"按字面查不到"
+            # 正是省略式追问的典型形态 —— 有主题的句子走不到这里。
+            fu = self._followup_llm(ctx, ex, query)
+            if fu is not None:
+                return fu
             # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱
             adopted, hits = self._normalize_fallback(
                 ctx, query, "exercise",

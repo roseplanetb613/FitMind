@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
 """定向核验：特定动作的分类 + 变体族 + 处方/MET 抽查"""
-import json, sys
+import json, os, sys
 from collections import Counter
 
-with open(r"e:\FitMind\exercises-dataset\data\exercise_metadata.json", encoding="utf-8") as f:
-    meta = {m["id"]: m for m in json.load(f)["exercises"]}
-with open(r"e:\FitMind\exercises-dataset\data\exercises.json", encoding="utf-8") as f:
-    raw = {e["id"]: e for e in json.load(f)}
-with open(r"e:\FitMind\exercises-dataset\data\variant_families.json", encoding="utf-8") as f:
-    fam = {x["family_id"]: x for x in json.load(f)["families"]}
+# 相对脚本定位 —— 原先写死了开发者本机的绝对路径（e:\FitMind\exercises-dataset\），
+# 数据包挪进 data/ 之后这个脚本就一直 FileNotFoundError，等于废了。
+DATA_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data"))
+_load = lambda name: json.load(open(os.path.join(DATA_DIR, name), encoding="utf-8"))
+
+meta = {m["id"]: m for m in _load("exercise_metadata.json")["exercises"]}
+raw = {e["id"]: e for e in _load("exercises.json")}
+fam = {x["family_id"]: x for x in _load("variant_families.json")["families"]}
 
 # 1. 定向核验
 targets = ["narrow stance squat", "sitted alternate", "butterfly", "twisting seated row",

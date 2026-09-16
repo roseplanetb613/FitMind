@@ -129,11 +129,20 @@ BEGINNER_KW = ["march", "step touch", "step touch", "bird dog", "dead bug", "glu
                "knee push-up", "knee push up", "wall push", "chair squat", "sit-to-stand", "modified",
                "plank", "walk", "jog", "step up", "calf raise", "stationary bike", "elliptical",
                "assisted", "scapula", "cat", "cow", "child's pose", "cobra", "march in place"]
-ADVANCED_KW = ["pistol", "muscle-up", "muscle up", "handstand", "pull-up", "pull up", "chin-up",
-               "chin up", "snatch", "clean and jerk", "clean & jerk", "hang clean", "thruster",
-               "jerk", "deficit", "ring", "planche", "l-sit", "l sit", "dragon flag", "iron cross",
-               "dip", "windmill", "front lever", "back lever", "human flag", "weighted",
-               "turkish get-up"]
+# 两档高门槛词（2026-09-15 从原单档 ADVANCED_KW 拆出）：
+#
+# ELITE +2 —— "能做出来本身就是水平"的技巧动作。front lever / muscle-up / 倒立
+# 是街头健身公认的高阶神技，与"普通引体"差着好几个台阶，+1 标不出差距
+# （实测 front lever 被标 2、与引体同档）。
+ELITE_KW = ["pistol", "muscle-up", "muscle up", "handstand", "planche",
+            "front lever", "back lever", "human flag", "iron cross",
+            "dragon flag", "l-sit", "l sit"]
+# ADVANCED +1 —— 做不好很正常、但新手也做不了的动作；以及负重/举重类变体。
+ADVANCED_KW = ["pull-up", "pull up", "chin-up", "chin up", "dip", "deficit",
+               "ring", "windmill", "thruster", "jerk", "snatch",
+               "clean and jerk", "clean & jerk", "hang clean", "clean and press",
+               "clean & press", "power clean", "weighted", "turkish get-up",
+               "body-up", "body up"]
 
 DIFFICULTY_BASE = {
     "barbell": 2, "olympic barbell": 2, "trap bar": 1, "ez barbell": 1, "dumbbell": 1,
@@ -144,6 +153,34 @@ DIFFICULTY_BASE = {
     "stationary bike": 1, "elliptical machine": 1, "stepmill machine": 1, "other": 1,
 }
 # body weight 下 高门槛徒手仍需要加档：pull-up/dip 等在 ADVANCED_KW +1
+
+# ---- 2026-09-15 通识增补 ----
+# 原规则产出 1036/241/47（78% beginner），实测把 bodyweight drop jump squat（跳深，
+# 高阶增强式）和 dumbbell burpee 都标成了新手档。缺的不是器械分，是下面这几类信号。
+#
+# 自由重量：被拿在手里的重物（区别于器械/绳索/自重）—— 轨迹要自己控制、配重要自己装卸。
+FREE_WEIGHT = ("barbell", "olympic barbell", "ez barbell", "trap bar", "dumbbell",
+               "kettlebell", "weighted", "hammer", "tire", "wheel roller",
+               "medicine ball")
+
+# 爆发/增强式 +2：发力与落地都需要专门技术，且是通识上受伤风险最高的一类。
+# 这一条的分歧度最小、原来的偏差最大，所以放最重的权重。
+EXPLOSIVE_KW = ["jump", "explosive", "plyo", "plyometric", "drop", "burpee",
+                "hop", "leap", "bounding", "clap"]
+
+# 旋转/对侧 +1：抗旋转与交叉发力对协调性的要求明显更高
+# （"dumbbell twisting bench press"、"dumbbell contralateral forward lunge" 原来都是 1 档）。
+# ⚠ kw() 是词边界匹配，"twist" 匹配不到 "twisting"，必须逐个列出变形。
+TWIST_KW = ["twist", "twisting", "contralateral", "rotational", "rotation"]
+
+# 不稳定面 +1：球面上做自由重量/自重，稳定需求翻倍
+# （"dumbbell incline press on exercise ball" 原来是 1 档）。
+UNSTABLE_KW = ["exercise ball", "stability ball", "swiss ball", "bosu", "balance ball"]
+
+# 站姿过头推举 +1：对核心抗伸与肩胛稳定的要求远高于坐姿靠背版
+# （"ez barbell anti gravity press" 原来是 1 档）。只对自由重量/自重生效——
+# 器械推举有靠背和轨道，不该跟着涨。
+OVERHEAD_KW = ["standing", "overhead", "anti gravity", "military"]
 
 # 关键词匹配：词边界 + 复数变体，避免 narrow/butterfly/squatting 等子串误杀
 def kw(text, keywords):
@@ -197,6 +234,23 @@ def difficulty_score(text, pattern, equipment, category):
     # 模式修正：hinge/squat 大重量复合默认 2 档
     if pattern in ("hinge", "squat") and eq in ("barbell", "olympic barbell", "weighted", "kettlebell"):
         d = max(d, 2)
+    # ---- 2026-09-15 通识增补（词表见 DIFFICULTY_BASE 下方的说明）----
+    if kw(t, ELITE_KW):
+        d += 2                          # 神技类：与普通高阶动作差着台阶
+    if kw(t, EXPLOSIVE_KW):
+        d += 2                          # 爆发/增强式：权重最重，原来的偏差也最大
+    # 下面三类是**修饰**（不稳定面/旋转对侧/站姿推举）：它们说明"需要有一定基础"，
+    # 但通识上到不了 advanced —— 3 档留给 ADVANCED_KW 与爆发类（跳深/倒立/俄挺）。
+    # 所以统一 max(d, 2) 抬到中级就封住，而不是逐个 +1 再顶穿（首版实测
+    # "dumbbell twisting bench press" 被顶到 3，旋转卧推显然不是 advanced）。
+    mods = (((eq in FREE_WEIGHT or eq == "body weight") and kw(t, UNSTABLE_KW))
+            or kw(t, TWIST_KW)
+            or (pattern == "push" and "press" in t and kw(t, OVERHEAD_KW)
+                and (eq in FREE_WEIGHT or eq == "body weight")))
+    if mods:
+        d = max(d, 2)
+    if is_compound(t, pattern) and eq in FREE_WEIGHT:
+        d = max(d, 2)                   # 自由重量 ∧ 复合：控轨迹 + 多关节协调
     # 显式人工覆盖（LLM 评审调整区，最高优先级）
     MANUAL_DIFF = {
         "weighted front raise": 2, "weighted standing curl": 2, "weighted crunch": 2,

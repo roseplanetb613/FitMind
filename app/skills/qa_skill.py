@@ -474,12 +474,26 @@ class QaSkill(Skill):
         if muscle is None:
             return None
         try:
-            recs = ex.recommend(muscle, count=8)
+            # **直接 filter 全量，不能用 recommend(count=N) 再排序** ——
+            # recommend 内部按"难度升序"凑数（先给简单的），count=8 时高难度
+            # 动作根本进不了候选，"更进阶"就变成"又来一遍最简单的"（首轮实测
+            # 正中此坑）。filter 拿到该肌群全部动作后自己按难度降序取。
+            rows = ex.filter(muscle=muscle)
         except Exception:
             return None                       # 降级：交回原逻辑，不抛
-        rows = recs.get("recommendations") or []
+        # 排除拉伸/柔韧（同 recommend 的默认口径）：问"更进阶"问的是训练动作
+        rows = [r for r in rows if r.get("exercise_type") != "stretch_mobility"]
         if not rows:
             return None
+        # 变体去重（family 优先，无 family 用小写名）—— 否则同一动作的 5 个变体
+        # 会把名额占满，用户看到的是"同一个动作的复制粘贴"
+        seen, uniq = set(), []
+        for r in rows:
+            key = r.get("family") or str(r.get("name")).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(r)
 
         def _diff(r: dict) -> int:
             try:
@@ -487,10 +501,7 @@ class QaSkill(Skill):
             except Exception:
                 return 0
 
-        # 问"更进阶"就是要难的 —— 按难度从高到低取，不做别的猜测。
-        # 难度会原样出现在卡片的器械/难度那一行（"弹力带 · 进阶"），
-        # 所以"库里最高只到新手档"这件事用户自己看得出来，不必另写一句话解释。
-        rows = sorted(rows, key=_diff, reverse=True)[:5]
+        rows = sorted(uniq, key=_diff, reverse=True)[:5]
         items = [self._exercise_item(r) for r in rows]
         return SkillResult(ok=True, data={"items": items},
                            provenance=[f"ex:{it['id']}" for it in items])

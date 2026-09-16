@@ -178,6 +178,14 @@ def build(store: PgStore | None = None, fill_embeddings: bool = True,
     if graph is not None:
         graph.clear_subgraph()
         _build_graph(graph, ex)
+        # 实体子图重建完成 → 把 clear_subgraph 快照下来的**跨区边**接回来
+        # （TARGETS / ABOUT_MUSCLE）。不接的话：用户的打卡与伤情本身都在个人域、
+        # 一条不少，但所有指向 Muscle 的边已被 DETACH DELETE 连带清掉 →
+        # 对话里问得出训练记录、3D 肌肉模型 28 块全显示"无记录"，且两处都不报错。
+        # getattr 兜底：调用方可以传只实现部分接口的假 graph。
+        _restore = getattr(graph, "restore_cross_links", None)
+        if callable(_restore):
+            _restore()
         graph_counts = graph.counts()
         graph_counts["graph_store"] = "neo4j"
 

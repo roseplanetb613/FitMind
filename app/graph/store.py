@@ -25,6 +25,23 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "graph_config
 # 实体子图标签 + rel 名（与 ingest 迁移保持一致：rel 小写）
 _ENTITY_LABELS = ("Exercise", "Muscle", "Equipment", "Pattern", "Condition", "Family")
 
+# 节点唯一键 —— **恢复跨区边时**用它重新定位两端（clear_subgraph 会连带删掉跨区边，
+# 重建实体子图后必须按属性键把边接回来，不能靠节点 identity）。
+# 键名与 merge_entity/merge_entities_batch 用的 key 一致（Exercise/Family 按 id，
+# 其余实体按 name）；个人域节点各自的 id 属性名见 memory.py 的写入侧。
+_NODE_KEYS = {
+    "Exercise": "id", "Family": "id",
+    "Muscle": "name", "Equipment": "name", "Pattern": "name", "Condition": "name",
+    "Event": "event_id", "StateFact": "fact_id", "PlanVersion": "plan_id",
+    "User": "user_id", "Food": "name",
+}
+
+# 跨区边白名单：**个人域 → 实体子图**。它们的远端不在 _ENTITY_LABELS 里，
+# 近端是实体节点，故 `DETACH DELETE` 掉实体端点会连带删除它们。
+# 用白名单（而不是照抄任何边）是为了恢复时能安全地把 rel 名拼进 Cypher。
+# ⚠ 新增跨区边时必须登记到这里，否则重建图谱时会被静默丢弃（_snapshot 只恢复白名单内的边）。
+_CROSS_RELS = ("TARGETS", "ABOUT_MUSCLE")
+
 # 同族替代的条数上限。词干族最大 49 人，即使语义正确（如 f003 'curl' 27 人全是
 # biceps），26 条"替代动作"也不是一份可用的清单。6 是"够挑几个换着练"的量级。
 _FAMILY_ALT_LIMIT = 6
@@ -66,6 +83,10 @@ class GraphStore:
         self._driver = GraphDatabase.driver(
             uri, auth=(user, password), connection_timeout=conn_timeout)
         self._schema_ready = False
+        # 跨区边快照：clear_subgraph 写、restore_cross_links 消费。
+        # 挂在实例上（GraphStore 是单例）——同一次 ingest 内 clear → 重建 → restore
+        # 时序固定，不需要持久化；真丢了还有 scripts/backfill_event_muscles.py 兜底。
+        self._pending_cross_links: list[dict] = []
         # W5：查询硬超时（graph_config.lookup_timeout_ms，默认 200ms），
         # 前置别名查询绝不拖慢主路径；Neo4j 秒级单位。
         try:
@@ -179,11 +200,84 @@ class GraphStore:
         with self._driver.session(database=self._database) as s:
             s.execute_write(_tx)
 
-    def clear_subgraph(self, source: str = "seed") -> None:
-        """幂等重建：只清实体子图（seed 重建），绝不动 llm_* 在线沉淀的别名子图。"""
+    def clear_subgraph(self, source: str = "seed") -> int:
+        """清实体子图（seed 幂等重建），**先快照跨区边、待重建后接回**。返回快照条数。
+
+        ⚠ 为什么必须快照（2026-09-16 实测事故，别删这段说明）：
+        `(Event)-[:TARGETS]->(Muscle)` 的起点 Event 在**个人域**（不在 _ENTITY_LABELS），
+        终点 Muscle 在实体子图。`DETACH DELETE` 掉 Muscle 会把这条边**一起删掉**，
+        而 Event 完好无损 —— 症状是"对话里问得出训练记录、3D 肌肉模型全显示无记录"，
+        且两处都不报错（3D 侧只是 28 项全 null，与"真没练过"完全同形，极难发现）。
+        同一机制还删 `(StateFact:injury)-[:ABOUT_MUSCLE]->(Muscle)`（伤情面板的
+        active_injury 因此恒为空）。
+
+        配对用法：`clear_subgraph()` → 重建实体子图 → `restore_cross_links()`。
+        漏了第三步时，下一次 clear_subgraph 会先自愈式补一次（见下方），但那只是
+        兜底，别依赖。绝不动 llm_* 在线沉淀的别名子图（沿用原语义）。
+        """
+        # 上次快照还没被恢复（调用方漏调 restore）→ 先尽力接一次再覆盖。否则这次
+        # 快照会把它顶掉，那批边就真没了。实体子图尚未重建时 MATCH 自然不中，
+        # 静默跳过即可（不抛）。
+        if self._pending_cross_links:
+            self.restore_cross_links()
         with self._driver.session(database=self._database) as s:
+            self._pending_cross_links = self._snapshot_cross_links(s)
             for lbl in _ENTITY_LABELS:
                 s.run(f"MATCH (n:{lbl}) DETACH DELETE n")
+        return len(self._pending_cross_links)
+
+    def _snapshot_cross_links(self, session) -> list[dict]:
+        """快照**恰好一端**落在实体子图里的边（即跨区边）。两端各记 label 与全部属性。
+
+        白名单外的跨区边也照样收下（恢复时才会拒）——这样返回值与恢复条数的差额
+        能暴露"有边没接回来"，比静默吞掉好。
+        """
+        ent = list(_ENTITY_LABELS)
+        out: list[dict] = []
+        for r in session.run(
+                "MATCH (a)-[r]->(b) "
+                "WHERE (ANY(l IN labels(a) WHERE l IN $ent)) <> "
+                "      (ANY(l IN labels(b) WHERE l IN $ent)) "
+                "RETURN labels(a) AS al, properties(a) AS ap, "
+                "       type(r) AS rt, properties(r) AS rp, "
+                "       labels(b) AS bl, properties(b) AS bp", ent=ent):
+            out.append({"al": list(r["al"]), "ap": dict(r["ap"]),
+                        "rt": str(r["rt"]), "rp": dict(r["rp"]),
+                        "bl": list(r["bl"]), "bp": dict(r["bp"])})
+        return out
+
+    def restore_cross_links(self) -> int:
+        """实体子图重建后调用：把快照的跨区边按**属性键**接回来。返回恢复条数。
+
+        MERGE 幂等；快照为空 → 0。任一端在当前图里找不到、rel 不在白名单
+        → 跳过该条（不抛、**不硬造节点**——硬造会污染图谱，与 memory.py 的
+        "MATCH 不中静默跳过"同一取向）。跳过的条数进 diag，可查而不响。
+        """
+        pending, self._pending_cross_links = self._pending_cross_links, []
+        if not pending:
+            return 0
+        ok = skipped = 0
+        with self._driver.session(database=self._database) as s:
+            for e in pending:
+                rel = e.get("rt")
+                la, ka = _node_label_key(e.get("al") or [])
+                lb, kb = _node_label_key(e.get("bl") or [])
+                va = (e.get("ap") or {}).get(ka) if ka else None
+                vb = (e.get("bp") or {}).get(kb) if kb else None
+                if rel not in _CROSS_RELS or not la or not lb \
+                        or va is None or vb is None:
+                    skipped += 1
+                    continue
+                _validate_label(la)
+                _validate_label(lb)
+                s.run(f"MATCH (a:{la} {{{ka}: $va}}), (b:{lb} {{{kb}: $vb}}) "
+                      f"MERGE (a)-[r:{rel}]->(b) SET r += $p",
+                      va=va, vb=vb, p=e.get("rp") or {})
+                ok += 1
+        if skipped:
+            from app.core import diag      # 局部导入：store.py 不依赖 app.core 其余部分
+            diag.bump("graph.cross_link_skipped", skipped)
+        return ok
 
     def counts(self) -> dict:
         """实体子图节点/边计数（别名子图不计入）。"""
@@ -394,6 +488,18 @@ def _validate_key(key: str, props: dict) -> None:
 def _prel(props: dict | None) -> dict:
     """边属性（merge_rel 用：无需剔除 key——key 值由调用方显式传参）。"""
     return dict(props or {})
+
+
+def _node_label_key(labels_: list[str]) -> tuple[str | None, str | None]:
+    """从 Neo4j `labels()` 里认出 (业务 label, 唯一键属性名)；认不出 → (None, None)。
+
+    返回 label **本身**（而不是取 labels()[0]）——labels 顺序不保证，直接取首个
+    会拿到 'Entity' 这类无名键的标签，恢复时 MATCH 必不中。
+    """
+    for lbl in labels_ or ():
+        if lbl in _NODE_KEYS:
+            return lbl, _NODE_KEYS[lbl]
+    return None, None
 
 
 def _kind_of(node) -> str:

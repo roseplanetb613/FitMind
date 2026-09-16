@@ -131,6 +131,30 @@ from datetime import datetime as _datetime, timezone as _timezone
 #
 # 注意最后一行：话题**刻意不含裸的"疼"/"痛"** —— 它们是自报症状的主力词。
 # 要覆盖"看下我哪疼"就收"哪疼/哪儿疼"这类带疑问的复合形式。
+def _load_rtp() -> dict:
+    """recovery_rtp.json → {id: 条目}。读盘失败返回 {}（康复参考是增量
+    建议，缺数据时查询照常、只是少一段——与全降级传统一致）。"""
+    try:
+        # ⚠ 三级 parent：本文件在 app/skills/，项目根是 parent.parent.parent
+        p = (_Path(__file__).resolve().parent.parent.parent / "data" /
+             "sports-medicine" / "data" / "recovery_rtp.json")
+        data = _json.loads(p.read_text(encoding="utf-8"))
+        return {c["id"]: c for c in data.get("conditions", [])}
+    except Exception:
+        return {}
+
+
+_RTP = _load_rtp()
+
+# 伤痛记录 → RTP 条目的匹配：**病名优先、部位次之**。
+# value（升级后可能是「肩周炎」）里含病名信号 → 精确到 rt06；
+# 否则按 about 部位词近似（「肩」→ 肩袖 rt05）——部位近似不是病名匹配，
+# 展示措辞必须带「通用口径，非诊断」。
+_VALUE_RTP_HINTS = (("肩周", "rt06"), ("冻结", "rt06"), ("粘连性", "rt06"))
+_PART_RTP = (("足底", "rt04"), ("肩周", "rt06"), ("冻结", "rt06"),
+             ("踝", "rt01"), ("脚踝", "rt01"), ("膝", "rt02"),
+             ("腘", "rt03"), ("腿后", "rt03"), ("肩", "rt05"))
+
 _INJURY_QUERY_TOPIC = ("伤", "病", "不适", "症状", "哪疼", "哪儿疼", "哪里疼",
                        "哪痛", "哪儿痛")
 _INJURY_QUERY_HINT = ("看下", "看看", "看一", "查看", "看我的", "看看我",
@@ -436,6 +460,11 @@ class GuardSkill(Skill):
                 return su
         return MEMORY_USER_ID
 
+    # 泛症状字：命中这些字的 SYMPTOMS 词条是「感受」而非病名——
+    # value 不用它们充当伤病名（「膝 · 疼」读起来像诊断，是错的）。
+    _GENERIC_SYMPTOM = ("疼", "痛", "酸", "胀", "麻", "晕", "不适", "难受",
+                        "无力", "发软", "紧", "绷", "抖")
+
     def _memory_record(self, signal: str, uid: str) -> None:
         """症状自报 → injury 记忆（部位抽取；抽不中宁缺毋滥）。
 
@@ -459,17 +488,26 @@ class GuardSkill(Skill):
             if m is None:
                 return
             site = extract_injury_site(signal)
-            sym_hit = any(k in signal for k in SYMPTOMS)
-            if not sym_hit:
-                # 词表 miss：部位抽到了也**先别记**——可能是训练意图。
-                # 交给 LLM 判定（第二层）；LLM 不可用/没把握 → 不写（保守：
-                # 误记的伤痛会错误拦截之后所有的训练安排，比漏记更糟）。
-                if site is None or not self._llm_injury_report(signal):
+            sym_hit = next((k for k in SYMPTOMS if k in signal), None)
+            value = "不适"
+            if sym_hit:
+                # 词表层：命中的**非泛症状词**就是伤病名（「肩周炎」），写进
+                # value 供病名匹配；泛症状（「疼」「酸」）是感受不是病名，保持
+                # 「不适」（「膝 · 疼」读起来像诊断，反而是错的）。
+                if not any(s in sym_hit for s in self._GENERIC_SYMPTOM):
+                    value = sym_hit
+            elif site is not None:
+                # 词表 miss 但抽出了部位：伤病陈述还是训练意图 → LLM 判定（第二层）
+                verdict = self._llm_injury_report(signal)
+                if not verdict.get("is_injury_report"):
                     return
+                value = verdict.get("injury_name") or "不适"
+            else:
+                return                             # 无症状词也无部位 → 与伤痛无关
             if site is None:
                 return
             zh, _key = site
-            m.upsert_state(uid, "injury", "不适", about=zh)
+            m.upsert_state(uid, "injury", value, about=zh)
             try:
                 m.link_injury_muscle(uid, zh)   # 伤痛挂肌肉（不中静默，T4）
             except Exception:
@@ -477,15 +515,17 @@ class GuardSkill(Skill):
         except Exception:
             diag.bump("guard.memory_record")    # 部位抽取/写入失败 → 可查
 
-    def _llm_injury_report(self, signal: str) -> bool:
+    def _llm_injury_report(self, signal: str) -> dict:
         """LLM 判定：这句话是不是在**报告/陈述自己的身体伤痛或疾病**。
-        返回 False = 不是/不可用/没把握（调用方据此不写，宁缺毋滥）。"""
+        返回 {"is_injury_report": bool, "injury_name": str|None}；
+        LLM 不可用/没把握 → {"is_injury_report": False}（调用方据此不写，
+        宁缺毋滥——误记的伤病会错误拦截训练）。"""
         try:
             from app.core.llm import build_provider
             verdict = build_provider().is_injury_report(signal)
-            return bool(verdict and verdict.get("is_injury_report"))
+            return verdict or {"is_injury_report": False, "injury_name": None}
         except Exception:
-            return False
+            return {"is_injury_report": False, "injury_name": None}
 
     def _injury_status(self, signal: str, m, uid: str) -> dict | None:
         """伤痛状态查询（只读）。返回 None = "这不是一次查询"，交回原规则链。
@@ -527,16 +567,23 @@ class GuardSkill(Skill):
                     "blocks": [],
                     "reply": "你目前没有伤痛记录。"}
 
-        def desc(r: dict, mark: str) -> str:
+        def desc(r: dict, mark: str, rtp: bool = False) -> str:
             part = str(r.get("about") or "未指明部位")
+            value = str(r.get("value") or "不适")
             since = _parse_ts(r.get("valid_from"))
             when = f"{since.month}月{since.day}日" if since else "之前"
-            return f"{part} · 不适（{when}记录{mark}）"
+            head = f"{part} · {value}（{when}记录{mark}）"
+            # 康复参考只给**有效期内**的伤病：过期该确认而非给康复计划
+            if rtp:
+                line = self._rtp_advice_line(r, value)
+                if line:
+                    head += f"\n  {line}"
+            return head
 
         def parts_of(rs: list) -> str:
             return "、".join(str(r.get("about") or "未指明部位") for r in rs)
 
-        lines = [desc(r, "") for r in active]
+        lines = [desc(r, "", rtp=True) for r in active]
         lines += [desc(r, "，已过期，待确认") for r in stale]
         advice = "\n".join(lines) + (
             "\n以上是你自己在对话里提到过的部位，不是诊断。"
@@ -550,6 +597,43 @@ class GuardSkill(Skill):
                      f"{parts_of(stale)}。")
         return {"blocked": True, "level_label": "伤痛记录",
                 "advice": advice, "blocks": [], "reply": reply}
+
+    @classmethod
+    def _rtp_for(cls, about: str, value: str) -> str | None:
+        """伤痛记录 → 康复阶梯条目 id。**病名优先、部位次之**：
+        value 含病名信号（「肩周炎」）精确到 rt06；否则 about 部位词近似
+        （「肩」→ 肩袖 rt05）。近似命中时展示措辞必须带「非诊断」。"""
+        v = value or ""
+        for hint, rid in _VALUE_RTP_HINTS:
+            if hint in v:
+                return rid
+        a = about or ""
+        for k, rid in _PART_RTP:
+            if k in a:
+                return rid
+        return None
+
+    def _rtp_advice_line(self, r: dict, value: str) -> str | None:
+        """按记录时间与 RTP 各阶段时长推算**当前阶段**，给一行康复参考。
+        超出参考期 / 无时长结构 → None（诚实缺省，不给编造的建议）。"""
+        rid = self._rtp_for(str(r.get("about") or ""), value)
+        entry = _RTP.get(rid) if rid else None
+        if not entry:
+            return None
+        rec = _parse_ts(r.get("recorded_at"))
+        stage = None
+        if rec is not None:
+            day = max(0, (_datetime.now(_timezone.utc) - rec).days)
+            for s in entry.get("stages") or []:
+                dd = s.get("duration_days") or [0, 10 ** 9]
+                if dd[0] <= day < dd[1]:
+                    stage = s
+                    break
+        if stage is None:
+            return None
+        avoid = "、".join((stage.get("avoid") or [])[:2])
+        head = f"康复参考（通用口径，非诊断）：{stage.get('phase', '')}"
+        return head + (f" —— 避免：{avoid}" if avoid else "")
 
     @staticmethod
     def _find_injury(m, uid: str, site_zh: str) -> dict | None:
@@ -595,7 +679,13 @@ class GuardSkill(Skill):
             residue = signal
             for k in _CNF_DONE:
                 residue = residue.replace(k, "")
-            if any(k in residue for k in SYMPTOMS):
+            # 残留检查只认「症状感受」（泛症状字）与急性异响/肿胀——
+            # ⚠ 不能用整个 SYMPTOMS：伤病名词（「肩周炎」——正是 close 的对象）
+            # 现在也在表里（2026-09-16 补），残留检查会把「我的肩周炎好了」
+            # 判成"还有残留症状"而永远 close 不了（实测）。
+            if any(k in residue for k in self._GENERIC_SYMPTOM) or \
+                    any(k in residue for k in _ACUTE_KW) or \
+                    any(k in residue for k in ("肿", "撕裂", "发炎")):
                 return None
         try:
             from app.graph.memory import extract_injury_site
@@ -671,6 +761,28 @@ class GuardSkill(Skill):
             pass
         return None
 
+    def _acute_map(self, m, uid: str) -> dict:
+        """急性期（RTP 第一阶段 duration_days 内）的伤痛 → {部位: (第几天, 共几天)}。
+
+        有 RTP 命中且记录时间落在**第一阶段**内才算急性——出第一阶段后回落到
+        既有 danger_patterns 行为（渐进回归，规格 §4.5）。无 RTP 覆盖的部位
+        不参与（诚实缺省：没有康复阶梯数据就不判定急性）。"""
+        out = {}
+        for r in m.current(uid, "injury"):
+            rid = self._rtp_for(str(r.get("about") or ""), str(r.get("value") or ""))
+            entry = _RTP.get(rid) if rid else None
+            stages = (entry or {}).get("stages") or []
+            if not stages:
+                continue
+            rec = _parse_ts(r.get("recorded_at"))
+            if rec is None:
+                continue
+            day = max(0, (_datetime.now(_timezone.utc) - rec).days)
+            first = stages[0].get("duration_days") or [0, 10 ** 9]
+            if day < first[1]:
+                out[str(r.get("about") or "?")] = (day + 1, first[1])
+        return out
+
     def _memory_intercept(self, signal: str, m, uid: str) -> dict | None:
         """主动禁忌交叉：未自报但记忆有 active injury + 计划/安排语境 →
         按请求动作模式 × 禁忌危险模式交叉（GD-04：膝不阻 push 卧推）；
@@ -700,6 +812,11 @@ class GuardSkill(Skill):
                     hits.append((entry["condition_zh"],
                                  entry["risk_level"],
                                  sorted(danger & req_pats)))
+            # 急性期（第一阶段 duration_days 内）→ **拦截面不变**（仍按
+            # danger_patterns 交集），只把急性期信息写进话术——GD-04 的部位
+            # 特异性不因急性期放宽：膝伤不影响卧推，那是既定设计。首版
+            # 「全模式回避」连卧推都拦（实测违反 GD-04），已撤销。
+            acute = {p: v for p, v in self._acute_map(m, uid).items() if p in inj}
             if not hits:
                 return None
             conds = "、".join(part for part in inj)

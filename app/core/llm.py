@@ -808,22 +808,30 @@ class DeepSeekProvider(LLMProvider):
             return None
 
     def is_injury_report(self, text: str) -> dict | None:
-        """伤痛陈述判定：报告自己的伤痛/疾病 → true；训练意图/动作询问 → false。"""
+        """伤痛陈述判定 + 顺便提取伤病名（「我有肩周炎」→「肩周炎」）。
+        返回 {"is_injury_report": bool, "injury_name": str|None}。"""
         self.calls.append("is_injury_report")
         sys_p = (
             "你是 FitMind 的健身对话判定器。判断用户的这句话是不是在"
-            "**报告/陈述自己的身体伤痛、疾病或不适**。\n"
-            "只输出 JSON：{\"is_injury_report\": true/false}。\n"
+            "**报告/陈述自己的身体伤痛、疾病或不适**，并顺手提取伤病名。\n"
+            "只输出 JSON：{\"is_injury_report\": true/false, "
+            "\"injury_name\": \"伤病名或null\"}。\n"
             "例：\n"
-            "- 「我有肩周炎」「膝盖半月板伤了」「腰最近不舒服」→ true（陈述伤病）\n"
-            "- 「我想练肩」「肩推怎么做」「帮我排个练背计划」→ false（训练意图/询问）\n"
-            "- 「肩膀疼还能练吗」→ true（报告不适并询问）\n"
-            "拿不准（反问/闲聊/语义模糊）→ false。")
+            "- 「我有肩周炎」→ {\"is_injury_report\": true, \"injury_name\": \"肩周炎\"}\n"
+            "- 「膝盖半月板伤了」→ {\"is_injury_report\": true, "
+            "\"injury_name\": \"半月板损伤\"}\n"
+            "- 「肩膀疼」→ {\"is_injury_report\": true, \"injury_name\": null}"
+            "（疼是感受不是病名）\n"
+            "- 「我想练肩」「肩推怎么做」→ {\"is_injury_report\": false, "
+            "\"injury_name\": null}（训练意图/询问）\n"
+            "拿不准（反问/闲聊/语义模糊）→ is_injury_report=false。")
         try:
             data = self._invoke_json(sys_p, f"用户这句话：{text}",
                                      "is_injury_report",
                                      llm=self._models["classify"])
-            return {"is_injury_report": bool(data.get("is_injury_report"))}
+            name = data.get("injury_name")
+            return {"is_injury_report": bool(data.get("is_injury_report")),
+                    "injury_name": (str(name).strip() or None) if name else None}
         except Exception:
             return None
 

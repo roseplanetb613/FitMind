@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """渲染叶子工具：训练计划天级行单源（nodes._render_fallback 与
-llm.StubProvider.render 共用——LLM 失败兜底与无 key/断网路径输出一致）。"""
+llm.StubProvider.render 共用——LLM 失败兜底与无 key/断网路径输出一致）；
+另含**卡片顺序与正文绑定**（bind_items_to_reply）。"""
 from __future__ import annotations
+import re
 
 # data 里的**人类可读文本载荷**键（顺序即输出顺序）。
 # 不取 reason/status：那是机器字段（"no history"/"hold"），透出去等于把实现细节
@@ -113,3 +115,118 @@ def training_lines(d: dict) -> list[str]:
     if d.get("fatigue_note"):
         lines.append(str(d["fatigue_note"]))
     return lines
+
+
+# ---------------------------------------------------------------- 卡片顺序 ↔ 正文
+# 2026-09-16 用户报「卡片和文字对应不上 跟文字绑定吧」。
+#
+# 现象（四轮追问链路的第 2 轮，"有更进阶的吗"）：正文按
+#     杠铃翻举推举 → 杠铃跳跃深蹲 → 杠铃深蹲跳步后弓步 → 后跳 → 分腿跳
+# 逐条讲，卡片却按 data.items 原序摆成
+#     分腿跳（男）→ 后跳 → 杠铃翻举推举 → 杠铃跳跃深蹲 → 杠铃深蹲跳步后弓步
+# ——同一批 5 个动作，两个顺序全拧；组次/休息写得都对，用户就是认不出
+# "哪句话说的是哪张卡"。
+#
+# 根因是**同一批动作被排了两次序**，两次互不通气：
+#   · 卡片：前端 `renderExerciseCards` 直接遍历 `structured.data.items`
+#     （qa_skill._pick_harder 按难度降序取的前 5 条）；
+#   · 正文：llm.render 把 structured 丢给 LLM，语序是 LLM 自己组织的
+#     （渲染提示词规则 1-11 里**没有一条**约束枚举顺序）。
+#
+# 修法：**卡片跟正文**（用户口径"跟文字绑定"）。之所以不反过来去约束 LLM 语序：
+# 提示词约束在本仓库反复被证明不可靠（见 nodes 渲染后置护栏一段的历次实测），
+# 而重排是纯确定性计算，永远生效。提示词侧另加一句"按 data.items 顺序介绍"
+# （llm.render 规则 12），让常见情况下这次重排退化成恒等操作 —— 卡片于是维持
+# "难度降序"这个对用户有意义的顺序，而不是被 LLM 的临时语序牵着走。
+
+# 变体后缀："分腿跳 （男）" / "单腿 深蹲 (手枪) 男"。正文只会说"分腿跳"，
+# 拿全名去匹配必然对不上 → 整批判成"未提及"、顺序纹丝不动（等于本函数没生效）。
+_SUFFIX_RE = re.compile(r"[（(]")
+
+
+def _norm_name(s: str) -> str:
+    """名字比对归一（去空格+小写）。单源在 `lib.exercise_repo.norm_zh`——
+    此处**不得**另写一份（该模块已因"裸子串比对"出过两次同类缺陷，见 `same_name`）。"""
+    try:
+        from lib.exercise_repo import norm_zh
+        return norm_zh(s)
+    except Exception:                      # lib 不在 sys.path（异常环境）→ 最小降级
+        return "".join((s or "").split()).lower()
+
+
+def _name_keys(name: str) -> list[str]:
+    """条目名 → 匹配键（长名在前）：全名 + 去括号后缀的短名。"""
+    full = _norm_name(name)
+    keys = [full] if full else []
+    base = _norm_name(_SUFFIX_RE.split(name, maxsplit=1)[0])
+    if base and base != full:
+        keys.append(base)
+    return keys
+
+
+def _mention_order(text: str, keys: list[list[str]]) -> list[int]:
+    """正文里**点名次序** → 条目下标列表（只含被点到的）。
+
+    从左到右逐位置认领**最长**匹配，不是"每个名字各查一次首次出现位置"：
+    后者会让短名命中长名内部（卡片里「深蹲」与「杠铃 深蹲」并存时，「深蹲」会
+    抢走「杠铃深蹲」那个位置），批次顺序随即错乱。
+    """
+    out: list[int] = []
+    taken: set[int] = set()
+    pos = 0
+    while pos < len(text):
+        best, best_len = -1, 0
+        for i, cands in enumerate(keys):
+            if i in taken:
+                continue
+            for k in cands:
+                if k and len(k) > best_len and text.startswith(k, pos):
+                    best, best_len = i, len(k)
+        if best < 0:
+            pos += 1
+            continue
+        taken.add(best)
+        out.append(best)
+        pos += best_len
+    return out
+
+
+def bind_items_to_reply(structured: dict, reply: str) -> int:
+    """把动作卡片重排成**正文点名的先后顺序**（原地改 structured）。
+
+    返回参与排序的卡片数；0 = 没动（无 items / 非动作卡片 / 正文一个都没点到）。
+
+    **适用面刻意窄**：只在条目带 `id` + `name_zh`（= 动作卡片，`qa._exercise_item`
+    的形状）时动手。档案/记忆条目是 `{name, value}` 对、食物条目带 per_100g ——
+    它们的"顺序"没有正文语序可言（档案项本就是一排字段），重排只会制造无谓抖动。
+
+    非动作条目（如 `qa._rag_science` 追加在末尾的知识块）**原地不动**：只把动作
+    卡片在它们自己占的槽位之间重排，别的东西一个不挪。
+
+    正文没点到的卡片（LLM 漏讲/换了说法）保留原有相对次序，排在点名过的后面 ——
+    不丢弃：数据在、只是正文没提，用户仍该看得见（丢卡会变成"答少了"）。
+    """
+    data = (structured or {}).get("data")
+    items = (data or {}).get("items")
+    if not isinstance(items, list) or len(items) < 2:
+        return 0
+    slots = [i for i, it in enumerate(items)
+             if isinstance(it, dict) and it.get("id") and it.get("name_zh")]
+    if len(slots) < 2:
+        return 0
+    keys = [_name_keys(str(items[i]["name_zh"])) for i in slots]
+    if not any(keys):
+        return 0
+    order = _mention_order(_norm_name(reply or ""), keys)
+    if not order:
+        return 0                       # 正文没点名 → 无从排起，保持原样
+    mentioned = [slots[j] for j in order]
+    rest = [i for i in slots if i not in set(mentioned)]
+    seq = mentioned + rest
+    if seq == slots:
+        return 0
+    # 先取副本再回写：槽位只占动作卡片那几个，非动作条目原地不动
+    ordered = [items[i] for i in seq]
+    for slot, it in zip(slots, ordered):
+        items[slot] = it
+    return len(slots)

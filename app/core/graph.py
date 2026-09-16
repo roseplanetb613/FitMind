@@ -13,6 +13,10 @@ class FitMindState(TypedDict, total=False):
     message: str
     profile: dict
     history: list                         # 最近对话轮（agent.run 注入，classify 上下文消解用）
+    last_structured: dict                 # 上一轮结果的结构化留档（agent.run 注入，
+                                          # nodes._ctx 消费）：会话只存渲染后的文本，
+                                          # 而"刚才那批是什么档位"只能从结构里读
+                                          # —— 见 qa_skill._followup
     intent: dict                      # task_type/params/raw_text/complexity
     mode_used: str                    # guard/direct/react/plan_exec/rewoo
     blocked: bool                     # guard 短路标记

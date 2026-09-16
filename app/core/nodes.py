@@ -6,6 +6,7 @@ import json
 import re
 from datetime import date, timedelta
 from app.core import progress
+from app.core.clarify_options import CLARIFY_CANDIDATE_POOL, build_clarify_options
 from app.core.render_util import (empty_result_lines, item_lines,
                                   payload_lines, training_lines)
 from app.core.router import Mode, RouteClassifier, route
@@ -14,9 +15,8 @@ from app.runtime.validator import RuleValidator
 
 MAX_STEPS = 4
 MAX_PLAN = 4
-# 消歧选择框给几个动作。**3 个**（用户定）：再多就不如直接自己打字了，
-# 所以下面还配了一个自定义输入口 —— 三个候选 + 一个"都不是，我自己写"。
-MAX_CLARIFY_OPTIONS = 3
+# 消歧选择框的条数与字段组装见 `app/core/clarify_options.py` —— 那一处同时供
+# `/v1/checkin/resolve` 的 need_pick 分支用，**不要在这里再拼一份**。
 
 # 上下文消解：肯定应答精确匹配集（剥标点后整词比对，防"好吗/行动"类子串误伤）
 # 2026-09-11 补选择式应答（"就这个计划"）：此前只认 确认/好的 等短应答，
@@ -274,7 +274,6 @@ def build_nodes(registry, llm, classifier=None, validator=None) -> dict:
         模糊匹配，猜不出来只会编；而编错的训练记录会直接污染恢复度计算。
         让用户点一下，既准确又顺手把偏好攒下来。
         """
-        from app.graph.memory import MemoryStore
         from lib.parts import PART_CHARS, PART_WORDS
         from lib.parts import muscle_of as _muscle_of
         from app.runtime.repos import exercise_repo

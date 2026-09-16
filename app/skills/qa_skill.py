@@ -451,6 +451,22 @@ class QaSkill(Skill):
                     "还有没有", "还有其它", "还有其他", "再来几个", "再来点",
                     "再来一些", "多来几个", "换几个", "其他的呢", "别的呢")
 
+    # 同一类省略式追问的**难度问法**（2026-09-16 用户报的截图链路）：
+    #   「最难的是哪些」→ 该部位最难的一批
+    #   「没有中级的吗」→ 换一档
+    # 这两句单拿去检索同样必然为空（实测回"没有找到相关内容"），可意思再清楚不过：
+    # 问的是"在刚才那批上换一档难度"，不是另开一个话题。
+    _HARDEST_KW = ("最难", "最难的")
+    _LEVEL_KW = ((1, ("初级", "新手", "入门", "零基础", "简单点", "简单一点",
+                      "最简单的", "最容易")),
+                 (2, ("中级", "中等难度", "中难度")))
+    # 档位的中文名。⚠ **与前端 `web/src/data/exercises.ts` 的 DIFFICULTY_ZH 是一对**
+    # （库内 `difficulty_label` 存的是英文 beginner/intermediate/advanced，中文名
+    # 只有前端有一份）。用户口语说"中级"、卡片上却写"进阶"——这层差异要在答话里
+    # 点出来，否则标签看着像答错了档。
+    _DIFF_ZH = {1: "新手", 2: "进阶", 3: "高级"}
+    _LEVEL_WORD = {1: "初级", 2: "中级"}
+
     def _followup(self, ctx, ex, query: str) -> SkillResult | None:
         """省略式追问 → 用上一轮的主题补全再检索。返回 None = 不适用，交回原逻辑。
 
@@ -459,13 +475,20 @@ class QaSkill(Skill):
         可以换个关键词试试」。用户想说的是"在刚才那批的基础上要更难的"，
         系统却把两轮当成两件不相干的事。
 
+        追加（2026-09-16 用户报，同一条对话里接着问）：「最难的是哪些」
+        「没有中级的吗」—— 同样两句空话。它们问的不是主题，而是**在刚才那批上
+        换一档难度**，所以本函数除了主题还认难度意图（更难 / 最难 / 换到某一档）。
+
         **两个前提缺一不可**，否则宁可不接：
           · 这句**自己不带主题**。「推荐更进阶的练腿动作」自带部位，直接检索就行；
             走这条路反而会把它改写成"上一轮的主题"，那是错的。
           · 历史里**找得到主题**。找不到就交回原逻辑 —— 那时回"没有找到"是诚实的。
         """
         q = (query or "").strip()
-        if not any(k in q for k in self._FOLLOWUP_KW):
+        level = self._level_of(q)
+        if (level is None
+                and not any(k in q for k in self._FOLLOWUP_KW)
+                and not any(k in q for k in self._HARDEST_KW)):
             return None
         from lib.parts import PART_CHARS, PART_WORDS
         if any(c in q for c in PART_CHARS) or any(w in q for w in PART_WORDS):
@@ -574,17 +597,100 @@ class QaSkill(Skill):
                 continue
             seen.add(key)
             uniq.append(r)
+        return sorted(uniq, key=cls._diff, reverse=True)
 
-        def _diff(r: dict) -> int:
-            try:
-                return int(r.get("difficulty") or 0)
-            except Exception:
-                return 0
+    def _pick_harder(self, ctx, pool: list[dict], hardest: bool = False) -> SkillResult:
+        """「更进阶 / 最难的是哪些」→ 该部位难度最高的几条（降序）。
 
-        rows = sorted(uniq, key=_diff, reverse=True)[:5]
+        `hardest` 时额外对着**上一轮已给过的那批**说清关系（同一档 / 更高一档）。
+        这层信息只能来自 `session.last_structured`（会话只存渲染后的文本，读不回
+        结构）；取不到就**不提**上一轮 —— 宁可不提，也别提错档。
+        """
+        rows = pool[:5]
         items = [self._exercise_item(r) for r in rows]
-        return SkillResult(ok=True, data={"items": items},
+        data: dict = {"items": items}
+        if hardest:
+            top = self._diff(rows[0])          # 池已按难度降序，第一条就是最高档
+            shown = self._shown_max(ctx)
+            zh_top = self._DIFF_ZH.get(top)
+            if shown is not None and zh_top:   # 不知道刚给过什么 → 一句不多说
+                if shown == top:
+                    data["advice"] = (f"刚才那几条里最难的已经是「{zh_top}」这一档，"
+                                      f"库里没有更高的了。")
+                elif shown < top:
+                    data["advice"] = (
+                        f"刚才那几条最高是「{self._DIFF_ZH.get(shown, '')}」档，"
+                        f"最难的是「{zh_top}」档——给你换上。")
+                # shown > top：两批不是同一批动作（罕见），比无可比 → 不置一词
+        return SkillResult(ok=True, data=data,
                            provenance=[f"ex:{it['id']}" for it in items])
+
+    def _pick_level(self, ctx, pool: list[dict], level: int,
+                    muscle: str) -> SkillResult | None:
+        """「没有中级的吗」→ 该部位**这一档**的动作。该部位没有这一档 → None。
+
+        返回 None 而不是空卡片：原样检索落空时那句"没有找到相关内容"是诚实的，
+        比编一句"这块肌肉没有中级动作"稳妥 —— 后者得先把全库分档口径查清才敢说。
+
+        档内**按"主目标优先"排**（同 `exercise_repo.recommend` 的第二排序键）：
+        池子里同档的动作先按库内顺序排，第一条可能是"弹力带 仰卧 髋 内旋"这种
+        沾边但不像主课的；把"这块肌肉正是它的主目标"的排前面更贴题。
+        """
+        sel = [r for r in pool if self._diff(r) == level]
+        if not sel:
+            return None
+        sel.sort(key=lambda r: 0 if (r.get("muscles_canonical") or {}
+                                     ).get("target") == muscle else 1)
+        sel = sel[:5]
+        items = [self._exercise_item(r) for r in sel]
+        zh, word = self._DIFF_ZH.get(level, ""), self._LEVEL_WORD.get(level, "")
+        shown = self._shown_level(ctx)          # 只有整批同档才敢这么称呼
+        note = ""
+        if shown is not None and shown != level:
+            note = "刚才那批是更高一档的，" if shown > level else "刚才那批是更低一档的，"
+        note += f"换成{word}的给你"
+        if zh and zh != word:
+            # 用户说"中级"、卡片标签写"进阶"：不点出来，看着就像答错了档
+            note += f"——库里这一档标的是「{zh}」"
+        return SkillResult(ok=True, data={"items": items, "advice": note + "。"},
+                           provenance=[f"ex:{it['id']}" for it in items])
+
+    @staticmethod
+    def _shown_diffs(ctx) -> list[int]:
+        """上一轮卡片里**已经给用户看过**的难度档位。
+
+        来源 `session.last_structured`（`agent.run` 每轮写入）：会话里只存渲染后的
+        文本，读不回结构，没有它就只能靠猜。非动作卡片（无 difficulty）→ []。
+        """
+        st = getattr(getattr(ctx, "session", None), "last_structured", None)
+        out: list[int] = []
+        try:
+            for it in ((st or {}).get("data") or {}).get("items") or []:
+                if not isinstance(it, dict):
+                    continue
+                d = it.get("difficulty")
+                if d in (None, ""):
+                    continue
+                out.append(int(d))
+        except Exception:
+            return []
+        return out
+
+    @classmethod
+    def _shown_max(cls, ctx) -> int | None:
+        """上一轮那批里**最高**的档位；没有可比较的返回 None。"""
+        ds = cls._shown_diffs(ctx)
+        return max(ds) if ds else None
+
+    @classmethod
+    def _shown_level(cls, ctx) -> int | None:
+        """上一轮那批**整体**的档位；档位不齐（混着两档）返回 None。
+
+        与 `_shown_max` 分工：判"更高/更低"用 max 就够（比较式断言，混批也成立），
+        而"刚才那批是X档"是**整体**断言 —— 混批时这么说就是错的，故只在同档时返回。
+        """
+        ds = cls._shown_diffs(ctx)
+        return ds[0] if ds and len(set(ds)) == 1 else None
 
     @staticmethod
     def _last_topic(history) -> str | None:

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from app.core.graph import build_graph, build_structured
 from app.core.llm import LLMProvider
 from app.core.registry import SkillRegistry
+from app.core.render_util import bind_items_to_reply
 from app.core.router import RouteClassifier
 from app.core import diag                     # 降级可观测（静默失败可查）
 from app.core.session import Session, SessionManager
@@ -72,7 +73,9 @@ class Agent:
                     # 有没对上的动作 → classify 会把 mode 改成 clarify_exercise
                     "exercise_clarify": exercise_clarify,
                     # 最近 3 轮对话（classify 上下文消解："确认"承接上轮提议）
-                    "history": list(sess.history[-6:])}
+                    "history": list(sess.history[-6:]),
+                    # 上一轮结果的结构化留档（同上，省略式追问要读"刚才那批是哪一档"）
+                    "last_structured": sess.last_structured}
         if self._checkpointer is not None:
             thread = f"{sess.id}-{len(sess.history)}"   # 每轮独立 thread
             result = self.graph.invoke(
@@ -87,8 +90,17 @@ class Agent:
         if result.get("memory_ack"):      # API structured 与 render 节点同源透出
             structured["memory_ack"] = list(result["memory_ack"])
         reply = result.get("reply", "")
+        # 动作卡片顺序跟正文（2026-09-16 用户报「卡片和文字对应不上」）：卡片按
+        # items 原序渲染、正文语序由 LLM 自定，是同一批动作的两次排序；不绑的话
+        # 用户认不出哪句话配哪张卡。见 render_util.bind_items_to_reply。
+        bind_items_to_reply(structured, reply)
         sess.history.append({"role": "user", "text": message})
         sess.history.append({"role": "assistant", "text": reply})
+        # 上一轮结果的**结构化**留档（Session.last_structured 至此才有写点）。
+        # 会话里只存渲染后的文本，而省略式追问（"最难的是哪些""没有中级的吗"，
+        # 见 qa_skill._followup）要回读"刚才那批是什么档位"——读文本只能靠猜。
+        # 存的就是 return 出去的那一份，不再复制，免得两处漂。
+        sess.last_structured = structured
         return ChatResponse(session_id=sess.id, reply=reply,
                             structured=structured,
                             mode_used=result.get("mode_used", "direct"),

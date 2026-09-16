@@ -94,6 +94,18 @@ export interface StructuredOption {
   equipment?: string | null
   difficulty?: number | string | null
   recent_count?: number
+  /**
+   * 图示：**相对 `data/exercises-dataset/` 的路径**（如 `images/2355-uWpxD4v.jpg`），
+   * 渲染时拼 `/media` 前缀（见 `data/exercises.ts` 的 `mediaUrl`）。
+   *
+   * 为什么消歧非要带图：库里的中文名是**逐词翻译**（"摆臂 悬垂 直腿s"），
+   * 光看那几个词挑不出自己练的是哪一个 —— 图是这一步唯一可靠的信息。
+   *
+   * ⚠ 素材 © Gym visual，授权只到 180×180 且每次使用须带署名。
+   */
+  image?: string | null
+  /** 动图（180×180 GIF，约 100KB）。**缩略图点开才加载它** —— 列选项时别拉。 */
+  gif_url?: string | null
 }
 
 export interface StructuredItem {

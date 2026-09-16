@@ -8,6 +8,7 @@
  * 于是它能在 node 里被断言，而不是只能靠肉眼。
  */
 import type { Structured, StructuredItem, StructuredOption } from '../data/types'
+import { difficultyLabel, equipmentLabel, MEDIA_CREDIT, mediaUrl } from '../data/exercises'
 import { muscleIdInItem, stageText, type ChatMessage, type ChatState } from './chat-flow'
 import type { FoodCard } from '../data/vision'
 import type { VoiceStatus } from './voice-flow'
@@ -218,10 +219,98 @@ export function renderGuard(container: HTMLElement, guard: ChatMessage['guard'])
 }
 
 /**
+ * 一个选项的图示。返回是否画出了图（整组署名要靠它）。
+ *
+ * 三种情况分开处理，因为**能点的东西必须真的有点的反应**：
+ *   · 有图有动图 → 一个 button：点一下原地摊开成原始 180×180 的动图，再点收起
+ *   · 只有图     → 只画图，**不做成按钮**（点了没反应的按钮比没有按钮更糟）
+ *   · 没图       → 不画，也**不补占位**（占位框会被当成"图挂了"）
+ */
+function optionMedia(o: StructuredOption): HTMLElement | null {
+  const still = mediaUrl(o.image)
+  if (!still) return null
+  const gif = mediaUrl(o.gif_url)
+
+  const img = el('img', 'chat-option-img')
+  img.src = still
+  img.alt = o.name_zh
+  img.loading = 'lazy' // 3-4 个候选，不该一进对话就把图全拉了
+
+  if (!gif) {
+    const box = el('span', 'chat-option-media')
+    box.appendChild(img)
+    return box
+  }
+
+  const btn = el('button', 'chat-option-media')
+  btn.setAttribute('type', 'button')
+  // 命中区是**看图**，不是**选它** —— 读屏念出来要和右边那个按钮分得开
+  btn.setAttribute('aria-label', `看「${o.name_zh}」的动作动图`)
+  btn.setAttribute('aria-expanded', 'false')
+  btn.appendChild(img)
+  // 开合状态存在闭包里而不是读 classList：stub 的 classList 没有 contains，
+  // 读 className 又要处理空格 —— 闭包变量在两边语义都唯一。
+  let open = false
+  btn.addEventListener('click', () => {
+    open = !open
+    // 换 src 而不是叠两个 `<img>`：动图约 100KB，只有点开那一刻才下载
+    img.src = open ? gif : still
+    btn.classList.toggle('is-open', open)
+    btn.setAttribute('aria-expanded', String(open))
+  })
+  return btn
+}
+
+/**
+ * 器械 · 难度。两个都缺就**不画这一行** —— 写"未知"和"确实没有"读不出区别
+ * （本仓的数据诚实约定：缺值返回 None + 原因，不编一个填充值顶上）。
+ */
+function optionMeta(o: StructuredOption): string | null {
+  const parts = [equipmentLabel(o.equipment), difficultyLabel(o.difficulty)]
+    .filter((x): x is string => !!x)
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** 「就记这个」按钮。点它才是真的写一条训练/偏好。 */
+function optionButton(
+  o: StructuredOption,
+  onChoose?: (o: StructuredOption) => void,
+  chosenId?: string | null,
+): HTMLElement {
+  const btn = el('button', 'chat-option')
+  btn.setAttribute('type', 'button')
+
+  const text = el('span', 'chat-option-text')
+  text.appendChild(el('span', 'chat-option-name', o.name_zh))
+  const meta = optionMeta(o)
+  if (meta) text.appendChild(el('span', 'chat-option-meta', meta))
+  btn.appendChild(text)
+
+  // 练过的加角标：这正是"优先偏好动作"对用户可见的那一半
+  if (o.recent_count && o.recent_count > 0) {
+    btn.appendChild(el('span', 'chat-option-badge', `练过 ${o.recent_count} 次`))
+  }
+  // 已经点过 → 整组禁用：连点会重复补记同一次训练
+  if (chosenId) {
+    btn.disabled = true
+    btn.classList.add('is-chosen')
+    if (chosenId === o.id) btn.classList.add('is-picked')
+  } else if (onChoose) {
+    btn.addEventListener('click', () => onChoose(o))
+  }
+  return btn
+}
+
+/**
  * 消歧选项：让用户从**库内真实动作**里挑一个（human-in-the-loop）。
  *
  * 顺序由后端定（近 30 天练过的排前面）—— 前端**不再排**，否则同一个列表
  * 在两处有两条排序规则，迟早对不上。这里只负责画和把点击转出去。
+ *
+ * 每个选项是**两个独立命中区**：左边图（看动图）和右边按钮（就记这个）。
+ * 之所以不把图塞进按钮里：库里的中文名是逐词翻译（"摆臂 悬垂 直腿s"），
+ * 判断"我练的是不是这个"只能靠图 —— 而 `<button>` 套 `<button>` 是非法 HTML，
+ * 用兄弟节点才能既分开命中区、又让键盘和读屏各拿到各的。
  */
 export function renderOptions(
   container: HTMLElement,
@@ -239,24 +328,21 @@ export function renderOptions(
     box.appendChild(el('div', 'chat-options-hint', `「${raw}」对不上库里的动作，选一个：`))
   }
 
+  let hasMedia = false
   for (const o of options) {
-    const btn = el('button', 'chat-option')
-    btn.setAttribute('type', 'button')
-    btn.appendChild(el('span', 'chat-option-name', o.name_zh))
-    // 练过的加角标：这正是"优先偏好动作"对用户可见的那一半
-    if (o.recent_count && o.recent_count > 0) {
-      btn.appendChild(el('span', 'chat-option-badge', `练过 ${o.recent_count} 次`))
+    const row = el('div', 'chat-option-row')
+    const media = optionMedia(o)
+    if (media) {
+      hasMedia = true
+      row.appendChild(media)
     }
-    // 已经点过 → 整组禁用：连点会重复补记同一次训练
-    if (chosenId) {
-      btn.disabled = true
-      btn.classList.add('is-chosen')
-      if (chosenId === o.id) btn.classList.add('is-picked')
-    } else if (onChoose) {
-      btn.addEventListener('click', () => onChoose(o))
-    }
-    box.appendChild(btn)
+    row.appendChild(optionButton(o, onChoose, chosenId))
+    box.appendChild(row)
   }
+
+  // 署名紧跟在图后面。授权要求每次使用都带（见 data/exercises-dataset/NOTICE.md），
+  // 所以它挂在**画了图**的那一组下面，没图的一组不挂。
+  if (hasMedia) box.appendChild(el('div', 'chat-options-credit', MEDIA_CREDIT))
 
   // 候选都不是 → 自己打一个。**只在没选过时出现**：选完还留着输入框，
   // 看着像还能再记一次，而补记守卫已经把这组锁住了。

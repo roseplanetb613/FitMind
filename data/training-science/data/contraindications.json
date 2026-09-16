@@ -155,6 +155,29 @@
       ],
       "source": "ACSM 心血管患者运动指南【起草待审】",
       "exercise_map": []
+    },
+    {
+      "id": "cn07",
+      "condition_zh": "肩周炎/冻结肩（急性疼痛期）",
+      "condition_en": "Frozen shoulder / adhesive capsulitis (painful phase)",
+      "risk_level": "yellow",
+      "danger_patterns": [
+        "push"
+      ],
+      "danger_notes": "急性疼痛期避免外展、外旋末端与过顶推举；痛域外强行推拉会加重关节囊粘连",
+      "safe_prescriptions": [
+        "无痛范围内钟摆/爬墙渐进",
+        "轻柔外旋拉伸",
+        "胸椎活动度",
+        "疼痛缓解后渐进负重"
+      ],
+      "alternatives": [
+        "pendulum",
+        "wall crawl",
+        "band external rotation"
+      ],
+      "source": "冻结肩（肩周炎）康复阶梯【起草待审】",
+      "exercise_map": []
     }
   ]
 }

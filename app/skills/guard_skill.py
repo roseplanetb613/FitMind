@@ -108,6 +108,8 @@ def _normalize_signal(text: str) -> str:
 # ---- D4 2026B 数值红线（心率/睡眠/脱水阈值）----
 import re as _re
 from datetime import datetime as _datetime, timezone as _timezone
+import json as _json
+from pathlib import Path as _Path
 
 # ---- 伤痛状态查询（只读）----
 # 用户主动查"我记过什么伤"。
@@ -476,6 +478,10 @@ class GuardSkill(Skill):
         之所以不能把门直接放宽到"抽出部位就记"：部位词全表无差别命中会把
         「我想练肩」记成「肩不适」，之后排训练会被自己的假伤病拦住。
 
+        **value 升级（2026-09-16）**：伤病名可得时写进 value（「肩周炎」），
+        供后续按病名匹配康复阶梯/禁忌；泛症状字（疼/痛/酸…）命中的保持
+        「不适」——「疼」是感受不是病名，写进 value 读起来像诊断。
+
         ⚠ 降级方向是"不写"，但**失败必须留痕**（2026-09-13）：原先整段
         `except Exception: pass`，实测 `extract_injury_site("我手肘疼")` 抛
         KeyError（部位表键集漂移）被吞得干干净净 —— guard 照回黄色警告、
@@ -791,6 +797,11 @@ class GuardSkill(Skill):
         try:
             if not any(k in signal for k in _PLAN_SIGNAL):
                 return None
+            # 管理/删除语境（2026-09-16 用户实测「删掉所有训练计划」被拦）：
+            # 含「计划」但它不是训练安排，是在管理既有计划——风险提示挡住
+            # 一个删除操作，交互上等于系统在答非所问。
+            if any(k in signal for k in ("删掉", "删除", "清空", "作废")):
+                return None
             inj = m.current_about(uid, "injury")      # 未过期 active
             if not inj:
                 return None
@@ -830,10 +841,18 @@ class GuardSkill(Skill):
             # 这既是越界的话术也是吓人的（凭空被告知有椎间盘突出）。
             # 病名继续留在 structured 的 blocks 里（机器消费：模式封堵、分级），
             # 只是不再念给用户。要解释"为什么拦"就讲负荷关系，不讲病。
+            # 急性期的伤放在话术最前并给出天数——同样的拦截，"刚伤 1 天"与
+            # "1 个月前提过"的严肃程度完全不同，天数是用户判断的依据。
+            acute_note = ""
+            if acute:
+                detail = "；".join(f"{p}（第 {d} 天/共 {t} 天）"
+                                   for p, (d, t) in sorted(acute.items()))
+                acute_note = f"其中{detail}，伤正处于急性期。\n"
             return {"blocked": True, "level_label": "黄色",
-                    "advice": (f"根据你的历史记录，之前曾提到{conds}不适（记忆来源），"
-                               "这次安排里有力负荷该部位的动作。为避免加重，"
-                               "建议先咨询医生或专业康复师评估，再决定训练安排。"),
+                    "advice": (f"{acute_note}根据你的历史记录，之前曾提到{conds}不适"
+                               "（记忆来源），这次安排里有力负荷该部位的动作。"
+                               "为避免加重，建议先咨询医生或专业康复师评估，"
+                               "再决定训练安排。"),
                     "blocks": [
                         {"condition": c, "risk_level": r, "hit_patterns": p or []}
                         for c, r, p in hits]}

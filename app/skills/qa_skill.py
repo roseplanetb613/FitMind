@@ -644,7 +644,7 @@ class QaSkill(Skill):
         fu = self._followup(ctx, ex, q)
         if fu is not None:
             return fu
-        matched = ex.search_zh(q, limit=5)
+        matched = ex.search_zh(q, limit=5, part_fallback=True)
         items = [self._exercise_item(e) for e in matched]
         if not items:
             # 词表没接住的省略式追问 → LLM 结合历史判断（第二层）。
@@ -656,7 +656,7 @@ class QaSkill(Skill):
             # W3 兜底：空结果 → LLM 归一化改写 → 重检索 → 写回图谱
             adopted, hits = self._normalize_fallback(
                 ctx, query, "exercise",
-                lambda q: ex.search_zh(q, limit=5))
+                lambda q: ex.search_zh(q, limit=5, part_fallback=True))
             if adopted:
                 items = [self._exercise_item(e) for e in hits]
         if not items:

@@ -22,6 +22,11 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+try:                                    # lib/ 平铺导入（runtime 的 sys.path 注入）
+    from parts import PARTS, muscle_of
+except ImportError:                     # 包形式导入（lib.parts）
+    from lib.parts import PARTS, muscle_of
+
 # 数据包 = data/exercises-dataset（lib/ 顶层，数据集集中在 data/ 下）
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data" / "exercises-dataset" / "data"
@@ -84,6 +89,7 @@ def same_name(a: str, b: str) -> bool:
 # "标准动作/标准/正确/规范"（#157）；"练习"先于"练"命中避免"练习X"被拆残。
 _ZH_PREFIX = ("你知道", "我想查", "我想问", "请问", "查一下", "帮我查",
               "帮我找", "我想了解", "了解一下", "能不能", "可以吗", "你能告诉我",
+              "在家", "家里",  # 场景前缀（2026-09-16）：场景词已转成器械约束，留着只会污染匹配
               "练习", "练")
 # 长的在前，保证 '应该怎么做' 先于 '怎么做' 命中；'的区别/哪个好' 等比较问法也剥
 _ZH_SUFFIX = ("应该怎么做", "应该怎么练", "是什么意思",
@@ -98,13 +104,25 @@ _ZH_SUFFIX = ("应该怎么做", "应该怎么练", "是什么意思",
               "哪个先", "哪个后", "先做", "后做",
               "哪个好", "哪个多", "哪个难", "怎么选", "怎么用", "怎么", "如何",
               "标准", "正确", "规范",
-              "动作", "哪个", "吗", "呢", "啊", "呀", "嘛", "吧")
+              "训练", "动作", "哪个", "吗", "呢", "啊", "呀", "嘛", "吧")
 
 # W1 逐级回退的尾部实词表（非问句修饰，而是动作名的尾词部分）：
 # 整词无命中时依次砍掉尾词再试（至多 2 轮），如 '壶铃摇摆' → '壶铃'。
 _TAIL_MOD = ("标准动作", "正确动作", "摇摆", "标准", "正确", "规范", "到位",
              "练习", "训练", "姿势", "技巧", "视频", "教程", "要领", "要点",
              "方法", "入门", "动作")
+
+# 尾部虚词（2026-09-16）：剥掉问句修饰后残留的结构虚词。
+# 「练胸的动作」剥「动作」剩「胸的」——「的」不是独立修饰词、不在 _ZH_SUFFIX，
+# 留在尾巴上让整词检索必空。剥离后逐字清理（虚词可能连着出现）。
+_ZH_PARTICLE = "的了呢吧啊呀嘛"
+
+# 场景词 → 器械约束（2026-09-16）：「在家能做的腿部训练」这类句子里的场景修饰
+# 其实是**器械筛选条件**，当普通检索词只会污染匹配。只收约束明确的一组；
+# 「健身房」刻意不加——健身房什么器械都有，过滤反而错杀。
+_SCENE_EQUIP = (("在家", "body weight"), ("家里", "body weight"),
+                ("徒手", "body weight"), ("无器械", "body weight"),
+                ("不用器械", "body weight"), ("自重", "body weight"))
 
 
 def split_zh_query(query: str) -> list[str]:
@@ -135,6 +153,10 @@ def split_zh_query(query: str) -> list[str]:
             if not p:
                 break
         p = p.strip()
+        # 尾部虚词清理（见 _ZH_PARTICLE）：「练胸的动作」→「胸的」→「胸」。
+        # 不清的话「胸的」整词检索必空，而「胸」能走部位旁路命中整组胸动作。
+        while p and p[-1] in _ZH_PARTICLE:
+            p = p[:-1].strip()
         if p:
             out.append(p)
     return out or ([q] if q else [])
@@ -226,25 +248,104 @@ class ExerciseRepo:
             hits = hits[:limit]
         return hits
 
-    def search_zh(self, query: str, limit: int = 5) -> list[dict]:
+    def search_zh(self, query: str, limit: int = 5,
+                  part_fallback: bool = False) -> list[dict]:
         """中文动作检索统一入口（qa/teach 共用，防双写漂移）：
         复合查询切分 → 修饰词剥离 → 口语别名归一 → 双向子串匹配
         （正向：动作名含核心词；反向：核心词含动作名，动作名 ≥2 字防单字误命中），
-        按难度升序；整词无命中时逐级回退（W1），仍空再乱序 AND（W1）。
-        非中文输入回退 search()。"""
+        场景约束过滤 → 相关性排序（精确同名＞字面命中＞部位旁路；字面内按
+        名字长短＝变体少者先，难度次级）；整词无命中时逐级回退（W1），
+        仍空再乱序 AND（W1）。非中文输入回退 search()。
+
+        `part_fallback`（默认 False）：字面/回退/AND 全部落空后，允许按**部位词
+        旁路**（`_part_scan`）兜底。**只有对话检索（qa/teach）开启**——判定类
+        检索（memory_extract/plan）依赖「空 = 没有这个动作」的语义，开了它
+        search_zh 会几乎永远非空（详见 `_part_scan` 的说明，实测鸡胸误判）。
+        场景约束滤空时退回无约束结果（约束是偏好，不该把结果清零）。"""
         if not re.search(r"[一-鿿]", query or ""):
             return self.search(query, limit=limit)
         core = split_zh_query(query)
         hits = self._match_zh(core)
+        if not hits and part_fallback:
+            hits = self._part_scan(core)         # 部位词旁路（对话检索专属）
         if not hits:
             hits = self._fallback_search(core)   # 整词无命中 → 砍尾词重试（≤2 轮）
         if not hits:
             hits = self._and_search(core)        # 仍空 → token 集合 AND（词序无关）
-        hits.sort(key=lambda e: e.get("difficulty") or 9)
+        # 场景词 → 器械约束（「在家能做的腿部训练」→ body weight）。
+        # 在相关性排序**之前**过滤：约束不满足的再贴题也不能给；
+        # 但约束把结果滤**空**时退回无约束版本 —— 约束是偏好不是硬条件，
+        # 「在家练深蹲」库里没有自重深蹲时，给杠铃深蹲好过给空。
+        equip = self._scene_equip(query)
+        if equip:
+            filtered = [h for h in hits if h.get("normalized_equipment") == equip]
+            if filtered:
+                hits = filtered
+        # 相关性排序（2026-09-16）：此前只有难度升序——「深蹲」命中 72 条
+        #（杠铃 26 条最大族），返回的却是 5 条弹力带变体，杠铃深蹲一条看不到。
+        #
+        # 复合查询用**按词分桶轮转**：每个核心词的字面命中各占一路，按
+        # 「词1第1、词2第1、词1第2…」穿插。不能用统一键排序——「练肩推举和
+        # 飞鸟哪个先」里飞鸟有 38 条且难度更低，统一排会把肩推整批挤出前 5，
+        # 用户问的第一个动作反而消失（实测）。部位旁路命中排所有字面之后。
+        buckets = [[] for _ in core] + [[]]
+        for h in hits:
+            keys = [self._relevance(h, w) for w in core]
+            lit = [i for i, k in enumerate(keys) if k[1] == 0]
+            if lit:
+                i = min(lit, key=lambda j: keys[j])
+                buckets[i].append((keys[i], h))
+            else:
+                buckets[-1].append((min(keys), h))
+        merged: list = []
+        for bi, b in enumerate(buckets[:-1]):
+            b.sort(key=lambda kh: kh[0])
+            for rank, (_, h) in enumerate(b):
+                merged.append((rank, bi, h))
+        offset = max((len(b) for b in buckets[:-1]), default=0)
+        b = buckets[-1]
+        b.sort(key=lambda kh: kh[0])
+        for rank, (_, h) in enumerate(b):
+            merged.append((rank + offset, len(buckets) - 1, h))
+        merged.sort(key=lambda t: (t[0], t[1]))
+        hits = [h for _, _, h in merged]
         return hits[:limit]
 
+    @staticmethod
+    def _scene_equip(query: str) -> str | None:
+        for k, v in _SCENE_EQUIP:
+            if k in query:
+                return v
+        return None
+
+    @classmethod
+    def _relevance(cls, r: dict, core: str) -> tuple:
+        """相关性键（越小越靠前）：精确同名 > 名字越短 > 难度。
+
+        名字长度是「贴题度」的代理：库内动作名 = 器械 + 变体修饰 + 动作根，
+        「深蹲」的命中里「杠铃 深蹲」（4 字）是基础动作、「弹力带 单臂 单腿
+        分腿深蹲」（11 字）是叠满修饰的变体 —— 越短越接近用户问的那个动作。
+        难度只作同长度时的次级键（「杠铃 深蹲」与「哑铃 深蹲」同为 4 字时
+        先给简单的，与全库渐进口径一致）。
+        """
+        nz = norm_zh(r.get("name_zh") or "")
+        # ⚠ 与 _match_zh 同一入口：必须先过 expand_aliases——否则「肩推举」
+        # 不归一成「肩推」，字面匹配全部失效、真命中全被挤进旁路桶（实测）。
+        nq = norm_zh(expand_aliases(core))
+        d = r.get("difficulty")
+        # 字面命中（名字含核心词）**永远排在部位旁路命中之前**：用户自己的词
+        # 优先于"按部位扫出来的"（test_clarify_prefers_the_users_own_word...
+        # 钉过的原则）。旁路条目的名字与 query 无字面关系，len 对它们无意义
+        # ——不压住的话，3 字的「侧平举」会挤出 4 字的「杠铃 肩推」。
+        literal = 0 if (nq and nq in nz) else 1
+        return (0 if nz and nz == nq else 1,
+                literal,
+                len(nz or "000") if literal == 0 else 0,
+                d if isinstance(d, int) else 9)
+
     def _match_zh(self, words: list[str]) -> list[dict]:
-        """逐核心词双向子串匹配（去重，难度排序由调用方做）。"""
+        """逐核心词双向子串匹配（去重，排序由调用方做）。**纯字面**——
+        部位词旁路拆到 `_part_scan`（可选开关），原因见其 docstring。"""
         seen: set = set()
         hits: list[dict] = []
         for q in words:
@@ -259,6 +360,40 @@ class ExerciseRepo:
                     if r["id"] not in seen:
                         seen.add(r["id"])
                         hits.append(r)
+        return hits
+
+    def _part_scan(self, words: list[str]) -> list[dict]:
+        """部位词旁路：核心词本身就是身体部位（如「核心」「胸」）时，库内动作名
+        通常**不含**这个词（没有叫「核心」的动作），纯名字检索必空；经
+        `parts.PARTS` 映射到肌群后按肌肉字段取，排除拉伸/柔韧（同 _pool 口径）。
+
+        ⚠ **独立旁路、默认关闭**（`search_zh(..., part_fallback=True)` 才启用）：
+        它会把 search_zh 变成"几乎永远非空"——任何含部位字的词（「鸡胸」含「胸」）
+        都能命中肌肉动作，而 memory_extract 的 `_has_exercise_candidates` 与
+        plan 的动作名匹配都依赖「**空 = 没有这个动作**」的语义（实测：鸡胸的
+        食物偏好因此被误判成动作）。只有**对话检索**（qa/teach）开启——那里
+        空结果会走 LLM 兜底，多一层猜测可接受；判定类检索保持严格。
+
+        部位词在核心词里**查找**（长键优先防「大腿」被「腿」截糊）——
+        「家里没有器械怎么练胸」剥完修饰剩「没有器械练胸」，两头都不等于
+        「胸」，但里面的「胸」就是主题。
+        """
+        seen: set = set()
+        hits: list[dict] = []
+        for q in words:
+            part_word = next((k for k in sorted(PARTS, key=len, reverse=True)
+                              if k in q), None)
+            muscle = muscle_of(part_word) if part_word else None
+            if not muscle:
+                continue
+            for r in self.filter(muscle=muscle):
+                # 排除拉伸/柔韧（同 _pool 口径）：部位问的是训练动作，
+                # 「在家能做的腿部训练」混进「股四头肌拉伸」就是答非所问
+                if r.get("exercise_type") == "stretch_mobility":
+                    continue
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    hits.append(r)
         return hits
 
     def _fallback_search(self, words: list[str]) -> list[dict]:

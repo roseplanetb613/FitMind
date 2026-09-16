@@ -205,7 +205,8 @@ class TeachSkill(Skill):
         # W5：图谱 approved 别名优先（静态 NAME_ALIASES 退居降级位）
         from app.core.graphalias import graph_alias_for
         q = graph_alias_for(query, "exercise") or query
-        return _repo().search_zh(q, limit=limit)
+        return _repo().search_zh(q, limit=limit,
+                                  part_fallback=True)  # 对话检索开部位旁路
 
     def execute(self, ctx, params) -> SkillResult:
         query = str(params.get("query", ""))

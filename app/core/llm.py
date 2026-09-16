@@ -242,6 +242,14 @@ class LLMProvider(ABC):
         抽象基类默认降级：子类未实现 = 不可用（上层按 None 静默走原逻辑）。"""
         return None
 
+    def is_injury_report(self, text: str) -> dict | None:
+        """伤痛陈述判定（guard 记忆写入的第二层兜底）：这句话是不是在
+        **报告/陈述自己的身体伤痛、疾病或不适**（而非询问动作/表达训练意图）。
+        返回 {"is_injury_report": bool} 或 None（不可用/没把握——上层据此不写，
+        误记的伤病会错误拦截训练安排，比漏记更糟，所以拿不准一律 False）。
+        抽象基类默认降级：子类未实现 = 不可用。"""
+        return None
+
 
 class StubProvider(LLMProvider):
     """规则实现：分类/计划/渲染全确定，供测试与无 LLM 环境。"""
@@ -717,7 +725,11 @@ class DeepSeekProvider(LLMProvider):
                 "11) data.advice 是**筛查/进度技能算好的结论正文**（安全提示与"
                 "训练建议），必须按其原意完整转述，不得省略、弱化或改写其结论；"
                 "这是数据层给的判断，不是你可以自行斟酌的建议——尤其 level_label 为"
-                "red/yellow 时，advice 的内容就是回答的核心。")
+                "red/yellow 时，advice 的内容就是回答的核心。"
+                "12) 介绍 data.items 里的动作时，**按它们在 data.items 中的先后顺序**"
+                "逐条讲，不要重排、不要漏讲；卡片就按这个顺序展示，顺序对不上用户"
+                "认不出哪句话说的是哪张卡。念动作名时用条目里给的 name_zh 原词"
+                "（可以省掉名字末尾的'（男）'这类变体后缀，但别改词、别换说法）。")
         try:
             return str(self._models["render"].invoke(
                 [("system", sys_p),
@@ -792,6 +804,26 @@ class DeepSeekProvider(LLMProvider):
             return {"is_followup": bool(data.get("is_followup")),
                     "part": data.get("part") or None,
                     "kind": str(data.get("kind") or "")}
+        except Exception:
+            return None
+
+    def is_injury_report(self, text: str) -> dict | None:
+        """伤痛陈述判定：报告自己的伤痛/疾病 → true；训练意图/动作询问 → false。"""
+        self.calls.append("is_injury_report")
+        sys_p = (
+            "你是 FitMind 的健身对话判定器。判断用户的这句话是不是在"
+            "**报告/陈述自己的身体伤痛、疾病或不适**。\n"
+            "只输出 JSON：{\"is_injury_report\": true/false}。\n"
+            "例：\n"
+            "- 「我有肩周炎」「膝盖半月板伤了」「腰最近不舒服」→ true（陈述伤病）\n"
+            "- 「我想练肩」「肩推怎么做」「帮我排个练背计划」→ false（训练意图/询问）\n"
+            "- 「肩膀疼还能练吗」→ true（报告不适并询问）\n"
+            "拿不准（反问/闲聊/语义模糊）→ false。")
+        try:
+            data = self._invoke_json(sys_p, f"用户这句话：{text}",
+                                     "is_injury_report",
+                                     llm=self._models["classify"])
+            return {"is_injury_report": bool(data.get("is_injury_report"))}
         except Exception:
             return None
 

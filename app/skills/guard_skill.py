@@ -439,6 +439,14 @@ class GuardSkill(Skill):
     def _memory_record(self, signal: str, uid: str) -> None:
         """症状自报 → injury 记忆（部位抽取；抽不中宁缺毋滥）。
 
+        触发分两层（用户口径：词表打头阵，LLM 兜底长尾）：
+          · **第一层词表**：句含 SYMPTOMS（疼/痛/麻…及肩周炎等伤病名）→ 记录；
+          · **第二层 LLM**：词表 miss 但部位抽取器**抽出了部位**（如「肩周炎」
+            →「肩」）——这可能是伤病陈述（「我有肩周炎」），也可能只是训练意图
+            （「我想练肩」，同样含「肩」）——交给 LLM 判定，是才记录。
+        之所以不能把门直接放宽到"抽出部位就记"：部位词全表无差别命中会把
+        「我想练肩」记成「肩不适」，之后排训练会被自己的假伤病拦住。
+
         ⚠ 降级方向是"不写"，但**失败必须留痕**（2026-09-13）：原先整段
         `except Exception: pass`，实测 `extract_injury_site("我手肘疼")` 抛
         KeyError（部位表键集漂移）被吞得干干净净 —— guard 照回黄色警告、
@@ -450,9 +458,14 @@ class GuardSkill(Skill):
             m = self._memory_or_none()
             if m is None:
                 return
-            if not any(k in signal for k in SYMPTOMS):
-                return
             site = extract_injury_site(signal)
+            sym_hit = any(k in signal for k in SYMPTOMS)
+            if not sym_hit:
+                # 词表 miss：部位抽到了也**先别记**——可能是训练意图。
+                # 交给 LLM 判定（第二层）；LLM 不可用/没把握 → 不写（保守：
+                # 误记的伤痛会错误拦截之后所有的训练安排，比漏记更糟）。
+                if site is None or not self._llm_injury_report(signal):
+                    return
             if site is None:
                 return
             zh, _key = site
@@ -463,6 +476,16 @@ class GuardSkill(Skill):
                 diag.bump("guard.link_injury_muscle")
         except Exception:
             diag.bump("guard.memory_record")    # 部位抽取/写入失败 → 可查
+
+    def _llm_injury_report(self, signal: str) -> bool:
+        """LLM 判定：这句话是不是在**报告/陈述自己的身体伤痛或疾病**。
+        返回 False = 不是/不可用/没把握（调用方据此不写，宁缺毋滥）。"""
+        try:
+            from app.core.llm import build_provider
+            verdict = build_provider().is_injury_report(signal)
+            return bool(verdict and verdict.get("is_injury_report"))
+        except Exception:
+            return False
 
     def _injury_status(self, signal: str, m, uid: str) -> dict | None:
         """伤痛状态查询（只读）。返回 None = "这不是一次查询"，交回原规则链。

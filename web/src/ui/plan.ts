@@ -20,6 +20,8 @@ export interface PlanPanelDeps {
   userId: string
   /** 注入以便测试；默认走 data/plan 的真实实现 */
   load?: (userId: string) => Promise<PlanResponse>
+  /** 注入以便测试；默认走 data/plan 的真实实现。有它才渲染删除按钮。 */
+  deletePlan?: (userId: string) => Promise<void>
 }
 
 export interface PlanPanel {
@@ -96,6 +98,7 @@ export function macrosLine(content: PlanContent | null | undefined): string {
  */
 export function renderPlan(
   host: HTMLElement, res: PlanResponse, onClose?: () => void,
+  onDelete?: () => Promise<void>,
 ): void {
   clear(host)
 
@@ -110,6 +113,29 @@ export function renderPlan(
   close.setAttribute('type', 'button')
   close.setAttribute('aria-label', '关闭')
   head.appendChild(close)
+  // 删除按钮：**两态确认**（点一次变「确认删除？」，再点才执行）——
+  // 软删虽可恢复，但误触清掉整个计划表的观感太差；不用 window.confirm
+  // （dom-stub 环境没有它，测试跑不了）。
+  if (res.plan && onDelete) {
+    const del = el('button', 'plan-delete', '删除计划')
+    del.setAttribute('type', 'button')
+    let armed = false
+    del.addEventListener('click', () => {
+      if (!armed) {
+        armed = true
+        del.textContent = '确认删除？'
+        del.classList.add('is-armed')
+        return
+      }
+      del.disabled = true
+      void onDelete().catch(() => {
+        del.disabled = false
+        del.textContent = '删除失败，重试？'
+        armed = false
+      })
+    })
+    head.appendChild(del)
+  }
   card.appendChild(head)
 
   const body = el('div', 'plan-body')
@@ -226,13 +252,13 @@ export function createPlanPanel(deps: PlanPanelDeps): PlanPanel {
     root.classList.toggle('is-open', next)
   }
 
-  return {
+  const panel: PlanPanel = {
     async open(): Promise<void> {
       setOpen(true)
       clear(root)
       root.appendChild(el('p', 'plan-loading', '读取中…'))
       try {
-        renderPlan(root, await load(deps.userId), () => setOpen(false))
+        renderPlan(root, await load(deps.userId), () => setOpen(false), wipe)
       } catch (err) {
         // 请求失败与"没有计划"是两件事：这里如实说失败，不冒充空计划
         clear(root)
@@ -250,4 +276,16 @@ export function createPlanPanel(deps: PlanPanelDeps): PlanPanel {
     close: () => setOpen(false),
     isOpen: () => open,
   }
+
+  // wipe 要回调 panel.open()（删除后重拉到空态），所以只能在 panel 之后绑——
+  // 先定义的话 `open()` 会解析到上面的 let open 布尔状态（tsc 实测报错）。
+  let wipe: (() => Promise<void>) | undefined
+  if (deps.deletePlan) {
+    wipe = async (): Promise<void> => {
+      await deps.deletePlan?.(deps.userId)
+      await panel.open()
+    }
+  }
+
+  return panel
 }

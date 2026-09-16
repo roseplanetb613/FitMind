@@ -94,6 +94,20 @@ export async function fetchPlan(
   return (await res.json()) as PlanResponse
 }
 
+/** 删除当前计划（软删：服务端给 PlanVersion 打标，打卡历史保留）。
+ * 无计划 → 服务端 200 + deleted:false，这里照常 resolve（按钮刷新后是空态）。 */
+export async function deletePlan(
+  userId: string,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<void> {
+  const res = await fetchImpl('/v1/plan/delete', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ user_id: userId }),
+  })
+  if (!res.ok) throw new Error(`plan delete 请求失败：HTTP ${res.status}`)
+}
+
 /** 训练日（`rest` 之外）——渲染表格时只需这些天。 */
 export function trainingDays(content: PlanContent | null | undefined): PlanDay[] {
   const items = content?.training?.items ?? []

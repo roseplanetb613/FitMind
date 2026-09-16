@@ -396,8 +396,11 @@ class MemoryStore:
         _validate_user_id(user_id)
         try:
             with self._g._driver.session(database=self._g._database) as s:
+                # 已删除（supersede_plan 打标）的版本不作为"当前计划"——
+                # 打卡历史仍引用其 plan_id，节点本身保留（软删不硬删）。
                 r = s.run(
                     "MATCH (pv:PlanVersion {user_id: $uid}) "
+                    "WHERE pv.deleted_at IS NULL "
                     "RETURN pv.plan_id AS pid, pv.content AS content, "
                     "pv.created_at AS created "
                     "ORDER BY pv.created_at DESC LIMIT 1",
@@ -413,6 +416,27 @@ class MemoryStore:
                         "created_at": r["created"]}
         except Exception:
             return None
+
+    def supersede_plans(self, user_id: str) -> int:
+        """停用该用户**全部**未删计划版本（**软删**：打 deleted_at 标）。
+
+        ⚠ 必须按**用户**删而不是按 plan_id 删——PlanVersion 是**版本链**
+        （每次 _edit 追加新版本），只删最新一份会让 latest_plan 回落到更早的
+        旧版本，用户刚听到"已删除"刷新一看计划还在（实测）。
+        为什么不 DELETE：`log_checkin` 的打卡记录引用 plan_id，硬删节点会让
+        打卡历史失去归属；打标后 `latest_plan` 自然查不到（"当前计划"语义
+        由 deleted_at IS NULL 界定），数据可审计也可恢复。返回停用条数。"""
+        _validate_user_id(user_id)
+        try:
+            with self._g._driver.session(database=self._g._database) as s:
+                r = s.run(
+                    "MATCH (pv:PlanVersion {user_id: $uid}) "
+                    "WHERE pv.deleted_at IS NULL "
+                    "SET pv.deleted_at = $now RETURN count(pv) AS n",
+                    uid=user_id, now=self._now()).single()
+                return int(r["n"]) if r else 0
+        except Exception:
+            return -1                              # 失败与"0 条"要区分开
 
     def log_event(self, user_id: str, type_: str, payload: dict,
                   occurred_at: str | None = None,

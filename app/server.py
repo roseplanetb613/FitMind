@@ -26,6 +26,11 @@ class ProfileRequest(BaseModel):
     user_id: str | None = None
 
 
+class PlanDeleteRequest(BaseModel):
+    """计划表卡片「删除计划」按钮的请求（user_id 归属同其它端点）。"""
+    user_id: str = "local"
+
+
 class CheckinResolveRequest(BaseModel):
     """消歧选择框点定后的补记请求。
 
@@ -207,6 +212,30 @@ def create_app() -> FastAPI:
                          "created_at": got.get("created_at"),
                          "content": got["content"]}}
 
+    @app.post("/v1/plan/delete")
+    def plan_delete(req: PlanDeleteRequest):
+        """删除当前训练计划（计划表卡片「删除计划」按钮）。
+
+        **软删**：supersede_plan 给 PlanVersion 打 deleted_at 标——打卡历史
+        （log_checkin 引用 plan_id）与版本链保留，latest_plan 过滤后自然为空。
+        与对话句式「删掉所有训练计划」（plan_skill._PLAN_CLEAR_RE）同一存储
+        口径；独立端点是因为按钮语义就是"删除计划"，无需句式解析。
+        无计划 → 200 + deleted:false + reason:no_plan（与 GET /v1/plan 的
+        "无计划不是 404" 同一契约）。"""
+        try:
+            from app.graph.memory import MemoryStore
+            m = MemoryStore.get()
+            if m is None:
+                raise RuntimeError("记忆图谱不可用")
+            # 按**用户**删净全部未删版本（PlanVersion 是版本链，只删最新会
+            # 回落旧版——实测「已删除」后 GET 仍返回 9/13 的旧计划）。
+            n = m.supersede_plans(req.user_id)
+            if n < 0:
+                return {"deleted": False, "reason": "degraded"}
+            return {"deleted": True, "superseded": n}
+        except Exception:
+            return {"deleted": False, "reason": "degraded"}
+
     @app.post("/v1/checkin/resolve")
     def checkin_resolve(req: CheckinResolveRequest):
         """用户在消歧选择框里点定了一个动作 → 补记这次训练。
@@ -244,17 +273,20 @@ def create_app() -> FastAPI:
                 if not req.name_zh:
                     req.name_zh = exact.get("name_zh")
             else:
-                cands = ex.search_zh(req.text, limit=3)
+                # 捞候选的宽度和字段组装都与 nodes.clarify_exercise 共用
+                # （**同一份**）：此前这里只捞 3 条且 `recent_count` 硬编码 0，
+                # 于是"你常练、但检索排第 4"的动作在这条路径上永远冒不上来，
+                # 而同一屏上面那张卡片却有「练过 N 次」角标。
+                from app.core.clarify_options import (CLARIFY_CANDIDATE_POOL,
+                                                     build_clarify_options)
+                cands = ex.search_zh(req.text, limit=CLARIFY_CANDIDATE_POOL)
                 if not cands:
                     return JSONResponse(status_code=404, content={
                         "ok": False,
                         "error": f"动作库里没有「{req.text}」——换个说法试试"})
                 return {"ok": False, "need_pick": True, "raw": req.text,
                         "reply": f"库里没有正好叫「{req.text}」的动作——是下面哪个？",
-                        "options": [{"id": c.get("id"), "name_zh": c.get("name_zh"),
-                                     "equipment": c.get("normalized_equipment"),
-                                     "difficulty": c.get("difficulty"),
-                                     "recent_count": 0} for c in cands]}
+                        "options": build_clarify_options(cands, req.user_id)}
         rec = ex.get(eid_in) if eid_in else None
         if not rec:
             # 如实说没找到，**不硬记**：库里没有的动作记下去也建不出肌群边，

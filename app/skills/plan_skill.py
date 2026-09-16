@@ -22,6 +22,10 @@ from app.runtime.pipeline import build_plan
 # 并未发生的编辑（"推日里跟三头相关的动作就撤掉"）——声称做了没做的事。
 _EDIT_REPLACE_RE = re.compile(r"(?:把)?(.+?)(?:换成|换掉|改成做?)(.+)")
 _EDIT_REMOVE_RE = re.compile(r"(?:去掉|删掉|不要练?|不练|别练|取消)(.+)")
+# 整计划删除（2026-09-16）：「删掉所有训练计划」此前被 _EDIT_REMOVE_RE 当成
+# "删掉（名为'所有训练计划'的**动作**）"→ 找不到动作 → 回"没有找到"——
+# 用户想删的是**整份计划**，不是某个动作。窄口径：动词与"计划"之间不留太多字。
+_PLAN_CLEAR_RE = re.compile(r"(?:删掉|删除|清空|作废)[^，。]{0,6}计划")
 
 # 支持的编辑句式单源：**技能自己会说出口**（parse_fail/not_found 的提示），渲染层
 # 也只会复述这里的写法。2026-09-13 的坑正是两边不一致——助手自创「今天改成休息日」
@@ -455,6 +459,21 @@ class PlanSkill(Skill):
                 "name": "无计划", "value": "你还没有训练计划——先让我帮你制定一个吧"}]},
                 provenance=["plan#edit.no_plan"])
         content = latest["content"]
+        # 整计划删除优先于换/删句式（「删掉所有训练计划」的"删掉(所有训练计划)"
+        # 会先被 _EDIT_REMOVE_RE 当成动作名——动作 miss 的"没有找到"答非所问）。
+        # **软删**：supersede_plan 打 deleted_at 标，打卡历史（log_checkin 引用
+        # plan_id）与版本链都保留；latest_plan 过滤后为空 → 后续请求走 no_plan。
+        if _PLAN_CLEAR_RE.search(query):
+            n = m.supersede_plans(uid)
+            if n < 0:
+                return SkillResult(ok=True, data={"items": [
+                    {"name": "删除失败", "value": "记忆图谱不可用，稍后再试"}]},
+                    provenance=["plan#edit.supersede_failed"])
+            return SkillResult(ok=True, data={"items": [
+                {"name": "计划已删除",
+                 "value": "当前训练计划已删除。你的打卡历史保留，"
+                          "想重新开始随时说一声。"}]},
+                provenance=["plan#edit.plan_cleared"])
         if shift_days is not None:
             return self._shift(m, uid, content, shift_days)
         items = (content.get("training") or {}).get("items") or []

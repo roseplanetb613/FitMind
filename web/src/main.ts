@@ -28,6 +28,7 @@ import { createVoiceFlow, type RecorderLike } from './ui/voice-flow'
 import { createPhotoFlow } from './ui/photo-flow'
 import { createProfileForm } from './ui/profile-form'
 import { createPlanPanel } from './ui/plan'
+import { deletePlan } from './data/plan'
 import { saveProfile } from './data/profile'
 import { hideDetail } from './ui/detail'
 
@@ -428,5 +429,9 @@ chatPanel.render(chatFlow.state()) // 首帧：显示欢迎语而不是空面板
 
 // 训练计划抽屉。打开时才拉取 —— 计划是"想查才看"的东西，没必要每次进页面都请求。
 // 它与对话面板无关：计划来自图谱里的 PlanVersion，不是这次对话的产物。
-const planPanel = createPlanPanel({ root: planEl, userId: uid })
+const planPanel = createPlanPanel({
+  root: planEl,
+  userId: uid,
+  deletePlan: (u) => deletePlan(u),   // 卡片「删除计划」按钮 → /v1/plan/delete
+})
 planToggleEl.addEventListener('click', () => void planPanel.open())

@@ -39,6 +39,26 @@ for p in ("", "app", "lib"):
 # 中文动作名没有单字的（深蹲/卧推/引体向上…至少两字），所以这条界限既简单又不误伤。
 MIN_NAME_LEN = 2
 
+# ⚠ 但**单字部位词必须放行**（2026-09-16）。上面那条护栏立的时候是对的，可
+# 2026-09-13 引入 `_PART2MUSCLE` 部位映射表之后它就失效了：部位词现在走**映射表**
+# （一个部位只映射一块代表肌群），不再走 CONTAINS，所以 `腿` 这种单字不再有
+# "糊一片"的风险。而写入路径（memory_extract 的 checkin 分支）**从来没有长度限制**，
+# 于是两边口径分叉：同一个"腿"，写入时挂得出 quadriceps，回填时却被当单字丢掉
+# → 这批历史事件**永远补不回来**，而且 dry-run 会把它报成"解析不中"
+# （看着像库里没这个动作，其实是它压根没被拿去解析）。
+#
+# 判据用**映射表的键**，不是"长度 >= 1"——`练` 不在表里，仍然被挡。
+_PART_WORDS: set[str] | None = None
+
+
+def _part_words() -> set[str]:
+    """部位词集合（`_PART2MUSCLE` 的键）。惰性导入，避免脚本一启动就连图谱。"""
+    global _PART_WORDS
+    if _PART_WORDS is None:
+        from app.graph.memory import _PART2MUSCLE
+        _PART_WORDS = set(_PART2MUSCLE)
+    return _PART_WORDS
+
 
 def item_names(payload: dict) -> list[str]:
     """payload - 待解析的动作名列表。
@@ -50,8 +70,11 @@ def item_names(payload: dict) -> list[str]:
             continue
         for k in ("name", "raw"):
             v = it.get(k)
-            if v and len(str(v).strip()) >= MIN_NAME_LEN:
-                out.append(str(v))
+            if not v:
+                continue
+            s = str(v).strip()
+            if len(s) >= MIN_NAME_LEN or s in _part_words():
+                out.append(s)
     return out
 
 

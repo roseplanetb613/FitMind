@@ -81,7 +81,7 @@ Agent：（命中运动医学禁忌表）急性期不建议过顶推举。替代
 | 能力 | 说明 | 入口 |
 |---|---|---|
 | **对话教练** | 7 个技能经注册表路由，LangGraph 编排（Direct / ReAct / PlanExec / ReWOO 四种执行模式按问题动态切换） | `POST /v1/chat`、`/v1/chat/stream` |
-| **3D 肌群恢复视图** | 28 块肌群按恢复度着色，几何全部代码生成（零第三方 3D 资产） | `http://<host>:8000/app/` |
+| **3D 肌群恢复视图** | 28 块肌群按恢复度着色；几何来自**真实解剖模型**（Z-Anatomy，CC BY-SA 4.0，见下方许可表） | `http://<host>:8000/app/` |
 | **训练计划** | 周期化编排（分化循环 + 分期），支持对话修改与整计划删除 | `GET /v1/plan`、`POST /v1/plan/delete` |
 | **打卡与消歧** | 记录训练；动作名歧义时出候选让用户点选，支持自定义输入 | `POST /v1/checkin/resolve` |
 | **食物拍照识别** | VLM 只判"是什么 / 多少克"，营养数字由 `lib/dish_repo` 查库求和——**模型被禁止算热量** | `POST /v1/vision/food` |
@@ -288,6 +288,7 @@ examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 | 营养数据集 | 含 USDA 等公开来源，另见 `data/nutrition-dataset/docs/` |
 | 中国食物成分表 | 出版社授权 |
 | Open Food Facts 中国区 | ODbL（署名 + 共享衍生） |
+| **3D 肌群模型**（`web/public/models/muscles.glb`） | 源自 **[Z-Anatomy](https://www.z-anatomy.com/)**（上游 BodyParts3D / DBCLS），授权 **CC BY-SA 4.0** —— 署名 + **相同方式共享**；署名为 `Lluís Vinent Juanico / Z-Anatomy project`。⚠ 与动作库的 MIT **不是一套授权**（copyleft），请分开看 |
 | 运动医学 / 训练科学 | 未定稿，**全部标记【待审】**，不得作为医学结论使用 |
 | **本项目代码** | ⚠ **尚未添加根目录 LICENSE** |
 
@@ -321,6 +322,11 @@ examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 - **语音转写不在 requirements 里**：`openai-whisper` + `torch` 是数 GB 的重依赖，
   故意不拖累纯文本链路；且 8 GB 显存下**同机只能跑一个实例**。
 - **reranker 权重不入库**（1.1 GB），缺失时静默降级为稠密排序。
+- **语音 / 拍照需要安全上下文（已配 https）**：浏览器的麦克风与摄像头 API 只在
+  **安全上下文**（https 或 localhost）提供——浏览器限制，不是 bug。服务已支持
+  `--certfile/--keyfile` 以 https 启动（证书见 `storage_output/certs/`，
+  其 README 有生成与**设备信任 CA** 的步骤；SAN 覆盖 localhost/127.0.0.1/192.168.9.82，
+  换 IP 要重签）。设备装一次本地 CA（`ca.crt`）后手机的语音/拍照即可用。
 - **仓库体积大**：已跟踪文件约 **243 MB**（`data/` 占 239 MB，其中动作媒体 131 MB ——
   GIF 1324 个共 122.8 MB、JPG 1324 个共 8.5 MB），`.git` 打包后另有约 139 MB，
   首次 clone 与 push 会比较慢。
@@ -332,4 +338,6 @@ examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 - **测试与设计文档不在公开仓库中**：`app/tests`、`web/tests`、`docs/` 是被有意剔除的
   （发布时重写历史移除），不是遗漏；开发仓完整保留它们的版本历史。
 - **运动医学数据全部【待审】**，沿用现有版本。
+- **3D 肌群模型只有男性版**：上游 Z-Anatomy 即单男性模型，仓内没有女性源。
+  其它层早已按性别分档（`profile.sex`、BMR 分男女、力量标准四档），**三维层是唯一缺口**。
 - **多智能体未启用**：`app/bus/` 目前只是契约。

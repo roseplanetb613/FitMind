@@ -33,13 +33,26 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--reload", action="store_true",
                     help="改动即重载（开发用；首次启动稍慢）")
+    ap.add_argument("--certfile", default=None,
+                    help="TLS 证书（PEM）。与 --keyfile 一起给 = 以 https 启动。"
+                         "局域网下手机的麦克风/摄像头只在安全上下文可用，"
+                         "见 storage_output/certs/ 的生成说明")
+    ap.add_argument("--keyfile", default=None,
+                    help="TLS 私钥（PEM）")
     args = ap.parse_args(argv)
 
+    ssl_kw = {}
+    if args.certfile or args.keyfile:
+        if not (args.certfile and args.keyfile):
+            ap.error("--certfile 与 --keyfile 必须一起给")
+        ssl_kw = {"ssl_certfile": args.certfile, "ssl_keyfile": args.keyfile}
+
     import uvicorn
-    print(f"后端启动：http://{args.host}:{args.port}"
+    scheme = "https" if ssl_kw else "http"
+    print(f"后端启动：{scheme}://{args.host}:{args.port}"
           f"（web/vite.config.ts 的 proxy 指向此端口）")
     uvicorn.run("app.server:create_app", factory=True,
-                host=args.host, port=args.port, reload=args.reload)
+                host=args.host, port=args.port, reload=args.reload, **ssl_kw)
     return 0
 
 

@@ -447,9 +447,16 @@ const chatPanel = createChatPanel({
 })
 
 const voiceFlow = createVoiceFlow({
-  // 用 `?.`：非 https/localhost 时 mediaDevices 整个是 undefined，
-  // 直接调会 TypeError（voice-flow 拿到 undefined 会给出对应提示）
-  getUserMedia: (c) => navigator.mediaDevices?.getUserMedia(c),
+  // ⚠ **必须传方法本体**，不能包一层箭头函数：
+  //   `(c) => navigator.mediaDevices?.getUserMedia(c)` 这个箭头**恒为真值**，
+  //   voice-flow 里 `if (!gum)` 的"环境不支持"分支永远不触发；而非安全上下文
+  //   （http:// + 非 localhost，比如局域网 IP）下 `mediaDevices` 是 undefined，
+  //   可选链让调用**静默返回 undefined** → `new MediaRecorder(undefined)` →
+  //   用户看到原生 TypeError（实测）。传方法本体，undefined 会如实透传给
+  //   voice-flow 的人话分支。
+  //   `.bind` 是必须的：getUserMedia 从 navigator.mediaDevices 上摘下来裸调
+  //   会 Illegal invocation。
+  getUserMedia: navigator.mediaDevices?.getUserMedia.bind(navigator.mediaDevices),
   createRecorder: (stream) =>
     new MediaRecorder(stream) as unknown as RecorderLike,
   transcribe: (blob) => postAsr(blob),
@@ -464,9 +471,27 @@ const photoFlow = createPhotoFlow({
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/*'
-    input.addEventListener('change', () => resolve(input.files?.[0] ?? null))
-    // 取消选择不会触发 change（浏览器差异），但也不会让 promise 悬挂出问题：
-    // 用户取消就当作没有操作，下一次点击重新开一个 input 即可。
+    // ⚠ **取消必须 resolve(null)**：photo-flow 在 pick() 期间是 'picking'，
+    // 进行中的点击会被忽略。而用户取消选择时 `change` **不触发**（浏览器差异）
+    // —— promise 一悬挂，状态就永远回不到 idle，表现为"取消一次后按钮卡死，
+    // 再也选不了"（实测）。原先的注释说"悬挂没关系，下次点会开新 input"，
+    // 那是没算上状态机：**悬挂的 promise + 忽略并发点击 = 永久锁死**。
+    //
+    // 两道保险：input 的 `cancel` 事件（Chrome 113+ / Safari 16.4+）+
+    // 窗口焦点回归（选择器关掉必然焦点回来；延 500ms 是给可能迟到的 change 让路）。
+    let settled = false
+    const done = (v: File | null): void => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('focus', onFocus)
+      resolve(v)
+    }
+    const onFocus = (): void => {
+      window.setTimeout(() => { if (!settled) done(null) }, 500)
+    }
+    input.addEventListener('change', () => done(input.files?.[0] ?? null))
+    input.addEventListener('cancel', () => done(null))
+    window.addEventListener('focus', onFocus)
     input.click()
   }),
   upload: (file) => postFoodPhoto(file),

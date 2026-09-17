@@ -34,8 +34,14 @@ export interface RecorderLike {
 }
 
 export interface VoiceDeps {
-  /** `navigator.mediaDevices.getUserMedia`。缺失 = 环境不支持（老浏览器 / 非安全上下文）。 */
-  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>
+  /** `navigator.mediaDevices.getUserMedia`。缺失 = 环境不支持（老浏览器 / 非安全上下文）。
+   *
+   * ⚠ 返回类型是 `MediaStream | undefined` 而**不是** `MediaStream`：
+   * 依赖侧常见写法 `(c) => navigator.mediaDevices?.getUserMedia(c)`（箭头恒真值）
+   * 在非安全上下文下**不抛、静默回 undefined**。类型放宽 + 运行时 `!stream` 守卫
+   * 是一对 —— 类型写成不回 undefined 的话，这个失败模式就从类型上被排除了，
+   * 而它恰恰会发生（2026-09-17 实测：MediaRecorder 原生 TypeError 摔给用户）。 */
+  getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream | undefined>
   /** 由 MediaStream 造一个 recorder。缺失 = 环境不支持 `MediaRecorder`。 */
   createRecorder?: (stream: MediaStream) => RecorderLike
   /** 上传音频拿文本。失败要抛错（见 data/asr.ts） */
@@ -66,6 +72,18 @@ export interface VoiceFlow {
  * 每种失败给的动作指引不同（去改权限 vs 插麦克风 vs 换个浏览器），
  * 所以必须分开映射，不能合并成"录音失败"。
  */
+/** 非安全上下文 / 老浏览器的统一人话。
+ *
+ * 非安全上下文 = **http:// 且非 localhost**（用局域网 IP 访问就是这类）——
+ * 浏览器此时整个不提供 `navigator.mediaDevices`。出路按场景分：
+ * 本机用 `http://localhost:8000`（算安全上下文）；手机等其它设备必须配 https。
+ * 这条消息在两处出现：`!gum`/`!mk`（依赖缺失）与 `!stream`（依赖存在但调用
+ * 静默返回 undefined），所以提出来共用 —— 两处文案漂移又是一个双源。 */
+const UNSUPPORTED_MESSAGE =
+  '当前页面不是安全上下文，浏览器不提供麦克风。' +
+  '本机可用 http://localhost:8000 访问；手机等其它设备需要给服务配 https' +
+  '（http://局域网IP 不算安全上下文）'
+
 export function voiceErrorMessage(e: unknown): string {
   const name = (e as { name?: string } | null)?.name ?? ''
   switch (name) {
@@ -79,7 +97,7 @@ export function voiceErrorMessage(e: unknown): string {
     case 'TrackStartError':
       return '麦克风被别的程序占用了——关掉正在用它的软件再试'
     case 'SecurityError':
-      return '当前页面不允许用麦克风——需要 https 或 localhost'
+      return UNSUPPORTED_MESSAGE
     case 'OverconstrainedError':
       return '麦克风不满足录音要求——换一个输入设备试试'
     default:
@@ -151,8 +169,11 @@ export function createVoiceFlow(deps: VoiceDeps): VoiceFlow {
       emit()
       return
     }
+    // 先落局部变量、校验通过才进 `stream`（它的类型是 MediaStream | null，
+    // "没有"在这个状态机里就用 null 表达，不引入第三种空）
+    let got: MediaStream | undefined
     try {
-      stream = await gum({ audio: true })
+      got = await gum({ audio: true })
     } catch (e) {
       starting = false
       error = voiceErrorMessage(e)
@@ -165,9 +186,21 @@ export function createVoiceFlow(deps: VoiceDeps): VoiceFlow {
       teardown()
       return
     }
+    if (!got) {
+      // 依赖"存在"但调用**静默返回 undefined** —— 典型是非安全上下文下
+      // 依赖侧写成 `(c) => navigator.mediaDevices?.getUserMedia(c)`：
+      // 箭头函数恒真值，`if (!gum)` 拦不住，可选链不抛、只回 undefined。
+      // 不在这里拦的话，下一步 `new MediaRecorder(undefined)` 会把原生
+      // TypeError 摔给用户（实测：'parameter 1 is not of type MediaStream'）。
+      starting = false
+      error = UNSUPPORTED_MESSAGE
+      emit()
+      return
+    }
     starting = false
+    stream = got
     try {
-      recorder = mk(stream)
+      recorder = mk(got)
     } catch (e) {
       error = voiceErrorMessage(e)
       teardown()

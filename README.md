@@ -93,42 +93,30 @@ Agent：（命中运动医学禁忌表）急性期不建议过顶推举。替代
 
 ## 架构
 
-```
-┌─ 呈现层 web/ ──────────────────────────────────────────────┐
-│  Vite + TypeScript + three.js（无 UI 框架）                │
-│  3D 肌群视图 · 对话面板 · 计划抽屉 · 建档窗口 · 拍照上传    │
-│  构建产物 dist/ 由 app/server.py 挂在 /app                 │
-├─ 编排层 app/ ──────────────────────────────────────────────┤
-│  core/agent.py   Agent 门面                                │
-│  core/graph.py   LangGraph StateGraph                      │
-│                   guard → classify →                        │
-│                     ├─ clarify / clarify_exercise → END    │
-│                     ├─ execute ──────────────┐              │
-│                     ├─ plan_node → step{i} → aggregate       │
-│                     └─ think → act ──────────┘              │
-│                                 → validate → render → END  │
-│  core/nodes.py   图节点（闭包工厂）+ 条件边路由             │
-│  core/router.py  执行模式动态变换 + 意图语义层              │
-│  skills/         guard / qa / plan / teach / progress /     │
-│                  smalltalk / preference                     │
-│  rag/            PG+pgvector 向量检索原语（调用方自行组合   │
-│                  图/向量）+ cross-encoder rerank（可降级）  │
-│  graph/          Neo4j 记忆图谱（双时态）+ 知识图谱         │
-│  runtime/        asr / vision / pipeline / validator        │
-│  storage/        私有 SQLite（gitignore，不入库）           │
-│  bus/            MessageBus 多智能体契约（留位，未启用）    │
-├─ 消费层 lib/ ──────────────────────────────────────────────┤
-│  exercise_repo · foods_repo · dish_repo · muscle_map        │
-│  progression · recovery · screening · split_cycle           │
-│  serving_units · portion_reference · negation               │
-├─ 数据层 data/ ─────────────────────────────────────────────┤
-│  exercises-dataset · nutrition-dataset · china-food         │
-│  dishes · training-science · sports-medicine                │
-│  各包含 data/（成品）+ scripts/（幂等构建）+ docs/（数据字典）│
-└────────────────────────────────────────────────────────────┘
-```
+依赖**单向**：`web` 经 HTTP 调 `app`，`app` 调 `lib`，`lib` 只读 `data`。
 
-**外部依赖**
+![四层结构与单向依赖](assets/diagrams/04-architecture-layers.svg)
+
+各层职责（清单按实际目录核对过）：
+
+| 层 | 模块 | 职责 |
+|---|---|---|
+| **呈现** `web/` | Vite + TypeScript + three.js | 无 UI 框架；3D 肌群视图 · 对话面板 · 计划抽屉 · 建档 · 拍照上传。构建产物 `dist/` 由 `app/server.py` 挂在 `/app` |
+| **编排** `app/` | `core/agent.py` | Agent 门面：会话、图外前置（记忆抽取 / 档案投影）、出图后组装结构化结果 |
+| | `core/graph.py` | LangGraph `StateGraph` 装配 —— 连边见 [编排流程](#编排流程) |
+| | `core/nodes.py` | 图节点（闭包工厂）+ 条件边路由 |
+| | `core/router.py` | 执行模式动态变换 + 意图语义层 |
+| | `skills/` | `guard` / `qa` / `plan` / `teach` / `progress` / `smalltalk` / `preference` |
+| | `config/` | 各链路的 JSON 配置：路由 / 意图例句 / LLM / 图谱 / ASR / 视觉 |
+| | `rag/` | PG+pgvector 检索原语（调用方自行组合图与向量）+ cross-encoder rerank（可降级） |
+| | `graph/` | Neo4j 记忆图谱（双时态）+ 知识图谱 |
+| | `runtime/` | asr / vision / pipeline / validator |
+| | `storage/` | 私有 SQLite（gitignore，不入库） |
+| | `bus/` | MessageBus 多智能体契约（留位，未启用） |
+| **消费** `lib/` | 12 个模块 | 纯只读、只依赖数据、无编排逻辑。4 个仓库（`exercise_repo` / `foods_repo` / `dish_repo` / `muscle_map`）+ `parts` / `progression` / `recovery` / `screening` / `split_cycle` / `serving_units` / `portion_reference` / `negation` |
+| **数据** `data/` | 9 个数据集 | `exercises-dataset` · `nutrition-dataset` · `china-food` · `dishes` · `training-science` · `sports-medicine` · `split-schemes` · `rag_eval` · `stress_v3`；各含 `data/`（成品）+ `scripts/`（幂等构建）+ `docs/`（数据字典） |
+
+### 外部依赖
 
 | 服务 | 用途 | 是否必需 |
 |---|---|---|
@@ -279,10 +267,11 @@ python scripts/eval_rag.py       # 需 Ollama 在线；不在线会 FAIL 而不�
 ## 目录结构
 
 ```
-app/            Agent 编排层（core / skills / rag / graph / runtime / storage / bus）
+app/            Agent 编排层（core / skills / config / rag / graph / runtime / storage / bus）
 lib/            消费层：纯读取、只依赖数据、无编排逻辑
 data/           数据集：各包含 data/ scripts/ docs/，构建脚本幂等、配套 validate
 web/            3D 前端（Vite + TS + three.js）
+assets/         文档配图：screenshots/（界面截图）+ diagrams/（矢量流程图）
 scripts/        运维脚本：serve / eval_rag / stress_test / 数据回填与审计
 examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 ```

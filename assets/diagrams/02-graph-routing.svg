@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="464" viewBox="0 0 680 464" role="img" font-family="'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <title>FitMind 图内路由与两条短路出口</title>
+  <desc>guard 命中高风险提问时直接短路到 END；classify 判定低置信或打卡消歧时也直接收束；其余情况按 mode_route 进入四种执行模式之一，再经 validate 与 render 出回答。</desc>
+  <rect x="0" y="0" width="680" height="464" fill="#FFFFFF"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect x="60" y="40" width="340" height="56" rx="12" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="230" y="59" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#3C3489">guard · 伤痛前置</text>
+  <text x="230" y="78" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7">高风险提问前置拦截，查禁忌与 RTP 阶梯</text>
+
+  <rect x="60" y="156" width="340" height="56" rx="12" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="230" y="175" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#3C3489">classify · 三层决策</text>
+  <text x="230" y="194" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7">L0 规则 → L1 语义相似度 → LLM 兜底</text>
+
+  <rect x="60" y="272" width="340" height="56" rx="12" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="230" y="291" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#3C3489">执行 · 四种模式之一</text>
+  <text x="230" y="310" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7">direct / react / plan_exec / rewoo</text>
+
+  <rect x="60" y="388" width="340" height="56" rx="12" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="230" y="407" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#3C3489">validate → render</text>
+  <text x="230" y="426" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7">校验数字与出处，再组织措辞出 reply</text>
+
+  <rect x="460" y="40" width="180" height="56" rx="12" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text x="550" y="59" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#444441">END · 安全提示</text>
+  <text x="550" y="78" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">reply 由 guard 写就</text>
+
+  <rect x="460" y="156" width="180" height="56" rx="12" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text x="550" y="175" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#444441">END · 反问 / 消歧</text>
+  <text x="550" y="194" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">不耗 render 的 token</text>
+
+  <line x1="230" y1="100" x2="230" y2="151" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="244" y="126" text-anchor="start" dominant-baseline="central" font-size="12" fill="#5F5E5A">pass</text>
+
+  <line x1="404" y1="68" x2="455" y2="68" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="428" y="56" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">blocked</text>
+
+  <line x1="230" y1="216" x2="230" y2="267" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="244" y="242" text-anchor="start" dominant-baseline="central" font-size="12" fill="#5F5E5A">mode_route</text>
+
+  <line x1="404" y1="184" x2="455" y2="184" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="428" y="172" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">clarify</text>
+
+  <line x1="230" y1="332" x2="230" y2="383" stroke="#888780" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="244" y="358" text-anchor="start" dominant-baseline="central" font-size="12" fill="#5F5E5A">outcome</text>
+</svg>

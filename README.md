@@ -59,6 +59,7 @@ Agent：（命中运动医学禁忌表）急性期不建议过顶推举。替代
 - [界面](#界面)
 - [核心能力](#核心能力)
 - [架构](#架构)
+- [编排流程](#编排流程)
 - [快速开始](#快速开始)
 - [检索质量评估](#检索质量评估)
 - [HTTP 接口](#http-接口)
@@ -131,6 +132,39 @@ Agent：（命中运动医学禁忌表）急性期不建议过顶推举。替代
 | Ollama + `bge-m3` | 查询与语料的稠密向量（1024 维） | 必需 |
 | `bge-reranker-base` 权重 | cross-encoder 重排，把 top-1 准确率从 80% 往上抬 | 可选，缺失自动降级 |
 | whisper + torch | `POST /v1/asr` 语音转写 | 可选，~4.6 GB 显存 |
+
+---
+
+## 编排流程
+
+下面三张图按 `app/core/graph.py` 的实际连边画。
+
+**一次对话的完整链路** —— 注意记忆抽取与档案投影发生在图**之前**（图外前置），
+出图后才组装结构化结果并写会话留档：
+
+![一次对话请求的全链路](assets/diagrams/01-request-lifecycle.svg)
+
+**图内的两个决策点** —— `guard` 与 `classify` 是仅有的会「提前收束」的地方：
+前者命中高风险提问就直接给安全提示（reply 在 guard 里写就），
+后者判不出意图、或打卡里的动作名有歧义时出反问 / 候选。
+两条短路都**不经过 render** —— 省掉一次措辞生成的 token：
+
+![图内路由与两条短路出口](assets/diagrams/02-graph-routing.svg)
+
+**四种执行模式的形状** —— 走哪一种由 `classify` 判出的复杂度决定，
+映射写在 `app/config/router_config.json`，是**数据驱动**的，不是散在代码里的分支：
+
+| 复杂度 | 何时判为 | 模式 | 形状 |
+|---|---|---|---|
+| simple | 默认兜底 | `direct` | 单步执行 |
+| medium | progress / teach | `react` | `think → act` 循环，直到不需要再调工具 |
+| complex | plan | `plan_exec` | `plan_node` → 逐步顺序执行 → `aggregate` |
+| batch | 命中「请…一周…计划」 | `rewoo` | `plan_node` → **4 槽并行** → `aggregate` |
+
+![四种执行模式的形状](assets/diagrams/03-execution-modes.svg)
+
+> 后两种模式**共用 `plan_node`**，分叉点在中间那一步：`plan_exec` 直接顺序跑完，
+> `rewoo` 才 fan-out 到 4 个 `execute_step{i}` 槽位再汇合——
 
 ---
 

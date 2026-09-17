@@ -17,6 +17,7 @@ import { createLabelNames, createLoadTarget } from './wiring'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
+import { createSessionBar } from './ui/session-ui'
 import { createDetailFlow } from './ui/detail-flow'
 import { MUSCLE_IDS } from './body/load-model'
 import { postCheckinResolve, streamChat } from './data/chat'
@@ -62,6 +63,9 @@ const legendEl = document.querySelector<HTMLElement>('#legend')!
 const labelsEl = document.querySelector<HTMLElement>('#labels')!
 createLegend(legendEl)
 const notice = createLoadErrorNotice(legendEl)
+// 会话条（左下角）：当前身份 + 退出登录。内部 fetch /v1/auth/me，
+// 未启用登录（账号表空）时整条自动隐藏 —— 单机用户看不到它。
+createSessionBar(document.querySelector<HTMLElement>('#session')!)
 
 let latest: MuscleMapData | null = null
 // 名称与数值分开：latest 是数值（失败必须作废），names 是名称（失败保留，
@@ -279,7 +283,11 @@ tick()
 // 逻辑全在 ui/chat-flow.ts（可单测），这里只做三件装配的事：
 // 把 DOM 交给面板、把网络交给 data/chat、把"点卡片"接到已有的 select()。
 
-const SESSION_KEY = 'fitmind.chat.session'
+// 会话 id **按 user_id 分键**（2026-09-17，登录功能配套）：同一个浏览器
+// 换账号登录时，若键不分账号，后一个人会接上前一个人"最近几轮对话"的语境
+// —— 数据不会串（写都进各自账号），但"刚才说的"会串。键带上 uid 后，
+// 各账号的对话上下文互不可见；同一账号换设备仍各自开新会话。
+const SESSION_KEY = 'fitmind.chat.session.' + uid
 const chatEl = document.querySelector<HTMLElement>('#chat')!
 const chatToggleEl = document.querySelector<HTMLButtonElement>('#chat-toggle')!
 const profileEl = document.querySelector<HTMLElement>('#profile')!

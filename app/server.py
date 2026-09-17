@@ -3,8 +3,8 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -12,6 +12,10 @@ for p in ("", "lib"):
     p = str(ROOT / p)
     if p not in sys.path:
         sys.path.insert(0, p)
+
+_LOGIN_PAGE_PATH = ROOT / "web" / "login.html"
+"""登录/注册页。免构建静态页（不走 Vite）—— 它是**进入应用的门**，
+不能依赖"应用已经加载"才能显示。"""
 
 
 class ChatRequest(BaseModel):
@@ -29,6 +33,13 @@ class ProfileRequest(BaseModel):
 class PlanDeleteRequest(BaseModel):
     """计划表卡片「删除计划」按钮的请求（user_id 归属同其它端点）。"""
     user_id: str = "local"
+
+
+class AuthRequest(BaseModel):
+    """登录 / 注册共用。**字段名沿用 user_id** —— 登录名即记忆图谱的归属键，
+    不是另起一套账号体系（那样"账号 → 数据"就要多一张映射表）。"""
+    user_id: str
+    password: str
 
 
 class CheckinResolveRequest(BaseModel):
@@ -71,6 +82,18 @@ def create_app() -> FastAPI:
     agent = Agent(registry=build_default_registry(), llm=build_provider())
     app.state.agent = agent   # 测试/调用方可经此建档（Profile 进 Session）
 
+    # ---- 访问网关（局域网多用户：登录注册 + user_id 改写隔离） ----
+    # 放在 GZip **之后** add → AuthGate 是最外层：未登录的请求在 gzip 之前就被
+    # 302/401 掉，不浪费压缩。⚠ 纯 ASGI 中间件，不要换成 BaseHTTPMiddleware ——
+    # 它会缓冲响应体，/v1/chat/stream 的 SSE 会被整套拖死（见 app/auth.py）。
+    from app.auth import (AccountStore, AuthGate, CookieSession,
+                          validate_password as auth_validate_password,
+                          validate_user_id as auth_validate_user_id)
+    accounts = AccountStore()
+    cookie_session = CookieSession()
+    app.state.auth = {"accounts": accounts, "session": cookie_session}
+    app.add_middleware(AuthGate, session=cookie_session, accounts=accounts)
+
     @app.get("/health")
     def health():
         # semantic：L1 例句库状态（on / off(unreachable) / disabled）。全静默降级时
@@ -84,6 +107,64 @@ def create_app() -> FastAPI:
                 # 只记次数等于"知道坏了但不知道为什么"——实测食物库间歇 OOM 就是靠
                 # 这里的异常摘要才从"4 个断言莫名失败"定位到 MemoryError
                 "degraded_detail": _degd()}
+
+    # ------------------------------------------------------------ 登录注册
+    # 端点写在 app.mount 之前（mount 会吞掉后续路由）。认证逻辑在 app/auth.py。
+    # ⚠ 数据隔离真正的 enforcement 点在 AuthGate（改写 user_id），不在这四个端点 ——
+    #   就算端点全对，处理器拿到什么样的 user_id 仍由网关决定。
+
+    @app.post("/v1/auth/register")
+    def auth_register(req: AuthRequest):
+        """注册。**开放注册**：局域网内任何人可建号（可信圈子的取舍，已在 SDD 注明）。"""
+        try:
+            uid = auth_validate_user_id(req.user_id)
+            auth_validate_password(req.password)
+        except ValueError as e:
+            return JSONResponse(status_code=422, content={"ok": False, "error": str(e)})
+        if not accounts.create(uid, req.password):
+            return JSONResponse(status_code=409,
+                                content={"ok": False, "error": f"「{uid}」已被注册"})
+        resp = JSONResponse({"ok": True, "user_id": uid,
+                             "ack": f"已创建账号 {uid}"})
+        resp.headers["Set-Cookie"] = cookie_session.set_cookie_header(uid)
+        return resp
+
+    @app.post("/v1/auth/login")
+    def auth_login(req: AuthRequest):
+        uid = auth_validate_user_id(req.user_id)     # 顺带把大小写归一
+        if not accounts.verify(uid, req.password or ""):
+            # 不区分"用户不存在"与"密码错"（后端已做耗时对齐）——前端文案同理
+            return JSONResponse(status_code=401,
+                                content={"ok": False, "error": "用户名或密码不对"})
+        resp = JSONResponse({"ok": True, "user_id": uid, "ack": f"欢迎回来，{uid}"})
+        resp.headers["Set-Cookie"] = cookie_session.set_cookie_header(uid)
+        return resp
+
+    @app.post("/v1/auth/logout")
+    def auth_logout():
+        resp = JSONResponse({"ok": True, "ack": "已退出"})
+        resp.headers["Set-Cookie"] = cookie_session.clear_cookie_header()
+        return resp
+
+    @app.get("/v1/auth/me")
+    def auth_me(user_id: str | None = None):
+        # user_id 由 AuthGate 注入（网关把 query 里的 user_id 改写成登录者本人），
+        # 所以这里拿到的**一定是登录者** —— 前端想冒充别人也改不动它。
+        return {"ok": True, "user_id": user_id}
+
+    @app.get("/login")
+    def login_page():
+        """登录/注册页（免构建的静态页，不走 Vite）。"""
+        return FileResponse(_LOGIN_PAGE_PATH, media_type="text/html; charset=utf-8")
+
+    @app.get("/")
+    def root(request: Request):
+        """根路径按登录态分流：已登录进应用，未登录去登录页。
+
+        ⚠ 不要在这里读 `request.query_params` 的 user_id 来决定去哪 ——
+        那个值是客户端可伪造的；登录态只认 Cookie（网关同样只认 Cookie）。"""
+        user = cookie_session.verify(request.cookies.get(cookie_session.cookie_name))
+        return RedirectResponse(f"/app/?user_id={user}" if user else "/login")
 
     @app.get("/v1/muscle-map")
     def muscle_map(user_id: str = "local", days: int = 7):

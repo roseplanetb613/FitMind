@@ -25,6 +25,11 @@
     <canvas id="stage"></canvas>
     <div id="labels"></div>
     <div id="legend"></div>
+    <!-- 会话条（左下角，登录功能配套）：当前身份 + 退出登录。
+         未启用登录时由 ui/session-ui.ts 整条隐藏。放在 #legend 之后 ——
+         本仓不用 z-index，DOM 顺序就是层叠顺序，两者不会重叠
+         （样式上图例上移让位，见 styles.css 的 #legend）。 -->
+    <div id="session"></div>
     <aside id="detail"></aside>
     <div id="depth-hint" class="depth-hint" role="status" aria-live="polite"></div>
     <div id="toolbar">

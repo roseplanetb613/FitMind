@@ -32,9 +32,25 @@ html, body {
 }
 
 #legend {
-  position: absolute; left: 18px; bottom: 18px; width: 240px;
+  position: absolute; left: 18px; bottom: 56px; width: 240px;
   background: rgba(20, 26, 33, .9); padding: 12px; border-radius: 8px;
 }
+/* 底部 18px 那条让给会话条（登录/多用户配套，见 ui/session-ui.ts）——
+   图例上移，两者同列对齐（同 left 同宽）。 */
+#session {
+  position: absolute; left: 18px; bottom: 18px; width: 240px;
+  display: none; align-items: center; justify-content: space-between;
+  background: rgba(20, 26, 33, .9); padding: 8px 12px; border-radius: 8px;
+  font-size: 12px; color: #9aa6b2;
+}
+#session.is-on { display: flex; }
+.session-user { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-logout {
+  border: none; background: transparent; color: #9aa6b2; cursor: pointer;
+  font-size: 12px; font-family: inherit; padding: 2px 4px; white-space: nowrap;
+}
+.session-logout:hover { color: #e0a458; }
+.session-logout:disabled { opacity: .5; cursor: default; }
 .legend-title { font-weight: 600; margin-bottom: 8px; }
 .legend-bar { height: 12px; border-radius: 3px; margin-bottom: 6px; }
 .legend-axis { display: flex; justify-content: space-between;

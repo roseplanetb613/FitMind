@@ -20,6 +20,10 @@ DATA = (Path(__file__).resolve().parent.parent
 _WD_ZH = "一二三四五六日"
 
 # 数据包缺失/损坏时的兜底（spec §9）：与 default_4split 等价的一份副本
+# ⚠ 必须与 split_schemes.json 里的 default_4split **逐字一致**（含 summary/example）。
+# 那两个字教字段是 2026-09-17 补的：它们原先只存在于 teach_skill._SPLIT_KB，
+# 于是"编排方案"这一个概念有两份描述，且两份对"上下肢"的循环节奏说法不一致。
+# 现在教学文案归数据包，teach 只读不写。见 app/skills/teach_skill.py 的 _schema_hit。
 _FALLBACK = {"schemes": [{
     "id": "default_4split", "name_zh": "经典四天分化", "aliases": [],
     "default": True,
@@ -28,6 +32,10 @@ _FALLBACK = {"schemes": [{
         {"type": "train", "label": "拉日(背·二头)", "pattern": "pull"},
         {"type": "train", "label": "腿日(股四·臀·腘绳)", "pattern": "squat"},
         {"type": "train", "label": "核心日", "pattern": "core"}],
+    "summary": "把训练分为推日、拉日、腿日、核心日四天一轮，每个肌群约每 4 天刺激一次，"
+               "部位覆盖均衡，适合有一定基础、能稳定安排四天训练的人。",
+    "example": "Day1 推（胸·肩·三头）→ Day2 拉（背·二头）→ Day3 腿（股四·臀·腘绳）"
+               "→ Day4 核心，循环往复。",
     "note": "同一肌群间隔 48 小时以上"}]}
 
 _DAYS_RE = re.compile(r"(\d+)\s*天")

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""split_schemes.json 校验：结构/唯一性/pattern 白名单。
+"""split_schemes.json 校验：结构/唯一性/pattern 白名单/教学字段（summary·example）。
 手动：python data/split-schemes/scripts/validate.py"""
 import json
 import sys
@@ -26,6 +26,14 @@ def validate(data: dict) -> list[str]:
             defaults += 1
         if not s.get("name_zh"):
             errors.append(f"{sid}: name_zh 缺失")
+        # 教学字段（2026-09-17 起必填）：teach 的编排问答直接展示这两个字段。
+        # 它们原先只存在于 app/skills/teach_skill.py 的 _SPLIT_KB，于是同一个编排
+        # 方案有两份描述、且两份说法会漂。收敛到数据包后，这里必须拦住"加方案
+        # 却不写文案"——否则 teach 会拿不到内容而静默降级。
+        for f in ("summary", "example"):
+            v = s.get(f)
+            if not isinstance(v, str) or not v.strip():
+                errors.append(f"{sid}: {f} 缺失或为空（teach 编排问答需要展示它）")
         for a in s.get("aliases") or []:
             key = str(a).lower()
             if key in aliases:

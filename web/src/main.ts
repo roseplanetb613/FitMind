@@ -14,6 +14,9 @@ import { createLabelLayer } from './render/labels'
 import { createScene, framingFor, musclesUnderCursor, nextPickIndex, pickMuscleId, setHover, type PickState } from './render/scene'
 import { attachFluidTrail } from './render/fluid-trail'
 import { createLabelNames, createLoadTarget } from './wiring'
+import {
+  FpsWindow, TierGovernor, TIER_SETTINGS, detectInitialTier, readDeviceHints, type Tier,
+} from './render/perf'
 import { atEdge, nextId } from './ui/focus'
 import { createLegend } from './ui/legend'
 import { createLoadErrorNotice } from './ui/notice'
@@ -39,14 +42,68 @@ const days = Number(params.get('days') ?? 7)
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
 
+// ── 性能档位（2026-09-17 手机端治理）────────────────────────────────
+// 开局由**能力探测**定，运行中由**帧率采样**调整。档位表与判定逻辑在
+// render/perf.ts（纯函数 + 注入，有 25 条单测）。
+const initialTier: Tier = detectInitialTier(readDeviceHints())
+const initialSettings = TIER_SETTINGS[initialTier]
+let tier: Tier = initialTier
+
+const fpsWindow = new FpsWindow(60)
+const governor = new TierGovernor({ initial: initialTier })
+
+/**
+ * 每帧喂给采样器；窗口满了就让 governor 判一次升降档。
+ *
+ * ⚠ 停帧期间本函数不会被调用，恢复时窗口必然是空的 —— 不会把那段静止时间
+ * 算成卡顿（`FpsWindow.reset()` 存在的全部理由）。
+ */
+function sampleFrame(frameMs: number): void {
+  fpsWindow.push(frameMs)
+  if (!fpsWindow.ready) return
+  const next = governor.onWindow(fpsWindow.fps)
+  fpsWindow.reset()
+  if (next !== tier) applyTier(next)
+}
+
+/**
+ * 档位切换：两个渲染层都要联动。
+ *
+ * ⚠ 3D 层与尾流层是**两个独立对象**（各自一块 canvas、一套 GL 状态机），
+ * 没有共同祖先 —— 必须显式分发，漏掉一支就会出现"3D 降了、尾流还在满速跑"。
+ */
+function applyTier(next: Tier): void {
+  tier = next
+  const s = TIER_SETTINGS[next]
+  sceneHandle?.setTier(next)
+  fluidHandle?.setTier(s.dyeResolution)
+}
+
+/**
+ * 标签层跟随投影。**不再是自己的 rAF** —— 挂到 3D 循环的每帧回调上
+ * （见下面 createScene 的 onFrame）。本仓此前有三个常驻 rAF（3D / 尾流 / DOM 标签），
+ * 停帧只有把三个都收进来才有意义。
+ *
+ * 惰性赋值：`createScene` 要先于 `labels` 建好，而回调可能在赋值前就被调用（首帧）
+ * —— null 检查让那一帧安静跳过。
+ */
+let updateLabels: (() => void) | null = null
+
 // 拖拽尾流（RosePlanet 作品页那颗 SplashCursor 的移植，参数按用户口径缩小一半）。
 // 挂在自己的 `#fluid` 画布上，DOM 顺序在 #stage 之前 → 就在 3D 模型**背后**。
 //
 // 拿不到 WebGL、或用户在系统里开了"减少动效" → `attachFluidTrail` 返回 null，
-// 页面照常跑（本仓"全降级"传统）。不保存 handle：这是整页应用，文档卸载时
-// RAF 与监听随文档一起消失，没有"运行期销毁再重建"的路径；handle 留给测试与复用。
+// 页面照常跑（本仓"全降级"传统）。
+// eco 档**不创建**：那一档本来就要求关掉尾流，没必要先建一套 FBO 再停掉。
 const fluidCanvas = document.querySelector<HTMLCanvasElement>('#fluid')
-if (fluidCanvas) attachFluidTrail(fluidCanvas)
+let fluidHandle = fluidCanvas && initialSettings.dyeResolution !== null
+  ? attachFluidTrail(fluidCanvas, {
+      dyeResolution: initialSettings.dyeResolution,
+      pixelRatioCap: initialSettings.pixelRatio,
+    })
+  : null
+/** 3D 层句柄（`createScene` 完成后才有）。档位联动用，只取需要的那个方法。 */
+let sceneHandle: { setTier: (t: Tier) => void } | null = null
 
 // **先发起、不在这里 await**（2026-09-13）。createScene 要异步加载 ~543 KiB 的
 // 肌肉模型，而原写法把它 await 在模块顶部，于是**下面每一行都被它卡住** ——
@@ -57,7 +114,13 @@ if (fluidCanvas) attachFluidTrail(fluidCanvas)
 // 现在只有**真正用到 handle 的地方**才等（见下方 `await sceneReady`），
 // 图例等不受影响的装配立刻完成。配合 index.html 的 #boot 载入提示，
 // 等待窗口读起来是"正在载入模型"而不是"页面残缺"。
-const sceneReady = createScene(canvas)
+const sceneReady = createScene(canvas, {
+  tier: initialTier,
+  onFrame: (frameMs) => {
+    updateLabels?.() // 标签跟随相机（原先是独立 rAF，见 updateLabels 的说明）
+    sampleFrame(frameMs)
+  },
+})
 const detailEl = document.querySelector<HTMLElement>('#detail')!
 const legendEl = document.querySelector<HTMLElement>('#legend')!
 const labelsEl = document.querySelector<HTMLElement>('#labels')!
@@ -82,6 +145,7 @@ let focused: string | null = null
 const handle = await sceneReady.finally(() => {
   document.querySelector('#boot')?.remove()
 })
+sceneHandle = handle
 const labels = createLabelLayer(labelsEl, handle.body, (id) => names.resolve(id))
 /** 键盘遍历顺序 = 标签顺序（就是那 28 个 id） */
 const ids = labels.ids()
@@ -189,6 +253,8 @@ function setHovered(id: string | null): void {
   hovered = id
   setHover(handle.body, id)
   labels.setHovered(id)
+  // 悬停改的是材质基色 → 必须请求渲染（eco 档可能正停着帧）
+  handle.requestRender()
 }
 canvas.addEventListener('pointermove', (ev) => setHovered(pickAt(ev.clientX, ev.clientY)))
 canvas.addEventListener('pointerleave', () => setHovered(null))
@@ -259,6 +325,8 @@ const target: LoadTarget = createLoadTarget({
   setLatest: (data) => {
     latest = data
     names.update(data) // 名称：失败保留、成功替换（见 createLabelNames）
+    // 数据到达 = 材质要重画。eco 档此时可能正停着帧，不请求就"数据到了屏幕不动"。
+    handle.requestRender()
     if (data === null) {
       // 数据作废 → 已打开的详情浮层同步撤下并清掉选中态。不清的话浮层还挂着
       // 上一轮的数值，与刚置为未知的材质/标签在同一屏上互相打架。
@@ -272,12 +340,12 @@ const source: MuscleMapSource = new ApiSource(uid, days)
 setInterval(() => void loadInto(source, days, target), 60_000)
 void loadInto(source, days, target)
 
-// 标签层跟随投影（几何与渲染由 scene.ts 自己的 RAF 驱动）
-const tick = (): void => {
-  requestAnimationFrame(tick)
+// 标签层跟随投影：接到 3D 循环的每帧回调上（见 createScene 的 onFrame），
+// 这里只把「怎么更新」装进去。首屏那一帧先手动跑一次，免得等下一帧才出现标签。
+updateLabels = () => {
   labels.update(handle.camera, { w: canvas.clientWidth, h: canvas.clientHeight })
 }
-tick()
+updateLabels()
 
 // ── 与教练对话（agent）──────────────────────────────────────────────
 // 逻辑全在 ui/chat-flow.ts（可单测），这里只做三件装配的事：

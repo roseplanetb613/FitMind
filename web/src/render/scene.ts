@@ -6,6 +6,7 @@ import { applyStars, buildStarField, setStarMotion, tickStars } from './star-fie
 import { buildHeartGlow, prefersReducedMotion, pulseGlow, pulseHeartEmissive } from './glow'
 import { emptyMap, muscleState, type MuscleMapData } from '../data/types'
 import { BASE_COLOR, HOVER_COLOR, NON_MUSCLE_COLOR, NON_MUSCLE_EMISSIVE, palette } from './palette'
+import { TIER_SETTINGS, canIdlePause, type Tier } from './perf'
 
 /** 只建场景图，不建 renderer —— 使 node 里可测（无 WebGL 上下文）。 */
 export function buildBodyGroup(): THREE.Group {
@@ -285,10 +286,37 @@ export interface SceneHandle {
   /** 几何是否来自真实肌肉模型（false = 回落到了代码生成的体块） */
   fromModel: boolean
   resize(): void
+  /**
+   * 请求渲染一帧。**停帧之后唯一的唤醒方式**。
+   *
+   * ⚠ 所有会改变画面输出的路径都必须调它：材质变了、相机动了、数据到了。
+   * 漏一处就是"数据到了但屏幕不动" —— 静默失效，正是本仓最防的那类 bug。
+   */
+  requestRender(): void
+  /** 档位变化：像素比 + 动效开关（尾流层由调用方另行联动，见 perf.ts）。 */
+  setTier(tier: Tier): void
   dispose(): void
 }
 
-export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandle> {
+export interface SceneOptions {
+  /** 开局档位。缺省 `full` —— 探测结果由调用方传入（见 perf.ts::detectInitialTier）。 */
+  tier?: Tier
+  /**
+   * 每帧回调（帧间隔毫秒）。⚠ 停帧期间**不会**被调用 ——
+   * 采样方必须在自己停帧/恢复的边界上 `FpsWindow.reset()`，
+   * 否则恢复后第一帧的巨大间隔会被算成卡顿，刚唤醒就降档。
+   */
+  onFrame?: (frameMs: number) => void
+}
+
+export async function createScene(
+  canvas: HTMLCanvasElement,
+  options: SceneOptions = {},
+): Promise<SceneHandle> {
+  /** 当前性能档位。开局由能力探测给定，运行中由 governor 调整（见 perf.ts）。 */
+  let tier: Tier = options.tier ?? 'full'
+  let settings = TIER_SETTINGS[tier]
+
   const scene = new THREE.Scene()
   // **刻意不设 scene.background。** 画布底下压着一层拖拽尾流（`#fluid`），
   // 设了不透明背景就会把它整层盖死。底色改由 html/body 的 `#0f1419` 提供，
@@ -308,7 +336,10 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 而本场景有 shell / 背景组织 / 27 块半透明肌肉 / 星场好几层叠加 ——
   // 半透明丢掉 early-z，每片元都要混合，片元开销随像素量线性上涨。
   // 1.5 在视网膜屏上肉眼几乎无差（canvas 是 3D 内容，不是文字），像素量却砍掉一半多。
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO))
+  //
+  // 2026-09-17：取值改由**档位表**给（perf.ts 的 TIER_SETTINGS.pixelRatio）；
+  // `MAX_PIXEL_RATIO` 退化为 full 档的取值来源，保留导出供既有引用。
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatio))
 
   // 三点布光：主光偏右前，补光偏左后，顶光提轮廓
   const key = new THREE.DirectionalLight(0xffffff, 2.0)
@@ -331,7 +362,6 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   // 用户在系统里开了"减少动效"：星点**不闪**（但仍在，静态星云一样能读出密度），
   // 心脏**不呼吸**（但辉光仍在）。两处共用这一个判断，不各调一次。
   const reduced = prefersReducedMotion()
-  setStarMotion(stars, !reduced)
 
   // **首帧之前先落一次"还没有数据"的状态。**
   // 不落的话第一帧用的是加载期的初始材质：星点已由 buildStarField 归零，但肌肉
@@ -353,7 +383,24 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
   const glow = hearts.length ? buildHeartGlow(hearts) : null
   if (glow) scene.add(glow)
   // 减少动效时只留静态辉光（`reduced` 在上面与星点共用同一次判断）
-  const breathe = glow !== null && !reduced
+  let breathe = glow !== null && !reduced
+  /** 星点是否在闪。由 applyMotion 单点推导（理由见下）。 */
+  let ticking = false
+
+  /**
+   * 动效开关的**唯一**收口：星点闪烁与心脏呼吸都从这里推导。
+   *
+   * ⚠ 不要在别处各写一份判据。本仓吃过"同一份数据两个产出点、差异不报错
+   * 只静默降级"的亏（见 clarify_options 的收口记录）；这里两个动效必须同时
+   * 跟着档位走，分开写迟早出现"闪烁关了、呼吸还开着"这种半降级。
+   */
+  function applyMotion(): void {
+    const twinkle = !reduced && settings.starTwinkle
+    setStarMotion(stars, twinkle)
+    ticking = twinkle
+    breathe = glow !== null && !reduced && settings.heartBreathe
+  }
+  applyMotion()
 
   // 地面网格线**已移除**（用户口径「把 3d 脚下的网格线去掉」）。
   // 原先那圈 GridHelper 是把模型锚在地上的"地板"，但它同时也在深底上画出一片
@@ -374,15 +421,54 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
     camera.updateProjectionMatrix()
   }
   resize()
-  const ro = new ResizeObserver(resize)
+  // ⚠ resize 后必须**请求渲染**：停帧期间尺寸变化不会自己重画，会留一片空白
+  // 且不报错。这是"停帧"引入的新失效面，漏掉它就是白屏。
+  const ro = new ResizeObserver(() => {
+    resize()
+    requestRender()
+  })
   ro.observe(canvas)
 
   let raf = 0
-  const loop = (): void => {
+  /**
+   * 置脏标记。⚠ **所有**会改变画面输出的路径都要走 `requestRender()` ——
+   * 停帧之后没人替你把画面刷新过来。
+   */
+  let needsRender = true
+  let lastFrameAt = performance.now()
+
+  function stopLoop(): void {
+    if (raf !== 0) {
+      cancelAnimationFrame(raf)
+      raf = 0
+    }
+  }
+
+  function startLoop(): void {
+    if (raf !== 0) return
+    // ⚠ 重置基准：停帧期间攒下的间隔会让恢复后的第一帧 dt 巨大
+    lastFrameAt = performance.now()
     raf = requestAnimationFrame(loop)
-    // 一帧内两处动效用**同一个时间戳**：分两次取 performance.now() 会引入微小相位差，
-    // 虽然看不出来，但没有理由要它。
+  }
+
+  function requestRender(): void {
+    needsRender = true
+    if (raf === 0) startLoop()
+  }
+
+  // 相机变化（含阻尼收敛的每一帧）→ 请求渲染。
+  // 靠这个闭环，交互停下后阻尼会把剩余的帧"用光"，然后循环自然停 ——
+  // 不需要额外为阻尼留一个"再跑 N 帧"的定时器。
+  controls.addEventListener('change', requestRender)
+
+  function loop(): void {
+    // 先消费置脏标记：帧内若又有人 requestRender（例如上面的 change 回调），
+    // 标记会被重新置 true，于是这一帧结束后继续排下一帧。
+    needsRender = false
     const now = performance.now()
+    const frameMs = now - lastFrameAt
+    lastFrameAt = now
+    options.onFrame?.(frameMs)
     // 呼吸：光斑改尺寸+不透明度、心脏本体改自发光。都很便宜（一次 set + 写字段），
     // 且都在基准值上重算，不累积。
     if (breathe) {
@@ -391,11 +477,36 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
     }
     // 闪烁：只写一个**共享** uniform 的 value —— 28 个星点材质引用同一批对象
     // （见 star-field.ts），所以这里是 O(1) 而不是 O(材质数)。
-    if (!reduced) tickStars(stars, now)
+    if (ticking) tickStars(stars, now)
     controls.update()
     renderer.render(scene, camera)
+
+    // **空闲停帧**：本档没有常驻动效、也没人置脏 → 不再排下一帧。
+    // full / lite 档有心跳或闪烁在动，canIdlePause 为 false，行为与改动前一致。
+    if (document.hidden || (canIdlePause(tier) && !needsRender)) {
+      raf = 0
+      return
+    }
+    raf = requestAnimationFrame(loop)
   }
-  loop()
+
+  /**
+   * 页面切后台就停。
+   *
+   * ⚠ 手机上是**大头**：切走 / 锁屏后浏览器会限流 rAF，但"限流"不等于"停"，
+   * 仍然在耗电。显式停掉更干净，回前台再按需恢复。
+   */
+  function onVisibility(): void {
+    if (document.hidden) {
+      stopLoop()
+      return
+    }
+    // 回前台渲染一帧确认画面正确；eco 档若无事可做会随即自然停
+    requestRender()
+  }
+  document.addEventListener('visibilitychange', onVisibility)
+
+  startLoop()
 
   return {
     scene,
@@ -407,8 +518,19 @@ export async function createScene(canvas: HTMLCanvasElement): Promise<SceneHandl
     stars,
     fromModel,
     resize,
+    requestRender,
+    setTier(next: Tier): void {
+      tier = next
+      settings = TIER_SETTINGS[tier]
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatio))
+      resize()
+      applyMotion()
+      requestRender()
+    },
     dispose(): void {
-      cancelAnimationFrame(raf)
+      stopLoop()
+      document.removeEventListener('visibilitychange', onVisibility)
+      controls.removeEventListener('change', requestRender)
       ro.disconnect()
       controls.dispose()
       renderer.dispose()

@@ -14,5 +14,26 @@ export default defineConfig({
       '/media': 'http://127.0.0.1:8000',
     },
   },
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    // three 单独成 chunk（2026-09-17 手机端治理）：
+    //  · 应用代码改动不再让 three 的缓存失效（指纹是按 chunk 算的）
+    //  · 与主 chunk 并行下载，而不是全挤在一个 692KB 的文件里
+    // 首屏关键路径约 533KB gzip 中 three 占大头。拆开是纯收益、零行为变化。
+    //
+    // three 那一块是**刻意**单独存在的，它必然超过默认的 500KB 阈值。
+    // 调高阈值而不是关掉警告：真有别的 chunk 膨胀时还得看得见。
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        // ⚠ Vite 8 底层是 **rolldown**，`manualChunks` **只接受函数**。
+        // 传对象（rollup 的经典写法）会在构建期直接失败：
+        //   "For the manualChunks. Invalid type: Expected Function but received Object."
+        // 所以这里用谓词而不是 `{ three: ['three'] }`。
+        manualChunks: (id: string) =>
+          /[\\/]node_modules[\\/]three[\\/]/.test(id) ? 'three' : undefined,
+      },
+    },
+  },
 })

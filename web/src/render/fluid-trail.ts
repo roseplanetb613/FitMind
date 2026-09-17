@@ -77,8 +77,32 @@ export const TRAIL_COLOR = '#5fd4c4'
  */
 export const PIXEL_RATIO_CAP = 1.5
 
+/**
+ * "没人在动"多久之后停帧（毫秒）。
+ *
+ * 染料按 `DENSITY_DISSIPATION = 4.0` 指数衰减：t 秒后剩 `e^(-4t)`，要让它
+ * 视觉上真的静下来（<1%）约需 1.2 s，取 1.5 s 留余量。
+ *
+ * ⚠ **不能**用"指针是否在动"代替这个时间窗：拖完松手后染料还要飘一会儿，
+ * 立刻停帧会看到尾迹被"冻"在半空。
+ */
+export const TRAIL_IDLE_MS = 1500
+
+export interface FluidTrailOptions {
+  /** 染料纹理边长。默认 `DYE_RESOLUTION`；档位 lite 走 512。 */
+  dyeResolution?: number
+  /** 像素比上限。默认 `PIXEL_RATIO_CAP`。 */
+  pixelRatioCap?: number
+}
+
 export interface FluidTrailHandle {
   dispose: () => void
+  /**
+   * 档位变化。传 `null` = 本档不显示尾流（eco）：**清空画布并停循环**，
+   * 但**不销毁 WebGL 上下文** —— 升档时还能立刻用回来（重建上下文的代价
+   * 远大于停一会儿）。
+   */
+  setTier: (dyeResolution: number | null) => void
 }
 
 type GL = WebGLRenderingContext | WebGL2RenderingContext
@@ -153,7 +177,10 @@ class Program {
  * 调用方负责把 canvas 放在 3D 画布的**下层**（DOM 顺序在前），并给它
  * `pointer-events: none` —— 否则它会吃掉 OrbitControls 的拖拽。
  */
-export function attachFluidTrail(canvas: HTMLCanvasElement): FluidTrailHandle | null {
+export function attachFluidTrail(
+  canvas: HTMLCanvasElement,
+  options: FluidTrailOptions = {},
+): FluidTrailHandle | null {
   // 系统里开了"减少动效"就不做这个动效。与心脏辉光同一条约定。
   if (prefersReducedMotion()) return null
 
@@ -168,7 +195,12 @@ export function attachFluidTrail(canvas: HTMLCanvasElement): FluidTrailHandle | 
   // 没有任何可用的浮点渲染纹理格式 → 这台的驱动跑不了流体，静默放弃
   if (!ext.formatRGBA || !ext.formatRG) return null
 
-  const dpr = Math.min(window.devicePixelRatio || 1, PIXEL_RATIO_CAP)
+  const dpr = Math.min(window.devicePixelRatio || 1, options.pixelRatioCap ?? PIXEL_RATIO_CAP)
+  /**
+   * 染料边长。**可变** —— 档位变化时由 `setTier` 改。
+   * ⚠ 改它之后必须走 `initFramebuffers()`：纹理尺寸是建 FBO 那一刻定死的。
+   */
+  let dyeRes = options.dyeResolution ?? DYE_RESOLUTION
   const pointer: Pointer = {
     texcoordX: 0, texcoordY: 0, prevTexcoordX: 0, prevTexcoordY: 0,
     deltaX: 0, deltaY: 0, moved: false,
@@ -384,7 +416,7 @@ export function attachFluidTrail(canvas: HTMLCanvasElement): FluidTrailHandle | 
 
   function initFramebuffers(): void {
     const sim = resolution(SIM_RESOLUTION)
-    const dy = resolution(DYE_RESOLUTION)
+    const dy = resolution(dyeRes)
     const filter = ext.supportLinearFiltering ? gl.LINEAR : gl.NEAREST
     const rgba = ext.formatRGBA!
     const rg = ext.formatRG!
@@ -547,10 +579,34 @@ export function attachFluidTrail(canvas: HTMLCanvasElement): FluidTrailHandle | 
   let last = performance.now()
   let raf = 0
   let alive = true
+  /**
+   * 最后一次"有东西可看"的时刻。
+   * ⚠ 初值取 `-Infinity`（不是 now）：首帧渲染一次把画布尺寸与 FBO 对齐，
+   * 随即自然停帧 —— 页面刚打开时本来就没有染料可看。
+   */
+  let lastSplatAt = Number.NEGATIVE_INFINITY
+  /** 本档是否显示尾流。`setTier(null)` 时置 false（eco 档）。 */
+  let enabled = true
+
+  /**
+   * 有人动 → 刷新活跃时刻，并在需要时**唤醒**循环。
+   * 这是停帧之后唯一的入口（`frame` 停了就不再自己排下一帧）。
+   */
+  function markActivity(): void {
+    lastSplatAt = performance.now()
+    if (alive && enabled && raf === 0) {
+      // ⚠ 必须重置计时基准：停帧期间 `now - last` 可能攒了好几秒，
+      // 虽然 dt 那行夹了 16.6ms，但不重置会让后续几帧的节奏都是错的。
+      last = performance.now()
+      raf = requestAnimationFrame(frame)
+    }
+  }
 
   function frame(): void {
-    if (!alive) return
-    raf = requestAnimationFrame(frame)
+    if (!alive || !enabled) {
+      raf = 0
+      return
+    }
     const now = performance.now()
     // 上限 16.6ms：切到别的标签页再切回来时 dt 会很大，不夹住会让流体一步炸开
     const dt = Math.min((now - last) / 1000, 0.016666)
@@ -560,18 +616,75 @@ export function attachFluidTrail(canvas: HTMLCanvasElement): FluidTrailHandle | 
       pointer.moved = false
       splat(pointer.texcoordX, pointer.texcoordY,
             pointer.deltaX * SPLAT_FORCE, pointer.deltaY * SPLAT_FORCE, color)
+      lastSplatAt = now
     }
     step(dt)
     render()
+
+    // **空闲停帧**：染料已耗散干净且没人在动 → 不再排下一帧。
+    // 唤醒由 markActivity() 负责。
+    if (document.hidden || (!pointer.moved && now - lastSplatAt > TRAIL_IDLE_MS)) {
+      raf = 0
+      return
+    }
+    raf = requestAnimationFrame(frame)
   }
-  frame()
+
+  /**
+   * 页面切到后台就停。
+   *
+   * ⚠ 手机上是**大头**：切走 / 锁屏后浏览器会限流 rAF，但"限流"不等于"停"，
+   * 仍然在耗电；显式停掉更干净，回前台再按需恢复。
+   */
+  function onVisibility(): void {
+    if (document.hidden) {
+      if (raf !== 0) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      return
+    }
+    // 转回前台：只有"还有东西可看"才重启，否则等下一次 pointer 唤醒
+    if (alive && enabled && performance.now() - lastSplatAt <= TRAIL_IDLE_MS) {
+      last = performance.now()
+      raf = requestAnimationFrame(frame)
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibility)
+
+  raf = requestAnimationFrame(frame)
 
   return {
+    setTier(nextDye: number | null): void {
+      if (nextDye === null) {
+        enabled = false
+        if (raf !== 0) {
+          cancelAnimationFrame(raf)
+          raf = 0
+        }
+        // 清空画布：不清的话最后一帧染料会永远冻在屏幕上，看着像卡死了
+        if (dye) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+          gl.clearColor(0, 0, 0, 0)
+          gl.clear(gl.COLOR_BUFFER_BIT)
+        }
+        return
+      }
+      const changed = nextDye !== dyeRes
+      dyeRes = nextDye
+      if (!enabled) enabled = true
+      // ⚠ 尺寸变了必须重建 FBO（纹理大小建的时候定死）。
+      // 档位切换发生在升降档判定之后、不在渲染中途，这里重建是安全的。
+      if (changed) initFramebuffers()
+      markActivity()
+    },
     dispose(): void {
       alive = false
       cancelAnimationFrame(raf)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mousedown', onDown)
+      raf = 0
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('visibilitychange', onVisibility)
     },
   }
 }

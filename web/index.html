@@ -14,6 +14,15 @@
        挪出去就等于把白屏窗口又拉回来了。 -->
   <meta name="color-scheme" content="dark" />
   <style>html, body { background: #0f1419; margin: 0; }</style>
+  <!-- 肌肉模型预加载：让 350KB(gzip) 的 glb 与 JS **并行**开始下载，而不是等
+       three 初始化完才发起（那是串行的第二段等待）。
+       路径必须与 `load-model.ts` 的 `${import.meta.env.BASE_URL}models/muscles.glb`
+       一致（base 是 `/app/`）。
+       ⚠ **不要加 `crossorigin`** —— 同源请求加上它会让 credentials 模式与
+       FileLoader 的 fetch 不一致，结果是**下载两遍**，比不 preload 更糟。
+       ⚠ 命中与否以实测为准（CDP Network 看有无二次请求）；
+       不命中就删掉这一行，别硬留。 -->
+  <link rel="preload" as="fetch" href="/app/models/muscles.glb" />
 </head>
 <body>
   <div id="app">

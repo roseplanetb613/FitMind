@@ -1,5 +1,15 @@
 # -*- coding: utf-8 -*-
-"""私有用户记录（训练/饮食/意图缺口）——仅本地 SQLite，不入 git。"""
+"""私有用户记录（训练/饮食/意图缺口）——仅本地 SQLite，不入 git。
+
+⚠ **训练 / 饮食记录已不在本模块承载**（2026-09-17 收口）：
+`workout_set` 与 `diet_log` **没有任何生产写入方**（写只在测试里），
+而训练记录真正的家是 **Neo4j 图谱的 checkin 事件**（`MemoryGraph.log_event`），
+消费侧读 `app/runtime/history.WorkoutHistory`。
+曾出过的实测缺陷：`progress` 技能与计划的进阶回哺读这两张**空表** →
+恒返回"暂无训练记录"，两个功能静默失效（详见 `docs/SDD/user-data-domain.md` §6-F1）。
+
+两张表与对应方法**暂时保留但不建议新用**（去掉要连测试一起删，且也许日后要
+做"本机主人"的独立存储）。**要写训练记录请写图谱，别再往这里加写入方。**"""
 from __future__ import annotations
 import sqlite3
 import threading
@@ -49,6 +59,7 @@ class LogStore:
         self._conn.commit()
 
     def log_workout_set(self, exercise, weight_kg, reps, rir=0.0, date=""):
+        """⚠ **已弃用**：无生产调用方。训练记录请写图谱（见模块 docstring）。"""
         self._ensure_thread()
         self._conn.execute(
             "INSERT INTO workout_set(exercise,weight_kg,reps,rir,date) "
@@ -71,6 +82,7 @@ class LogStore:
         return [r[0] for r in cur.fetchall()]
 
     def log_diet(self, food_id, food_name, grams, date=""):
+        """⚠ **已弃用**：无生产调用方。饮食记录请写图谱（见模块 docstring）。"""
         self._ensure_thread()
         self._conn.execute(
             "INSERT INTO diet_log(food_id,food_name,grams,date) VALUES(?,?,?,?)",

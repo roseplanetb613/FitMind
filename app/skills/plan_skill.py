@@ -350,13 +350,17 @@ class PlanSkill(Skill):
         elif days is not None and days > 90:
             days = 90     # 超大天数封顶 90（防 expand 平铺挂起；>3 个月的计划无训练学意义）
         try:
-            from app.storage.db import LogStore
-            store = LogStore()                  # 进阶回哺；构造失败则跳过
+            from app.runtime.history import WorkoutHistory
+            # 进阶回哺：读**图谱** —— 训练记录的写入侧只写图谱（`log_event`），
+            # SQLite `workout_set` 没有生产写入方，读它必空。
+            # 见 docs/SDD/user-data-domain.md §6-F1
+            hist = WorkoutHistory(user_id=getattr(
+                getattr(ctx, "session", None), "user_id", None))
         except Exception:
-            store = None
+            hist = None
         out = build_plan(profile, prefs=prefs, fatigue=fatigue,
                          extra_blocked=extra_blocked, scheme=scheme,
-                         days=days, log_store=store,
+                         days=days, history=hist,
                          fatigue_sources=fatigue_sources)
         if not out.get("ok", True):
             return SkillResult(ok=False, data={},

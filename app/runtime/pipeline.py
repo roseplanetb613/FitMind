@@ -36,13 +36,17 @@ def _reps_mid(reps) -> int:
     return max(1, round(sum(nums[:2]) / min(len(nums), 2)))
 
 
-def _annotate_progression(exercises: list[dict], store) -> None:
-    """LogStore 逐动作回哺（spec §6）：记录原词 search_zh 归一 → 与计划动作
-    标准名匹配 → progression.evaluate 挂建议。无记录/归一失败/任何异常 →
-    不挂字段（宁缺毋滥，主计划不受影响）。"""
+def _annotate_progression(exercises: list[dict], history) -> None:
+    """逐动作回哺（spec §6）：记录原词 search_zh 归一 → 与计划动作标准名匹配
+    → progression.evaluate 挂建议。无记录/归一失败/任何异常 → 不挂字段
+    （宁缺毋滥，主计划不受影响）。
+
+    `history` 是 `app/runtime/history.WorkoutHistory`（读**图谱**）。此前收
+    `LogStore` 读 SQLite `workout_set`，而那张表没有生产写入方 → 本函数
+    **永远**走"不挂字段"分支（见 docs/SDD/user-data-domain.md §6-F1）。"""
     import progression as prog
     try:
-        recorded = store.exercise_names()
+        recorded = history.exercise_names()
     except Exception:
         return
     norm_map: dict = {}
@@ -59,7 +63,7 @@ def _annotate_progression(exercises: list[dict], store) -> None:
                         if std == name or r == name), None)
             if src is None:
                 continue
-            rows = store.history(src, top=3)
+            rows = history.history(src, top=3)
             if not rows:
                 continue
             hist = prog.ExerciseHistory(name, [prog.SetRecord(
@@ -81,9 +85,14 @@ def build_plan(profile: dict, prefs: dict | None = None,
                fatigue: set | None = None,
                extra_blocked: set | None = None,
                scheme: dict | None = None, days: int | None = None,
-               log_store=None, fatigue_sources: list | None = None) -> dict:
+               history=None, fatigue_sources: list | None = None) -> dict:
     """fatigue_sources：疲劳信号的出处 [{date,term,pattern}]（plan_skill 单源产生）。
-    缺省 None → 不落键，输出与注入前逐字一致。"""
+    缺省 None → 不落键，输出与注入前逐字一致。
+
+    history：训练记录来源（`app/runtime/history.WorkoutHistory`，需有
+    `exercise_names()` / `history()` 两个方法）。**2026-09-17 由 `log_store` 改名** ——
+    它原先收 `LogStore`，而 `LogStore` 的 `workout_set` 没有生产写入方，
+    进阶回哺恒拿空历史（见 docs/SDD/user-data-domain.md §6-F1）。"""
     ex, fr = exercise_repo(), foods_repo()   # 共享单例（原模块级 _EX/_FR 副本）
     conds = profile.get("conditions") or []
     pats = profile.get("patterns") or []
@@ -161,8 +170,8 @@ def build_plan(profile: dict, prefs: dict | None = None,
             applied.append(f"{slot['label']}加量（偏好）")
         if deload:
             item["deload"] = True
-        if log_store is not None:
-            _annotate_progression(item["exercises"], log_store)
+        if history is not None:
+            _annotate_progression(item["exercises"], history)
         training_items.append(item)
     if train_cnt == 0:
         return {"ok": False,

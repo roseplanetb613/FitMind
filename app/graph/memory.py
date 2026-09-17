@@ -21,6 +21,7 @@ import json
 from collections import Counter
 from app.core import diag                     # 降级可观测（静默失败可查）
 from lib.parts import PARTS                     # 部位词单表（见 lib/parts.py）
+from lib.exercise_repo import same_name         # 动作名比对唯一入口（见其 docstring）
 import re
 import threading
 import uuid
@@ -763,6 +764,78 @@ class MemoryStore:
         except Exception:
             diag.bump("memory.recent_exercises")
         return out
+
+    # ------------------------------------------- 训练记录读取（供 lib/progression 消费）
+    #
+    # 背景（2026-09-17 修复，见 docs/SDD/user-data-domain.md §6-F1）：
+    # 训练记录**写入侧只写图谱**（`log_event` 的 checkin 事件），而 SQLite 的
+    # `workout_set` / `diet_log` **没有任何生产写入方**。早先 progress 技能与
+    # 计划的进阶回哺读的都是那张空表，于是拿到恒定空历史 —— 两个功能静默失效，
+    # 且降级话术体面（"暂无训练记录"），看起来像"用户还没记录"。
+    # 修法是**读侧也读图谱**（不动写侧，保持单源）；不要两边都写。
+
+    def _checkin_items(self, user_id: str, days: int) -> list[tuple[dict, str]]:
+        """打卡事件的 items 摊平流 → [(item, occurred_at)]。
+
+        **只此一处遍历**：`exercise_sets` 与 `recorded_exercise_labels` 共用，
+        免得两套解析各写一份（"同一份数据多个产出点"是本项目反复踩的漂移坑）。
+        只读；异常 → 空。"""
+        out: list[tuple[dict, str]] = []
+        for ev in self.events(user_id, "checkin", days=days):
+            items = (ev.get("payload") or {}).get("items") or []
+            for it in items:
+                if isinstance(it, dict):
+                    out.append((it, str(ev.get("occurred_at") or "")))
+        return out
+
+    def exercise_sets(self, user_id: str, exercise: str,
+                      days: int = 180, limit: int = 6) -> list[dict]:
+        """某动作的逐组记录（时间升序，最多 limit 组）—— `progression` 的输入。
+
+        匹配口径：item 的 `name` 或 `raw` 与 `exercise` 走 **`same_name()`**
+        （跨层名字比对的唯一入口）。取不到「干净归一名」的条目存在 `raw` 里
+        （宁丢结构不丢信息），且库里大量动作是带空格复合名，所以两边都要看、
+        且不能用裸相等 —— 直接用 `same_name` 正是为了不重蹈 2026-09-11 那类缺陷。
+
+        ⚠ **图谱不记 RIR**（抽取器不解析 RIR）→ `rir` 恒为 0.0，即按"力竭组"估算。
+        方向是**保守**的（e1RM 偏低，不会把建议重量开大），但它是估算而非实测。
+        缺 `weight_kg` 或 `reps` 的条目**跳过**——算不出 e1RM，不拿 0 充数。"""
+        _validate_user_id(user_id)
+        if not exercise:
+            return []
+        rows: list[dict] = []
+        try:
+            for it, occ in self._checkin_items(user_id, days):
+                label = it.get("name") or it.get("raw") or ""
+                if not same_name(str(label), exercise):
+                    continue
+                w, r = it.get("weight_kg"), it.get("reps")
+                if w is None or r is None:
+                    continue
+                rows.append({"weight_kg": float(w), "reps": int(r), "rir": 0.0,
+                             "date": occ[:10]})
+        except Exception:
+            diag.bump("memory.exercise_sets")
+            return []
+        return rows[-limit:]
+
+    def recorded_exercise_labels(self, user_id: str, days: int = 180) -> list[str]:
+        """记录过的动作「标签」去重（`name` 优先，缺则 `raw`），保序。
+
+        与 `recent_exercises` 的分工：那个返回 **exercise_id → 次数**（供"常练的排前面"
+        排序）；这个返回**可读标签**，供与计划里的动作名做匹配（计划动作存 `name_zh`）。
+        两者都从同一批打卡事件读，但用途不同，别合并。"""
+        _validate_user_id(user_id)
+        seen: dict[str, None] = {}
+        try:
+            for it, _occ in self._checkin_items(user_id, days):
+                label = str(it.get("name") or it.get("raw") or "").strip()
+                if label:
+                    seen.setdefault(label, None)
+        except Exception:
+            diag.bump("memory.recorded_exercise_labels")
+            return []
+        return list(seen)
 
     def events(self, user_id: str, type_: str | None = None,
                days: int = 90) -> list[dict]:

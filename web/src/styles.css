@@ -579,70 +579,147 @@ button.chat-option-media:hover { border-color: rgba(95, 212, 196, .5); }
    （挂起由 main.ts 调 scene.setSuspended，见 render/scene.ts）。
 
    ⚠ 强调色同 .chat-panel / .plan-card 的取舍：teal 175°，避开恢复度冷端 cyan 196°。
+
+   版式三条（2026-09-18 优化）：
+     · **三段式**（头 / 中段 / 底）。中段 `flex:1` 并自己垂直居中 —— 否则大屏上
+       内容全挤在顶部、按钮吊在屏幕最底，是典型的"两头沉"。
+     · **单列限宽 620px**。全屏不代表性线要摊到两边：一屏只回答一件事，视线不该
+       左右跑。宽度靠 `.workout-card > *` 的 max-width 收，**不动 DOM**。
+     · **点阵 + 环**替代纯文字表进度。跟练时是"瞥一眼"，但文字口径一并保留
+       （"第 2/3 组"仍在）—— 两者同源于同一个 setIdx，各算一份迟早对不上。
    ══════════════════════════════════════════════════════════ */
 .workout-modal { display: none; }
 .workout-modal.is-open { display: block; }
 .workout-card {
   position: fixed; inset: 0; display: flex; flex-direction: column;
   /* 底部留出 iPhone home indicator 的位置，否则"结束训练"按钮贴着边缘 */
-  padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(170deg, rgba(14, 32, 40, .98), rgba(8, 16, 22, .995));
+  padding: 26px 22px calc(26px + env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
+  /* 顶部一层极淡的 teal 光晕：视线先被收到中间，而不是一上来就盯着纯黑 */
+  background:
+    radial-gradient(130% 60% at 50% 0%, rgba(46, 122, 130, .3), transparent 62%),
+    linear-gradient(170deg, #0d2029, #070e13 72%);
 }
+/* 限宽 + 居中，只作用于直接子项 */
+.workout-card > * {
+  width: 100%; max-width: 620px; margin-inline: auto;
+}
+
 .workout-head {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 10px; margin-bottom: 28px;
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(160, 240, 230, .1);
 }
-.workout-day { font-size: 13px; color: #5fd4c4; }
+.workout-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.workout-day {
+  font-size: 13px; color: #5fd4c4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .workout-progress { font-size: 12px; color: #6f7d86; white-space: nowrap; }
+
+/* 进度点阵。`.is-on` 拉长成胶囊 —— 比加粗/换色更容易被余光扫到 */
+.workout-dots, .workout-setdots { display: flex; align-items: center; gap: 6px; }
+.workout-dot {
+  width: 6px; height: 6px; border-radius: 3px;
+  background: rgba(255, 255, 255, .13);
+  transition: width .18s ease, background .18s ease;
+}
+.workout-dot.is-done { background: rgba(95, 212, 196, .42); }
+.workout-dot.is-on { width: 18px; background: #5fd4c4; }
+/* 组点阵大一号：它是这一屏的主角（动作点阵只在头部当背景信息） */
+.workout-setdots { margin: 2px 0 26px; }
+.workout-setdots .workout-dot { width: 9px; height: 9px; border-radius: 4px; }
+.workout-setdots .workout-dot.is-on { width: 28px; }
+
+.workout-body {
+  flex: 1 1 auto; display: flex; flex-direction: column;
+  justify-content: center; padding: 22px 0;
+}
+/* 间歇态整块居中。working 的大标题**左对齐是对的**（那是一行要读的字），
+   但间歇屏只有"还剩多少"一件事：标题、环、"下一组"三者若不同轴，看着就散 */
+.workout-body.is-rest { align-items: center; text-align: center; }
+/* align-items:center 会让子项宽度收缩到内容宽 —— 按钮组要显式占满 */
+.workout-body.is-rest .workout-actions { width: 100%; }
 .workout-title { margin: 0 0 10px; font-size: 18px; }
 .workout-exercise {
-  margin: 0 0 10px; font-size: 30px; line-height: 1.25; font-weight: 600;
+  margin: 0 0 12px;
+  /* clamp：窄屏不挤成三行，宽屏也不至于一条标题占掉半屏 */
+  font-size: clamp(26px, 6.2vw, 40px);
+  line-height: 1.2; font-weight: 650; letter-spacing: -.01em;
   word-break: break-word;
 }
-.workout-meta { margin: 0 0 24px; font-size: 14px; color: #9aa6b2; }
+.workout-meta { margin: 0 0 16px; font-size: 14px; color: #93a1ad; }
+
+/* 倒计时环：外圈 conic-gradient 涂进度、内圈压一个与背景同色的圆把它挖空。
+   ⚠ 不用 SVG —— tests/dom-stub.ts 只实现了 createElement，没有 createElementNS，
+   用 SVG 会让整块界面在测试里直接抛错（而这块 UI 的测试价值正是"点了之后怎样"） */
+.workout-ring {
+  width: 180px; height: 180px; border-radius: 50%;
+  display: grid; place-items: center; margin: 4px auto 22px;
+}
 .workout-countdown {
-  font-size: 84px; font-weight: 700; line-height: 1.05;
+  width: 156px; height: 156px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: #0b1a20;
+  font-size: 58px; font-weight: 700; line-height: 1;
   /* 等宽数字：不等宽的话倒计时每跳一秒宽度都在变，整块跟着抖 */
   font-variant-numeric: tabular-nums;
-  color: #5fd4c4; margin: 4px 0 6px;
+  color: #5fd4c4;
+  box-shadow: inset 0 0 34px rgba(95, 212, 196, .1);
 }
-/* margin-top:auto 把按钮组推到底部 —— 单手够得着的地方 */
-.workout-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: auto; }
+
+/* 按钮：主操作吃掉剩余宽度、次操作收窄 —— 拇指区因此短一截 */
+.workout-actions { display: flex; gap: 10px; }
 .workout-actions button, .workout-close, .workout-end {
-  font: inherit; font-size: 15px; padding: 13px 20px; border-radius: 12px;
+  font: inherit; font-size: 16px; font-weight: 600;
+  padding: 16px 22px; border-radius: 14px;
   cursor: pointer; border: 1px solid transparent;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
 }
 .workout-primary {
-  flex: 1 1 auto; min-width: 140px;
-  background: rgba(95, 212, 196, .18); color: #d8f6f1;
-  border-color: rgba(160, 240, 230, .35);
+  flex: 1 1 auto; min-width: 0;
+  background: linear-gradient(180deg, rgba(95, 212, 196, .32), rgba(95, 212, 196, .18));
+  color: #e6fffa;
+  border-color: rgba(160, 240, 230, .45);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .35);
 }
-.workout-primary:hover { background: rgba(95, 212, 196, .3); }
+.workout-primary:hover { background: rgba(95, 212, 196, .38); }
+.workout-primary:active { transform: translateY(1px); }
 .workout-ghost {
-  background: transparent; color: #9aa6b2;
-  border-color: rgba(160, 240, 230, .18);
+  flex: 0 0 auto; background: transparent; color: #93a1ad;
+  border-color: rgba(160, 240, 230, .16);
 }
 .workout-ghost:hover { background: rgba(255, 255, 255, .06); color: #e6ebf0; }
-.workout-foot { margin-top: 18px; }
+
+.workout-foot { flex: 0 0 auto; padding-top: 14px; }
+.workout-note { margin: 0 0 8px; font-size: 13px; color: #93a1ad; line-height: 1.7; }
+/* 降级 / 读不到 用琥珀色标出来，别和"今天没有安排"长得一样 */
+.workout-note.is-error { color: #e0a458; }
 .workout-end {
-  background: transparent; color: #8d99a5; width: 100%;
+  background: transparent; color: #7d8a95; width: 100%; font-weight: 400;
   border-color: rgba(255, 255, 255, .1);
 }
 .workout-end:hover { color: #e6ebf0; background: rgba(255, 255, 255, .05); }
-.workout-note { margin: 0 0 8px; font-size: 13px; color: #9aa6b2; line-height: 1.7; }
-/* 降级 / 读不到 用琥珀色标出来，别和"今天没有安排"长得一样 */
-.workout-note.is-error { color: #e0a458; }
+/* ⚠ 右 margin 设 auto 才是靠左：`.workout-card > *` 给所有直接子项上了
+   `margin-inline: auto`，而**自动 margin 的优先级高于 align-self** ——
+   不覆盖的话"知道了"会跑到正中间，跟上面左对齐的正文错位 */
 .workout-close {
-  align-self: flex-start; margin-top: 12px;
+  align-self: flex-start; margin: 12px auto 0 0;
   background: rgba(255, 255, 255, .06); color: #d8dee4;
   border-color: rgba(255, 255, 255, .12);
 }
 
 @media (max-width: 480px) {
-  .workout-exercise { font-size: 24px; }
-  .workout-countdown { font-size: 64px; }
-  .workout-actions button { padding: 14px 16px; }
+  .workout-card { padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .workout-ring { width: 150px; height: 150px; margin-bottom: 18px; }
+  .workout-countdown { width: 124px; height: 124px; font-size: 46px; }
+  /* 手机上主操作全宽、次操作另起一行：并排会让"完成一组"不够主，
+     而且两个按钮落在拇指区同一高度，更容易点错 */
+  .workout-actions { flex-wrap: wrap; }
+  .workout-actions .workout-primary,
+  .workout-actions .workout-ghost { flex: 1 1 100%; }
+  .workout-actions button { padding: 15px 16px; font-size: 15px; }
 }
 
 /* ══════════════════════════════════════════════════════════

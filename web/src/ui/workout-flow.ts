@@ -146,6 +146,8 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
   let renderedPhase = ''
   /** 倒计时那个数字节点（`tick` 只改它，不重建整屏） */
   let countdownEl: HTMLElement | null = null
+  /** 倒计时环（conic-gradient 的填充靠它）。同上，只改 style 不重建 */
+  let ringEl: HTMLElement | null = null
   let finishing = false
 
   const session: WorkoutSession = createWorkoutSession({
@@ -207,6 +209,7 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
     clear(deps.root)
     renderedPhase = ''
     countdownEl = null
+    ringEl = null
     const card = el('div', 'workout-card')
     card.setAttribute('role', 'dialog')
     card.setAttribute('aria-modal', 'true')
@@ -236,20 +239,60 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
     mount(card)
   }
 
+  /**
+   * 一排进度点（动作进度 / 组进度）。
+   *
+   * 为什么要有它：跟练时用户是**瞥一眼**手机，不是在读句子 —— 但文字表述不能因此
+   * 消失（`workout-meta` 里的"第 2/3 组"仍在，措辞与数字是单源）。点阵只是把同一个
+   * `st.setIdx` 换成一眼可见的形式；两者**必须同源**，各算一份迟早会对不上。
+   */
+  function dots(count: number, active: number, cls: string): HTMLElement {
+    const box = el('div', cls)
+    for (let i = 0; i < count; i++) {
+      const d = el('span', 'workout-dot')
+      if (i < active) d.classList.add('is-done')
+      else if (i === active) d.classList.add('is-on')
+      box.appendChild(d)
+    }
+    return box
+  }
+
+  /**
+   * 给倒计时环涂填充比例（剩余占比 100→0，环从满走到空）。
+   *
+   * ⚠ 用 `conic-gradient` 而**不是** SVG：`tests/dom-stub.ts` 只实现了
+   * `document.createElement`，没有 `createElementNS` —— 用 SVG 会让整块界面在
+   * 测试里直接抛错（而这块 UI 的测试价值恰恰在于"点了之后该发生什么"）。
+   */
+  function paintRing(node: HTMLElement, left: number, total: number): void {
+    const pct = total > 0 ? Math.max(0, Math.min(100, (left / total) * 100)) : 0
+    node.style.background =
+      `conic-gradient(#5fd4c4 ${pct}%, rgba(255,255,255,.07) 0)`
+  }
+
   function renderActive(): void {
     const st = session.state()
     const ex = session.current()
     const card = makeCard('训练执行台')
     renderedPhase = st.phase
 
+    // 头部：日名 + 动作进度（点阵与"N/M"同源于 st.exIdx/st.total）
     const head = el('div', 'workout-head')
-    head.appendChild(el('span', 'workout-day', dayLabel))
+    const headLeft = el('div', 'workout-head-left')
+    headLeft.appendChild(el('span', 'workout-day', dayLabel))
+    headLeft.appendChild(dots(st.total, st.exIdx, 'workout-dots'))
+    head.appendChild(headLeft)
     head.appendChild(el('span', 'workout-progress',
       `${Math.min(st.exIdx + 1, st.total)}/${st.total} 个动作`))
     card.appendChild(head)
 
+    // 中段吃掉剩余高度并垂直居中：大屏上不至于全挤在顶部、按钮吊在屏幕最底
+    const body = el('div', 'workout-body')
+    // 间歇态整块居中（见 styles.css 的 .workout-body.is-rest）
+    if (st.phase === 'resting') body.classList.add('is-rest')
+
     if (st.phase === 'working' && ex) {
-      card.appendChild(el('h3', 'workout-exercise', ex.name))
+      body.appendChild(el('h3', 'workout-exercise', ex.name))
       const meta = [`第 ${st.setIdx + 1}/${st.sets} 组`]
       if (ex.reps) meta.push(`目标 ${ex.reps} 次`)   // ⚠ 原样，不解析（有时间型"20-60s 保持"）
       // 器械走 `data/exercises.ts` 的**中文表**（那是 slug→中文的唯一副本）。
@@ -257,7 +300,8 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
       // 直接显示会在界面上蹦出一串英文 —— 真机验收时抓到过。
       const eq = equipmentLabel(ex.equipment)
       if (eq) meta.push(eq)
-      card.appendChild(el('p', 'workout-meta', meta.join(' · ')))
+      body.appendChild(el('p', 'workout-meta', meta.join(' · ')))
+      body.appendChild(dots(st.sets, st.setIdx, 'workout-setdots'))
       const row = el('div', 'workout-actions')
       row.appendChild(button('完成一组', 'workout-primary', () => {
         session.completeSet()
@@ -267,19 +311,24 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
         session.skipExercise()
         afterAction()
       }))
-      card.appendChild(row)
+      body.appendChild(row)
     } else if (st.phase === 'resting') {
-      card.appendChild(el('h3', 'workout-exercise', '组间歇'))
+      body.appendChild(el('h3', 'workout-exercise', '组间歇'))
+      const rest = ex?.restSec && ex.restSec > 0 ? ex.restSec : 0
+      ringEl = el('div', 'workout-ring')
+      paintRing(ringEl, st.restLeft, rest)
       countdownEl = el('div', 'workout-countdown', String(st.restLeft))
-      card.appendChild(countdownEl)
-      if (ex) card.appendChild(el('p', 'workout-meta', `下一组：${ex.name}`))
+      ringEl.appendChild(countdownEl)
+      body.appendChild(ringEl)
+      if (ex) body.appendChild(el('p', 'workout-meta', `下一组：${ex.name}`))
       const row = el('div', 'workout-actions')
       row.appendChild(button('跳过休息', 'workout-primary', () => {
         session.skipRest()
         afterAction()
       }))
-      card.appendChild(row)
+      body.appendChild(row)
     }
+    card.appendChild(body)
 
     const foot = el('div', 'workout-foot')
     for (const n of notes) foot.appendChild(el('p', 'workout-note', n))
@@ -443,8 +492,10 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
         else if (st.phase === 'working' || st.phase === 'resting') renderActive()
         return
       }
-      if (st.phase === 'resting' && countdownEl) {
+      if (st.phase === 'resting' && countdownEl && ringEl) {
         countdownEl.textContent = String(st.restLeft)
+        // 环也跟着走：只改这一个 style 字符串，不重建整屏（每 250ms 一次）
+        paintRing(ringEl, st.restLeft, session.current()?.restSec ?? 0)
       }
     },
   }

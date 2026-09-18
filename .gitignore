@@ -38,3 +38,12 @@ node_modules/
 # AI 工具的工作目录（会话记忆 / 计划任务状态，属工具而非项目内容）
 .workbuddy/
 .claude/
+
+# ——— 以下路径不在公开仓库中 ———
+# 本仓是 E:\FitMind 的派生副本（scripts/publish_public.py 生成），
+# 下列内容有意剔除；源仓仍完整保留它们的版本历史。
+app/tests/
+web/tests/
+docs/
+.workbuddy/
+.claude/

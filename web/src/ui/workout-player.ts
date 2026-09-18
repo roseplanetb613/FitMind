@@ -12,6 +12,8 @@ export interface PlayerView {
   group: PlayGame
   hasSongs: boolean
   paused: boolean
+  /** 最近一次播放没能起来（浏览器拦截自动播放 / 解码失败）。见 `AudioEngine.setOnBlocked` */
+  blocked: boolean
 }
 
 export interface PlayerActions {
@@ -19,6 +21,8 @@ export interface PlayerActions {
   next(): void
   setVolume(v: number): void
   onOpenLibrary(): void
+  /** 重试起播。这一下点击本身就是用户手势 —— 被拦截时它是唯一能解开的钥匙 */
+  retry(): void
 }
 
 export interface WorkoutPlayerDeps {
@@ -62,6 +66,16 @@ export function createWorkoutPlayer(deps: WorkoutPlayerDeps): WorkoutPlayer {
       const empty = el('button', 'music-empty', '去添加音乐 →')
       empty.addEventListener('click', () => deps.actions.onOpenLibrary())
       root.appendChild(empty)
+      return
+    }
+    if (v.blocked) {
+      // 规格 §4.3：如实提示，不打断跟练（训练照走，只是没声）。
+      // 给一个重试按钮而不是让用户去猜：被自动播放策略拦下时，一次真实点击
+      // 就是解锁的那一下 —— 光提示不给动作，用户只能刷新页面。
+      root.appendChild(el('span', 'music-idle', '本页无法播放音乐'))
+      const retry = el('button', 'music-retry', '重试')
+      retry.addEventListener('click', () => deps.actions.retry())
+      root.appendChild(retry)
       return
     }
     if (v.phase === 'off') {

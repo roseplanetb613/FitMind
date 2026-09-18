@@ -849,3 +849,8 @@ button.chat-option-media:hover { border-color: rgba(95, 212, 196, .5); }
 #workout .music-track { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #workout .music-volume { width: 90px; }
 #workout .music-empty, #workout .music-idle { flex: 1; text-align: center; color: #8b96a5; cursor: pointer; }
+#workout .music-retry {
+  flex: none; padding: 6px 14px; border-radius: 8px; cursor: pointer; font: inherit;
+  color: #e6ebf0; background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .2);
+}
+#workout .music-retry:hover { background: rgba(255, 255, 255, .18); }

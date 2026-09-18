@@ -25,6 +25,12 @@ export interface AudioEngine {
   setVolume(v: number): void
   stopAll(): void
   setOnEnded(fn: (game: PlayGame) => void): void
+  /**
+   * 播放**没能起来**的状态翻转回调（`true` = 起不来）。触发源：浏览器按自动播放
+   * 策略拒绝 `play()`（`NotAllowedError`）、元素解码失败等。只在**翻转时**调一次。
+   * 宿主据此在播放条上如实提示 —— 吞掉它的话，界面上"在放"和"被拦住"长得一模一样。
+   */
+  setOnBlocked(fn: (blocked: boolean) => void): void
 }
 
 /** 交叉淡化时长（毫秒）。淡出的 `pause` 用同一个数做延迟。 */
@@ -49,14 +55,48 @@ interface TrackState {
 
 export function createAudioEngine(deps: AudioEngineDeps): AudioEngine {
   const { ctx } = deps
-  const tracks: Record<PlayGame, TrackState> = {
-    work: { el: deps.gameElements.work, gain: deps.makeGain(), url: null },
-    rest: { el: deps.gameElements.rest, gain: deps.makeGain(), url: null },
+
+  /**
+   * 元素 → `MediaElementAudioSourceNode` → `GainNode` → destination（规格 §4.3）。
+   *
+   * ⚠ 少了中间这两根线，gain 就是个**空转的孤儿**：元素会绕开 Web Audio 直接出声，
+   *   于是 `setVolume`、交叉淡化全都作用在一条没人听的支路上 —— 界面上的音量滑块
+   *   因此是句谎话（拖到底也照样响）。
+   * ⚠ 反过来，元素一旦被 source 接管，输出就**只**走这张图：`ctx` 没 resume
+   *   就是静音。所以 `play()` 的失败必须如实上报（`setOnBlocked`），不能 `void` 掉。
+   */
+  function makeTrack(game: PlayGame): TrackState {
+    const el = deps.gameElements[game]
+    const gain = deps.makeGain()
+    ctx.createMediaElementSource(el).connect(gain)
+    gain.connect(ctx.destination)
+    return { el, gain, url: null }
   }
+
+  const tracks: Record<PlayGame, TrackState> = { work: makeTrack('work'), rest: makeTrack('rest') }
   let volume = 1
   let paused = false
   let active: PlayGame | null = null
   let onEnded: ((game: PlayGame) => void) | null = null
+  let blocked = false
+  let onBlocked: ((blocked: boolean) => void) | null = null
+
+  function setBlocked(next: boolean): void {
+    if (blocked === next) return
+    blocked = next
+    onBlocked?.(next)
+  }
+
+  /**
+   * 起播并要求**知道结果**。`play()` 返回的 promise 是浏览器按自动播放策略
+   * 放行/拒绝的唯一回执 —— `void` 掉就等于把"没响"和"在响"抹成一样。
+   * 老浏览器可能返回 undefined：无从观察，按不降级处理（不猜）。
+   */
+  function startTrack(t: TrackState): void {
+    const p: Promise<void> | undefined = t.el.play()
+    if (typeof p?.then !== 'function') { setBlocked(false); return }
+    void p.then(() => setBlocked(false), () => setBlocked(true))
+  }
 
   function fadeTo(game: PlayGame, target: number): void {
     // 真正的 automation 挂在 GainNode 的 `.gain`（AudioParam）上 —— 直接给
@@ -73,12 +113,12 @@ export function createAudioEngine(deps: AudioEngineDeps): AudioEngine {
     const t = tracks[game]
     if (t.url === url) {
       // 同源续播：位置被淡出的 pause 冻结，直接恢复
-      if (t.el.paused) void t.el.play()
+      if (t.el.paused) startTrack(t)
     } else {
       if (t.url) deps.revokeObjectURL(t.url)
       t.url = url
       t.el.src = url
-      void t.el.play()
+      startTrack(t)
     }
     const prev = active && active !== game ? active : null
     if (prev) fadeTo(prev, 0)
@@ -105,7 +145,7 @@ export function createAudioEngine(deps: AudioEngineDeps): AudioEngine {
       paused = p
       if (active) {
         if (p) tracks[active].el.pause()
-        else if (tracks[active].el.paused) void tracks[active].el.play()
+        else if (tracks[active].el.paused) startTrack(tracks[active])
       }
     },
     setVolume(v): void {
@@ -122,7 +162,11 @@ export function createAudioEngine(deps: AudioEngineDeps): AudioEngine {
       }
       active = null
       paused = false
+      // 停表把"上一次播放失败"这件事一并了结 —— 不复位的话，下一轮开练前
+      // 播放条会一直挂着上一轮留下的降级提示
+      setBlocked(false)
     },
     setOnEnded(fn): void { onEnded = fn },
+    setOnBlocked(fn): void { onBlocked = fn },
   }
 }

@@ -582,7 +582,15 @@ const workoutFlow = createWorkoutFlow({
   root: workoutStage,
   userId: uid,
   // 状态机阶段事件外传 → 音乐调度器切歌（本节后面的 music* 装配）
-  onEvent: (ev) => { music?.onEvent(ev) },
+  onEvent: (ev) => {
+    music?.onEvent(ev)
+    // ⚠ 音乐状态只被这四个事件改变，改完必须重绘播放条 —— 少了这一步，点「开始训练」
+    //   音乐响了、条上却一直挂着「音乐未开始（进入训练自动播放）」，读起来就是"没自动播放"。
+    //   其余 set/exercise 事件不重绘：它们不改音乐状态，白白重建 DOM 还会打断
+    //   正在拖的音量滑块。
+    if (ev.type === 'session.start' || ev.type === 'session.end'
+        || ev.type === 'rest.start' || ev.type === 'rest.end') player.refresh()
+  },
   onOpen: () => {
     workoutEl.classList.add('is-open')
     // 执行台盖住 3D → 停渲染。**不能靠 canIdlePause**：那是派生的，只有 eco 档
@@ -590,7 +598,7 @@ const workoutFlow = createWorkoutFlow({
     handle.setSuspended(true)
     setWorkoutLoop(true)
     // 首次手势：恢复 AudioContext（iOS/Chrome 都要求用户手势解锁音频）
-    if (audioCtx.state === 'suspended') void audioCtx.resume()
+    resumeAudio()
     player.refresh()
   },
   onClose: () => {
@@ -613,7 +621,7 @@ const workoutFlow = createWorkoutFlow({
 })
 workoutToggleEl.addEventListener('click', () => {
   // 在 await 之前先拿激活窗口（iOS），resume 幂等，onOpen 里另有兜底
-  void audioCtx.resume()
+  resumeAudio()
   // 先刷新歌单（事件在 open 内触发，歌单必须先就位），再开全屏
   void refreshMusic().then(() => workoutFlow.open())
 })
@@ -674,6 +682,23 @@ async function refreshMusic(): Promise<void> {
   engine.setOnEnded((g) => music?.onTrackEnded(g))
 }
 
+// ── 音频可用性（规格 §4.3：起不来就如实说，不打断跟练）──────────────
+//
+// 这里只记一条：元素 `play()` 被浏览器拒（自动播放策略 / 解码失败）。
+// 另一条失败路径 ——「输出图没通电」—— **不记快照**，由 getState 读当下的
+// `audioCtx.state` 现算：`resume()` 在没有手势时会一直挂着不兑现（既不 resolve
+// 也不 reject），等它的回调等于永远不报。
+let playBlocked = false
+engine.setOnBlocked((b) => { playBlocked = b; player.refresh() })
+
+/**
+ * 解锁音频输出。**必须由用户手势触发**（跟练入口的点击）。
+ * ⚠ 兑现与失败都要重绘：这一下可能正好把上面那条降级解掉。
+ */
+function resumeAudio(): void {
+  void audioCtx.resume().then(() => player.refresh(), () => player.refresh())
+}
+
 const player = createWorkoutPlayer({
   root: playerRoot,
   actions: {
@@ -686,6 +711,9 @@ const player = createWorkoutPlayer({
     next: () => { music?.userNext(); player.refresh() },
     setVolume: (v) => engine.setVolume(v),
     onOpenLibrary: () => { void workoutFlow.close(); musicPanel?.open() },
+    // 重试 = 这一下点击本身。恢复 ctx 再让引擎按 active 组续播 —— 被自动播放策略
+    // 拦下时，只有真实手势才能解开。
+    retry: () => { paused = false; resumeAudio(); engine.setPaused(false); player.refresh() },
   },
   getState: () => {
     const st = music?.state()
@@ -695,6 +723,13 @@ const player = createWorkoutPlayer({
       group: st?.current?.group ?? 'work',
       hasSongs: st?.hasWork ?? false,
       paused,
+      // 「该响却没响」：调度器已经让某组起播（phase≠off），而输出图没通电。
+      // 元素被 MediaElementAudioSourceNode 接管后输出**只**走这张图，ctx 没 running
+      // 就是静音 —— 且这种静音不会让 play() 抛错（元素照样"在播"，只是播进一张没
+      // 通电的图），所以必须单独判一次，否则界面上"在响"和"静音"长得一模一样。
+      // ⚠ 读**当下**的 state 而不是自己记一个快照：resume() 兑现后这次重算就自动消警。
+      blocked: playBlocked
+        || ((st?.phase ?? 'off') !== 'off' && audioCtx.state !== 'running'),
     }
   },
 })

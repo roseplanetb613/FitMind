@@ -26,7 +26,7 @@
 import { fetchPlan } from '../data/plan'
 import type { PlanDay } from '../data/plan'
 import { buildSessionExercises, pickTodayDay, type SessionExercise } from '../data/plan-parse'
-import { createWorkoutSession, type WorkoutSession } from '../data/workout-session'
+import { createWorkoutSession, type SessionEvent, type WorkoutSession } from '../data/workout-session'
 import {
   clearProgress, exerciseKey, loadProgress, localDateISO, saveProgress,
   STORE_VERSION, type StorageLike, type WorkoutProgress,
@@ -79,6 +79,8 @@ export interface WorkoutFlowDeps {
   onClose?: () => void
   /** 一轮结束（含提前结束）。宿主负责出总结 */
   onFinished?: (summary: FinishSummary) => void
+  /** 状态机阶段事件外传（音乐模块的订阅口）。一行透传，本文件零音乐代码 */
+  onEvent?: (ev: SessionEvent) => void
 }
 
 export interface WorkoutFlow {
@@ -151,6 +153,7 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
   let finishing = false
 
   const session: WorkoutSession = createWorkoutSession({
+    onEvent: (ev) => deps.onEvent?.(ev),
     now,
     onExerciseDone: (ex, _index, doneSets) => {
       // ⚠ 状态机是**同步**回调进来、然后立刻推进游标的，所以这里得自己异步收尾：

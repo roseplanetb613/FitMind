@@ -302,7 +302,7 @@ examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 | Open Food Facts 中国区 | ODbL（署名 + 共享衍生） |
 | **3D 肌群模型**（`web/public/models/muscles.glb`） | 源自 **[Z-Anatomy](https://www.z-anatomy.com/)**（上游 BodyParts3D / DBCLS），授权 **CC BY-SA 4.0** —— 署名 + **相同方式共享**；署名为 `Lluís Vinent Juanico / Z-Anatomy project`。⚠ 与动作库的 MIT **不是一套授权**（copyleft），请分开看 |
 | 运动医学 / 训练科学 | 未定稿，**全部标记【待审】**，不得作为医学结论使用 |
-| **本项目代码** | ⚠ **尚未添加根目录 LICENSE** |
+| **本项目代码** | **MIT** —— 见根目录 [`LICENSE`](LICENSE)（© roseplanetb613）。仅覆盖源代码，**不改变**上表任何第三方素材的授权；贡献指南见 [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 医学内容定位：系统做**风险分级**（红 / 黄 / 绿）与**风险提示**，不做诊断，不给医学结论。
 `lib/screening.py` 的 PAR-Q+ 门检问卷取自训练科学数据包，**标记【待审】**，正式发布前需核对官方文本。
@@ -345,8 +345,10 @@ examples/       演示：quickstart_*.py、planner_demo.py、cli_chat.py
 
 ### 范围与合规
 
-- **根目录仍无 LICENSE**：仓库已公开，但未声明授权 —— 按默认版权即"保留所有权利"，
-  别人**没有**合法复用的余地。要让人能用，得补一个 `LICENSE`（数据授权已在各包内单独声明）。
+- **代码 MIT、素材各自授权**：源代码按根目录 [`LICENSE`](LICENSE)（MIT）开放，
+  任何人可使用 / 修改 / 分发；上表的第三方素材（Gym visual 图示、Z-Anatomy 模型等）
+  **不因本许可而改变**，二次使用仍受各自条款约束。欢迎 PR——流程与红线见
+  [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 - **测试与设计文档不在公开仓库中**：`app/tests`、`web/tests`、`docs/` 是被有意剔除的
   （发布时重写历史移除），不是遗漏；开发仓完整保留它们的版本历史。
 - **运动医学数据全部【待审】**，沿用现有版本。

@@ -33,6 +33,12 @@ import { createPhotoFlow } from './ui/photo-flow'
 import { createProfileForm } from './ui/profile-form'
 import { createPlanPanel } from './ui/plan'
 import { createWorkoutFlow } from './ui/workout-flow'
+import { createMusicLibrary, createIdbAdapter, openSongsDb } from './data/music-library'
+import type { MusicLibrary, StoredSong } from './data/music-library'
+import { createMusicSession, type MusicSession } from './data/music-session'
+import { createAudioEngine, type PlayGame } from './media/audio-engine'
+import { createMusicLibraryPanel, type MusicLibraryPanel } from './ui/music-library'
+import { createWorkoutPlayer } from './ui/workout-player'
 import { deletePlan } from './data/plan'
 import { saveProfile } from './data/profile'
 import { hideDetail } from './ui/detail'
@@ -561,18 +567,38 @@ function setWorkoutLoop(on: boolean): void {
   }
 }
 
+// 播放条挂进全屏：#workout 在 styles.css 里改为纵向 flex。这个 .workout-stage 是
+// createWorkoutFlow 的**渲染根** —— flow 每次渲染卡片会 `clear` 自己的 root，
+// 播放条约 .workout-player-root 作为兄弟钉在底部，才不会在每次换卡时被清掉。
+// （#workout 的 .is-open 由下面的 onOpen/onClose 同步，flow 只 toggle stage。）
+const workoutStage = document.createElement('div')
+workoutStage.className = 'workout-stage'
+workoutEl.appendChild(workoutStage)
+const playerRoot = document.createElement('div')
+playerRoot.className = 'workout-player-root'
+workoutEl.appendChild(playerRoot)
+
 const workoutFlow = createWorkoutFlow({
-  root: workoutEl,
+  root: workoutStage,
   userId: uid,
+  // 状态机阶段事件外传 → 音乐调度器切歌（本节后面的 music* 装配）
+  onEvent: (ev) => { music?.onEvent(ev) },
   onOpen: () => {
+    workoutEl.classList.add('is-open')
     // 执行台盖住 3D → 停渲染。**不能靠 canIdlePause**：那是派生的，只有 eco 档
     // 为真，而桌面上是 full 档（有心跳与星点闪烁），循环会一直满速跑。
     handle.setSuspended(true)
     setWorkoutLoop(true)
+    // 首次手势：恢复 AudioContext（iOS/Chrome 都要求用户手势解锁音频）
+    if (audioCtx.state === 'suspended') void audioCtx.resume()
+    player.refresh()
   },
   onClose: () => {
+    music?.stop()
+    workoutEl.classList.remove('is-open')
     handle.setSuspended(false)
     setWorkoutLoop(false)
+    player.refresh()
   },
   onFinished: (s) => {
     // ⚠ **不在前端拼总结**（规格 §4.8）：措辞与数字由 Agent 结合刚写回的图谱数据给。
@@ -585,4 +611,110 @@ const workoutFlow = createWorkoutFlow({
     void chatFlow.send(s.notice ? `${head}。${s.notice}` : head)
   },
 })
-workoutToggleEl.addEventListener('click', () => void workoutFlow.open())
+workoutToggleEl.addEventListener('click', () => {
+  // 先刷新歌单（事件在 open 内触发，歌单必须先就位），再开全屏
+  void refreshMusic().then(() => workoutFlow.open())
+})
+
+// ── 音乐跟随（跟练全屏内自动切歌）─────────────────────────────────
+
+/** 读 `loadedmetadata` 拿时长（秒）；解码失败 → null。 */
+function probeAudioDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const a = new Audio()
+    const done = (v: number | null) => {
+      URL.revokeObjectURL(url)
+      a.removeAttribute('src')
+      resolve(v)
+    }
+    a.addEventListener('loadedmetadata', () => done(Number.isFinite(a.duration) ? a.duration : null), { once: true })
+    a.addEventListener('error', () => done(null), { once: true })
+    a.src = url
+  })
+}
+
+const audioCtx = new AudioContext()
+const trackEls: Record<PlayGame, HTMLAudioElement> = { work: new Audio(), rest: new Audio() }
+const engine = createAudioEngine({
+  ctx: audioCtx,
+  gameElements: trackEls,
+  makeGain: () => audioCtx.createGain(),
+  createObjectURL: (b) => URL.createObjectURL(b),
+  revokeObjectURL: (u) => URL.revokeObjectURL(u),
+})
+
+let musicLib: MusicLibrary | null = null
+let music: MusicSession | null = null
+let paused = false
+
+/** 以当前曲库重建调度器（每次「开始训练」前调用）。 */
+async function refreshMusic(): Promise<void> {
+  if (!musicLib) return
+  const all = await musicLib.list()
+  const toTrack = (s: StoredSong) => ({ id: s.id, name: s.name, url: URL.createObjectURL(s.blob) })
+  engine.stopAll()
+  paused = false
+  music = createMusicSession({
+    engine,
+    work: all.filter((s) => s.group === 'work').map(toTrack),
+    rest: all.filter((s) => s.group === 'rest').map(toTrack),
+  })
+  engine.setOnEnded((g) => music?.onTrackEnded(g))
+}
+
+const player = createWorkoutPlayer({
+  root: playerRoot,
+  actions: {
+    togglePause: () => {
+      paused = !paused
+      engine.setPaused(paused)
+      player.refresh()
+    },
+    next: () => music?.userNext(),
+    setVolume: (v) => engine.setVolume(v),
+    onOpenLibrary: () => { void workoutFlow.close(); musicPanel.open() },
+  },
+  getState: () => {
+    const st = music?.state()
+    return {
+      phase: st?.phase ?? 'off',
+      songName: st?.current?.name ?? null,
+      group: st?.current?.group ?? 'work',
+      hasSongs: st?.hasWork ?? false,
+      paused,
+    }
+  },
+})
+
+const musicEl = document.querySelector<HTMLElement>('#music')!
+const musicToggleEl = document.querySelector<HTMLButtonElement>('#music-toggle')!
+
+let musicPanel: MusicLibraryPanel
+
+/** IndexedDB 不可用时的兜底假库：面板可开，操作全部无效果，不炸。 */
+function emptyLibrary(): MusicLibrary {
+  return {
+    importFiles: async () => ({ items: [] }),
+    list: async () => [],
+    setGroup: async () => {},
+    remove: async () => {},
+    clear: async () => {},
+  }
+}
+
+void openSongsDb().then((db) => {
+  musicLib = db ? createMusicLibrary({ adapter: createIdbAdapter(db), probeDuration: probeAudioDuration }) : null
+  musicPanel = createMusicLibraryPanel({
+    root: musicEl,
+    library: musicLib ?? emptyLibrary(),
+    confirm: (msg) => window.confirm?.(msg) ?? false,
+    onClose: () => musicPanel.close(),
+  })
+  if (!musicLib) {
+    musicToggleEl.disabled = true
+    musicToggleEl.textContent = '音乐不可用'
+    return
+  }
+  musicToggleEl.addEventListener('click', () => { void refreshMusic().then(() => musicPanel.open()) })
+})

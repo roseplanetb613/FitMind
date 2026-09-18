@@ -45,6 +45,7 @@
       <button data-view="front">正面</button>
       <button data-view="back">背面</button>
       <button id="workout-toggle" type="button" aria-controls="workout">开始训练</button>
+      <button id="music-toggle" type="button" aria-controls="music">音乐</button>
       <button id="plan-toggle" type="button" aria-controls="plan">训练计划</button>
       <label class="toggle"><input type="checkbox" id="toggle-labels" checked />标签</label>
       <label class="toggle"><input type="checkbox" id="toggle-unknown" />无记录</label>
@@ -58,6 +59,8 @@
     <!-- 建档窗口。内容由 ui/profile-form.ts 建。放最后 = 盖在所有东西之上
          （本仓不用 z-index，DOM 顺序就是层叠顺序）。 -->
     <div id="profile" class="profile-modal"></div>
+    <!-- 曲库管理面板。内容由 ui/music-library.ts 建。入口是工具栏「音乐」。 -->
+    <div id="music" class="plan-modal"></div>
     <!-- 训练执行台（全屏跟练）。内容由 ui/workout-flow.ts 建。入口是工具栏的「开始训练」。
          ⚠ 它是**真·全屏**（inset:0），不是抽屉 —— 跟练时一屏只回答"现在做哪个动作、
          第几组、歇多久"。开着的时候 3D 渲染循环被 main.ts 挂起

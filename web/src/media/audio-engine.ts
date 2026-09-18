@@ -87,7 +87,9 @@ export function createAudioEngine(deps: AudioEngineDeps): AudioEngine {
     if (prev) {
       // 淡出侧的 pause 不能立刻做（gain 还在往下走）。定时器被节流只让
       // "静音元素多跑一会儿"（无害），不会让淡入淡出的声音变样。
-      setTimeout(() => pauseTrack(prev), FADE_MS)
+      // ⚠ 定时器触发时该组可能已被切回重新激活 —— 此时绝不能 pause 它
+      //   （否则会把正在播放的组静音掉）。用活动组做守卫即可。
+      setTimeout(() => { if (active !== prev) pauseTrack(prev) }, FADE_MS)
     }
   }
 

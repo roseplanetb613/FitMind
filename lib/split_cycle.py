@@ -264,6 +264,69 @@ def extract_rest_day(text: str) -> dict | None:
     return _day_target(t) or {"offset": 0}   # 无日词 → 缺省今天（"改成休息日吧"）
 
 
+# 整天换训练日（2026-09-18）。缺陷形态与上面"整天改休息日"**同族**，只是这次连能力
+# 都不存在：用户说「把今天的训练计划改成练腿的」→ 技能层 `_EDIT_REPLACE_RE` 把它切成
+# X=今天的训练计划 / Y=练腿的 → not_found（时间锚点当动作名，与 2026-09-13 那次逐字同类）；
+# 助手于是建议「今天想练腿，帮我调整计划」，用户**照说** → 仍是 parse_fail。
+# 这是"能力不存在却已被承诺"的第五例（前四例：假确认 / 假撤三头 / 假平移 / 假休息日）。
+# 抽取沉到本层单源，分类层与技能层共用（同 extract_rest_day / extract_shift_days）。
+_SWAP_VERBS = ("想练", "要练", "改成", "改为", "换成", "换掉", "调成",
+               "变成", "排成", "安排成")
+# 生成类动词否决：「帮我排一个练腿的计划」是**生成**请求而不是改现有计划。
+# 不否决的话本支会把它从 plan 抢成 plan_edit —— 而"排一个 X 的计划"是很常见的说法。
+_SWAP_GEN_VETO = ("生成", "制定", "设计", "排一个", "排个", "做一个", "做一份",
+                  "来个", "整一份", "出一份", "重排")
+# 部位词只认**两种形态**：紧跟"练/做"（练腿 / 做背），或带"日/天/训练"后缀
+# （腿日 / 背部训练）。⚠ 刻意**不做裸词匹配**：「把深蹲换成腿部伸展」里的"腿部"是
+# **动作名的一部分**，裸匹配会让它被当成"整天换成腿日"——那是破坏性误判（整个推日
+# 被换掉）。末尾前瞻再要求部位短语后是收尾/语气词，把"腿部伸展"这类后接名词的挡掉。
+_SWAP_PART_RE = re.compile(
+    r"(?:(?:练|做)\s*(?P<a>胸|背|肩|腿|臀|臂|腹|核心)"
+    r"|(?P<b>胸|背|肩|腿|臀|臂|腹|核心|推|拉)\s*(?:日|天|部?训练))"
+    r"(?=[的了呢吧啊嘛，。,.、和或\s]|$)")
+# "前移"式：「把 9月20日 的腿日提前到今天」——助手自创过的另一句（规则 10 禁止
+# 自创说法，但它还是会编，所以能力侧必须接得住）。
+# ⚠ 必须单列：这句里有**两个**日词，句首那个是**要被挪走**的那天、动词后那个才是
+# 目标日。而 `_day_target` 取的是**首个**日词 —— 直接用会定位到 9月20日，正好反了。
+_MOVE_VERBS = ("提前到", "提前至", "挪到", "挪至", "移到", "移至", "换到")
+
+
+def extract_day_swap(text: str) -> tuple[dict | None, str] | None:
+    """整天换训练日的请求 → `(目标日 spec, 部位词)`；非此请求 → None。
+
+    与 `extract_rest_day` 同口径：**必须是指令形态**（变更动词先于部位词），且动词前
+    短窗口内是否定 → 整句否决（"今天不想练腿"是状态陈述，不是指令）。无日词 → 缺省今天。
+
+    返回值第二项是**词面**（"腿" / "背" / "推"），归一由调用方做：`lib/parts.py`
+    给得出 pattern 的走 pattern 匹配，给不出的（"推"/"拉" 是日名不是部位）退回按
+    day 名匹配 —— 那两张表都不该在这里再抄一份。
+    """
+    t = (text or "").strip()
+    if not t or any(k in t for k in _SWAP_GEN_VETO):
+        return None
+    # 前移式先判：它的目标日在动词**之后**，不能走下面那条"取首个日词"的路
+    for _v in _MOVE_VERBS:
+        i = t.find(_v)
+        if i < 0:
+            continue
+        pm = _SWAP_PART_RE.search(t[:i]) or _SWAP_PART_RE.search(t[i:])
+        if not pm:
+            continue
+        if negated_at(t, i, win=3):
+            return None
+        return (_day_target(t[i:]) or {"offset": 0}, pm.group("a") or pm.group("b"))
+    pos = min((i for i in (t.find(v) for v in _SWAP_VERBS) if i >= 0),
+              default=-1)
+    if pos < 0:
+        return None
+    m = _SWAP_PART_RE.search(t[pos:])
+    if not m:
+        return None
+    if negated_at(t, pos, win=3):
+        return None
+    return _day_target(t) or {"offset": 0}, (m.group("a") or m.group("b"))
+
+
 def day_index(plan: dict, target: dict | None, today: date) -> int | None:
     """目标日 → training.items 下标；定位不到（无 start_date/超出跨度）→ None。
 

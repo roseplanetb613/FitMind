@@ -30,10 +30,35 @@ _PLAN_CLEAR_RE = re.compile(r"(?:删掉|删除|清空|作废)[^，。]{0,6}计�
 # 支持的编辑句式单源：**技能自己会说出口**（parse_fail/not_found 的提示），渲染层
 # 也只会复述这里的写法。2026-09-13 的坑正是两边不一致——助手自创「今天改成休息日」
 # 而技能层没有这条语法，用户照说必然失败。
+# 2026-09-18 第五例同形态：助手自创「今天想练腿，帮我调整计划」，用户照说仍失败
+# → 能力已补（`_swap_day`），写法同时进这里。
 _EDIT_HINT = ("换动作（'把卧推换成哑铃卧推'）、去掉动作（'去掉窄距卧推'）、"
-              "按部位撤（'今天不练三头'）、整天休息（'今天改成休息日'）")
+              "按部位撤（'今天不练三头'）、整天休息（'今天改成休息日'）、"
+              "整天换训练日（'今天想练腿'）")
 
 _DAY_OFFSET_ZH = ("今天", "明天", "后天")
+
+# 整天换训练日时参与对调的**日级字段**。
+# ⚠ `date` 刻意不在里面：日期跟着条目序号走，换掉会把"今天"挪到别的格子上。
+# ⚠ 某一边没有的键也要跟着搬（休息日没有 `pattern`/`exercises`）——只覆盖不清空，
+# 会让对调后的休息日留着上一个模式的名字。
+_SWAP_KEYS = ("day", "type", "pattern", "exercises", "note",
+              "deload", "focused", "blocked_from", "rest_from")
+_MISSING = object()
+
+
+def _swap_items(a: dict, b: dict) -> None:
+    """对调两天的日级字段（原地改）。缺失的键随之搬走，见 `_SWAP_KEYS` 的说明。"""
+    for k in _SWAP_KEYS:
+        av, bv = a.get(k, _MISSING), b.get(k, _MISSING)
+        if bv is _MISSING:
+            a.pop(k, None)
+        else:
+            a[k] = bv
+        if av is _MISSING:
+            b.pop(k, None)
+        else:
+            b[k] = av
 
 
 def _day_name(target: dict) -> str:
@@ -502,6 +527,93 @@ class PlanSkill(Skill):
             "plan": content},
             provenance=["plan#edit.rest", "memory#plan_version"])
 
+    @staticmethod
+    def _swap_template(items: list, idx: int, part: str) -> int | None:
+        """「该部位的那一天」在计划里的下标（模板天）；找不到 → None。
+
+        先按 `lib/parts.py` 的 pattern（"胸"→push / "腿"→squat）匹配，再退回按
+        day 名包含匹配 —— "推"/"拉" 是**日名**不是部位词，不在那张表里，
+        但它们照样该能用（"把推日改成拉日"）。两张表都不在这里再抄一份。
+        """
+        try:
+            import parts
+            pat = parts.pattern_of(part)
+        except Exception:
+            pat = None
+        if pat:
+            for i, d in enumerate(items):
+                if i != idx and d.get("type") != "rest" and d.get("pattern") == pat:
+                    return i
+        for i, d in enumerate(items):
+            if i != idx and d.get("type") != "rest" \
+                    and part and part in str(d.get("day") or ""):
+                return i
+        return None
+
+    def _swap_day(self, m, uid: str, content: dict, target: dict,
+                  part: str, query: str) -> SkillResult:
+        """整天换训练日（"今天想练腿"）—— 与**该模式的另一个训练日对调**。
+
+        ## 为什么是"对调"而不是"覆盖成腿日"
+
+        覆盖会让这周的推日**凭空消失** —— 用户只是想把腿提前到"今天"，不是打算少练
+        一次。而且助手上一轮建议的原话就是「把 9月20日 的腿日**提前**到今天」：前移
+        即对调。对调后训练量与周期长度都不变，只是顺序变了；实际换了哪两天写在回执
+        里，用户不认可可以再改（比静默覆盖好）。
+
+        ## 定位与边界
+
+        先 `reanchor` 再定位（同 `_rest_day`：读回的是生成时快照，隔日锚点会整体偏）。
+        目标天超出跨度 / 无日期基准 → **如实拒绝**，不猜。计划里没有该部位的日子
+        （模板天找不到）→ 也如实拒绝并给替代说法，不硬凑一组动作（那会绕过筛查与
+        疲劳联动，是"假编辑"家族的老毛病）。
+        """
+        today = date.today()
+        if not content.get("start_date"):
+            return SkillResult(ok=True, data={"items": [{
+                "name": "无法定位",
+                "value": "这版计划没有日期基准，定位不到「今天」——要我重排一版吗"}]},
+                provenance=["plan#edit.swap.no_base"])
+        content = split_cycle.reanchor(content, today)
+        items = (content.get("training") or {}).get("items") or []
+        idx = split_cycle.day_index(content, target, today)
+        if idx is None or idx >= len(items):
+            return SkillResult(ok=True, data={"items": [{
+                "name": "未找到",
+                "value": f"这份计划里没有「{_day_name(target)}」那一天"
+                         f"（共 {len(items)} 天，超出跨度了）"}]},
+                provenance=["plan#edit.swap.not_found"])
+        cur = items[idx]
+        j = self._swap_template(items, idx, part)
+        already = (part and part in str(cur.get("day") or ""))
+        if already:
+            return SkillResult(ok=True, data={"items": [{
+                "name": "无需改动",
+                "value": f"{cur.get('date') or ''}本来就是{cur.get('day')}，计划没有变动"}]},
+                provenance=["plan#edit.swap.noop"])
+        if j is None:
+            return SkillResult(ok=True, data={"items": [{
+                "name": "未找到",
+                "value": f"这份计划里没有「{part}」的训练日，没法把"
+                         f"{cur.get('date') or '那一天'}换成它。"
+                         f"{_EDIT_HINT}"}]},
+                provenance=["plan#edit.swap.no_template"])
+        name_a = str(cur.get("day") or "")
+        name_b = str(items[j].get("day") or "")
+        date_a = str(cur.get("date") or "")
+        date_b = str(items[j].get("date") or "")
+        _swap_items(cur, items[j])
+        m.register_plan(uid, f"plan-{uuid.uuid4().hex[:8]}", "edit", content=content)
+        return SkillResult(ok=True, data={
+            "items": [{"name": "计划已更新",
+                       "value": f"已把{date_a}换成{name_b}；原定的{name_a}"
+                                f"挪到{date_b}。这周的训练量没变，只是顺序换了"}] +
+                     [{"name": "换后安排",
+                       "value": f"{d.get('date')} {d.get('day')}"}
+                      for d in (items[idx], items[j])],
+            "plan": content},
+            provenance=["plan#edit.swap", "memory#plan_version"])
+
     def _edit(self, ctx, query: str, shift_days: int | None = None) -> SkillResult:
         """计划指令：把X换成Y / 去掉X / 整天休息 / 整体平移（如实拒绝，不硬改）。"""
         from app.graph.memory import MemoryStore
@@ -545,6 +657,22 @@ class PlanSkill(Skill):
                 if _di is not None:
                     target = {"index": _di}
             return self._rest_day(m, uid, content, target, query)
+        # day 级：整天换训练日（2026-09-18）——「今天想练腿」「把今天改成腿日」。
+        # 必须**先于**下面的换/删句式：「把今天的训练计划改成练腿的」会被
+        # `_EDIT_REPLACE_RE` 切成 X=今天的训练计划 / Y=练腿的 → not_found，
+        # 而那正是用户**按助手上一轮建议**说出来的话（能力不存在却已被承诺）。
+        swap = split_cycle.extract_day_swap(query)
+        if swap is not None:
+            _t, _part = swap
+            if mrep:
+                # X 侧若**恰好**是某个 day 名（"把推日改成腿日"），它比缺省今天确定
+                # 得多。定位错就是换了**别的**一天（破坏性），宁可多这一步——
+                # 与上面 rest_day 分支同一条理由。
+                _di = split_cycle.day_index_of_label(
+                    items, mrep.group(1).strip(" ，。我的"))
+                if _di is not None:
+                    _t = {"index": _di}
+            return self._swap_day(m, uid, content, _t, _part, query)
         mdel = None if mrep else _EDIT_REMOVE_RE.search(query)
         if not mrep and not mdel:
             return SkillResult(ok=True, data={"items": [{

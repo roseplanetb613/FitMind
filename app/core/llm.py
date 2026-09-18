@@ -323,6 +323,14 @@ class StubProvider(LLMProvider):
         if split_cycle.extract_rest_day(t) is not None:
             return Classification("plan_edit", {"query": t, "edit": True},
                                   confidence=1.0)
+        # day 级：整天换训练日（2026-09-18）——「今天想练腿」「把今天改成腿日」。
+        # 必须**先于**下面的"换成/换掉/改成做"规则：「把今天的训练计划改成练腿的」
+        # 会被那条当成换动作，切出 X=今天的训练计划 / Y=练腿的 → not_found；
+        # 而「今天想练腿，帮我调整计划」四个句式一个都不命中 → parse_fail。
+        # 两句都是**用户按上一轮回复的原话说的**——系统接不住自己提的话。
+        if split_cycle.extract_day_swap(t) is not None:
+            return Classification("plan_edit", {"query": t, "edit": True},
+                                  confidence=1.0)
         # ⚠ 档案字段不是计划内动作（2026-09-13）：「目标换成增肌」「把目标改成减脂」
         # 含"换成/改成"却是在改**档案**（目标/体重/身高…），不是换计划里的动作。
         # 实测被判 plan_edit → plan_skill 回"当前计划里没有「目标」这个动作，

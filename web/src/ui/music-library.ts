@@ -88,9 +88,13 @@ export function createMusicLibraryPanel(deps: MusicLibraryPanelDeps): MusicLibra
     return r
   }
 
+  let renderSeq = 0
+
   async function render(): Promise<void> {
+    const seq = ++renderSeq
     clear()
     const list = await deps.library.list()
+    if (seq !== renderSeq) return        // 有更新的渲染接管，丢弃这次（防止并发互叠）
 
     const head = el('div', 'music-head')
     const title = el('span', 'music-title', `曲库（${list.length}）`)
@@ -119,6 +123,6 @@ export function createMusicLibraryPanel(deps: MusicLibraryPanelDeps): MusicLibra
 
   return {
     open: async () => { await render() },
-    close: () => clear(),
+    close: () => { renderSeq += 1; clear() },
   }
 }

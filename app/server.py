@@ -288,6 +288,13 @@ def create_app() -> FastAPI:
         if not got or not got.get("content"):
             # 有计划记录但 content 为空（旧版本只存 hash）→ 同样按"没有计划"处理
             return {"user_id": user_id, "plan": None, "degraded": False}
+        # ⚠ content **逐字透传，不在这里补动作 id**（2026-09-18 考虑过，否决）。
+        # 理由：计划的 `name` 本来就来自 `search_zh` 命中的 `name_zh`，所以老计划
+        # 按名字走 `POST /v1/checkin/resolve` 时 `norm_zh` 精确匹配**必然命中**，
+        # 不会弹消歧 —— 补 id 的收益几乎为零，代价却是打破"端点是纯透传"这条契约
+        # （test_plan_api.test_plan_content_is_passthrough 明确钉着它，且理由是
+        # "别在这里造一个会跟后端漂的平行结构"）。新计划由写入侧
+        # `plan_skill.attach_exercise_ids` 落 id，那才是唯一该负责的地方。
         return {"user_id": user_id, "degraded": False,
                 "plan": {"plan_id": got.get("plan_id"),
                          "created_at": got.get("created_at"),

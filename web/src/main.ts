@@ -32,6 +32,7 @@ import { createVoiceFlow, type RecorderLike } from './ui/voice-flow'
 import { createPhotoFlow } from './ui/photo-flow'
 import { createProfileForm } from './ui/profile-form'
 import { createPlanPanel } from './ui/plan'
+import { createWorkoutFlow } from './ui/workout-flow'
 import { deletePlan } from './data/plan'
 import { saveProfile } from './data/profile'
 import { hideDetail } from './ui/detail'
@@ -536,3 +537,52 @@ const planPanel = createPlanPanel({
   deletePlan: (u) => deletePlan(u),   // 卡片「删除计划」按钮 → /v1/plan/delete
 })
 planToggleEl.addEventListener('click', () => void planPanel.open())
+
+// ── 训练执行台（全屏跟练）────────────────────────────────────────────
+// 逻辑全在 ui/workout-flow.ts（依赖注入 + 有测试）。这里只装配三件事，每件都是
+// 本文件才有的东西：3D 句柄、对话通道、定时器。
+const workoutEl = document.querySelector<HTMLElement>('#workout')!
+const workoutToggleEl = document.querySelector<HTMLButtonElement>('#workout-toggle')!
+
+/**
+ * 跟练期间的刷新节拍。
+ *
+ * ⚠ 它**只驱动重绘**，不参与计时 —— 剩余秒数每次都由状态机按**绝对时间戳**现算
+ * （见 data/workout-session.ts）。所以这个间隔取多大都不会让倒计时走偏，
+ * 250ms 只是"秒数变化后最多 250ms 内可见"。
+ */
+let workoutTimer = 0
+function setWorkoutLoop(on: boolean): void {
+  if (on && !workoutTimer) {
+    workoutTimer = window.setInterval(() => workoutFlow.tick(), 250)
+  } else if (!on && workoutTimer) {
+    window.clearInterval(workoutTimer)
+    workoutTimer = 0
+  }
+}
+
+const workoutFlow = createWorkoutFlow({
+  root: workoutEl,
+  userId: uid,
+  onOpen: () => {
+    // 执行台盖住 3D → 停渲染。**不能靠 canIdlePause**：那是派生的，只有 eco 档
+    // 为真，而桌面上是 full 档（有心跳与星点闪烁），循环会一直满速跑。
+    handle.setSuspended(true)
+    setWorkoutLoop(true)
+  },
+  onClose: () => {
+    handle.setSuspended(false)
+    setWorkoutLoop(false)
+  },
+  onFinished: (s) => {
+    // ⚠ **不在前端拼总结**（规格 §4.8）：措辞与数字由 Agent 结合刚写回的图谱数据给。
+    // 这里只负责把"发生了什么"如实告诉它 —— 包括"有几个动作没记上"，那是 Agent
+    // 从图谱里**看不出来**的运行状态（图谱里没有 = 它只会以为没做，
+    // 于是总结会漏掉那几个动作而不是说"记录失败"）。
+    const head = s.allDone
+      ? `我今天按计划练完了（${s.day}）`
+      : `我今天按计划练了一部分就结束了（${s.day}）`
+    void chatFlow.send(s.notice ? `${head}。${s.notice}` : head)
+  },
+})
+workoutToggleEl.addEventListener('click', () => void workoutFlow.open())

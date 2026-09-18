@@ -261,6 +261,42 @@ export function viewportFor(width: number, height: number): {
  *  所以 lookAt 与 controls.target 必须用同一个值——这就是它被提取的原因。 */
 export const BODY_FOCUS: [number, number, number] = [0, 0.95, 0]
 
+/**
+ * 渲染循环**该不该继续排下一帧**。
+ *
+ * 三个"停"的条件各自独立：
+ *   · `hidden`    —— **系统**说这个页面看不见（切后台 / 锁屏）
+ *   · `suspended` —— **应用**说现在不需要（训练执行台全屏盖住了 3D）
+ *   · 空闲        —— 本档没有常驻动效、也没人置脏（`canIdlePause`，只有 `eco` 为真）
+ *
+ * ⚠ **`hidden` 与 `suspended` 不合并。** 合并之后"回前台"会把挂起一起清掉 ——
+ * 执行台还盖着，3D 却开始满速渲染（`onVisibility` 回前台时会 `requestRender()`）。
+ * 抽成纯函数是为了能在 node 里断言：`loop` 本体要 WebGL 才能跑。
+ */
+export function shouldContinueLoop(opts: {
+  hidden: boolean
+  suspended: boolean
+  /** 本档能不能空闲停帧（`perf.ts::canIdlePause`） */
+  idlePause: boolean
+  /** 有没有人置过脏标记 */
+  needsRender: boolean
+}): boolean {
+  if (opts.hidden || opts.suspended) return false
+  return !(opts.idlePause && !opts.needsRender)
+}
+
+/**
+ * 挂起期间收到渲染请求时，**要不要唤醒循环**。答案恒为"不"。
+ *
+ * ⚠ 这一行是 `setSuspended` 存在的**全部理由**：脏标记照记（恢复后要重绘），
+ * 但唤醒被抑制 —— 否则执行台盖上去之后 GPU 照样满速跑，挂起等于没做。
+ * 之所以抽出来：它是产品决策，值得有一条会红的断言，而不是埋在闭包里
+ * （同 `viewportFor` 被抽出来的理由）。
+ */
+export function shouldWakeOnRender(suspended: boolean): boolean {
+  return !suspended
+}
+
 /** 正/背面取景。纯函数，可在 node 里断言；Task 9 的"正面/背面"按钮走它，
  *  保证点"正面"回到的正是场景加载时的姿态。 */
 export function framingFor(view: 'front' | 'back'): {
@@ -295,6 +331,17 @@ export interface SceneHandle {
   requestRender(): void
   /** 档位变化：像素比 + 动效开关（尾流层由调用方另行联动，见 perf.ts）。 */
   setTier(tier: Tier): void
+  /**
+   * 挂起 / 恢复渲染。**训练执行台全屏盖住 3D 时用**。
+   *
+   * 与 `document.hidden` 那条自停路径是**两个独立条件**（见 `shouldContinueLoop`）：
+   * `hidden` 是"系统说看不见"，这里是"应用说现在不需要"。
+   *
+   * ⚠ 为什么不能只靠 `canIdlePause`：那是**派生**量，只有 `eco` 档为真 ——
+   * 桌面上的 `full` 档有心跳与星点闪烁，循环会一直跑。执行台盖上去时 GPU 照样
+   * 在后台满速渲染，这正是本方法存在的理由。
+   */
+  setSuspended(suspended: boolean): void
   dispose(): void
 }
 
@@ -431,6 +478,12 @@ export async function createScene(
 
   let raf = 0
   /**
+   * 挂起标志（训练执行台全屏时置真）。见 `SceneHandle.setSuspended`。
+   * ⚠ 它**不**参与"脏标记"的语义：`requestRender()` 照常置 `needsRender`，
+   * 只是不唤醒循环 —— 恢复时才能把挂起期间攒下的变化一次画出来。
+   */
+  let suspended = false
+  /**
    * 置脏标记。⚠ **所有**会改变画面输出的路径都要走 `requestRender()` ——
    * 停帧之后没人替你把画面刷新过来。
    */
@@ -453,6 +506,8 @@ export async function createScene(
 
   function requestRender(): void {
     needsRender = true
+    // 挂起期间只记脏标记，**不唤醒循环**（否则挂起等于没做）
+    if (!shouldWakeOnRender(suspended)) return
     if (raf === 0) startLoop()
   }
 
@@ -483,7 +538,13 @@ export async function createScene(
 
     // **空闲停帧**：本档没有常驻动效、也没人置脏 → 不再排下一帧。
     // full / lite 档有心跳或闪烁在动，canIdlePause 为 false，行为与改动前一致。
-    if (document.hidden || (canIdlePause(tier) && !needsRender)) {
+    // 挂起（执行台盖住 3D）与页面隐藏各自独立成一条 —— 见 shouldContinueLoop。
+    if (!shouldContinueLoop({
+      hidden: document.hidden,
+      suspended,
+      idlePause: canIdlePause(tier),
+      needsRender,
+    })) {
       raf = 0
       return
     }
@@ -525,6 +586,20 @@ export async function createScene(
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatio))
       resize()
       applyMotion()
+      requestRender()
+    },
+    setSuspended(next: boolean): void {
+      if (suspended === next) return          // 幂等：重复调用不产生额外动作
+      suspended = next
+      if (next) {
+        // 立刻停掉已排的那一帧。loop 结尾也有 suspended 判断 —— **两道都要**：
+        // 只靠 stopLoop 的话，若这一帧已经在跑（不在队列里，cancel 不掉），
+        // 得等它自然结束；两道一起才能立刻停。
+        stopLoop()
+        return
+      }
+      // 恢复：清挂起 + 请求一帧。挂起期间的脏标记可能早被消费掉了，
+      // 不主动请求就可能留一屏挂起前的旧画面。
       requestRender()
     },
     dispose(): void {

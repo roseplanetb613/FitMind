@@ -46,9 +46,59 @@ def _day_name(target: dict) -> str:
     return "这一天"
 
 
+def attach_exercise_ids(plan: dict) -> int:
+    """给计划里的动作条目补 `id`（原地改，返回本次补上的条数）。
+
+    **为什么需要**：训练执行台（`web/src/ui/workout-flow.ts`）练完一个动作就写回
+    一次图谱，走 `POST /v1/checkin/resolve`，而它认 `exercise_id`（肌群边靠它从
+    `muscles_canonical` 算 target/synergist —— 恢复度的根）。而计划的 `exercises[]`
+    历史上只有 `name`，按名字走也能命中（该端点做 `norm_zh` 精确匹配），但**匹配不上
+    会返回 `need_pick` 弹消歧候选** —— 在全屏跟练界面里弹选择题，而且是练到一半才弹。
+
+    **为什么是一个函数、且在写入口与读出口都调**：本仓反复吃过"同一份数据有多个
+    产出点、差异不报错只静默降级"的亏（`build_clarify_options` 是收口的先例）。
+    所以这里只有**一份**实现 ——
+      · 写侧 `_register_plan`：覆盖生成 / 换动作 / 去动作 / 整天休息 / 平移五条路径；
+      · 读侧 `GET /v1/plan`：覆盖**存量老计划**（生成于本次改动之前，图谱里没有 id）。
+    两处调用同一实现、且本函数幂等，所以不存在两份判据。
+
+    匹配用 `norm_zh` 精确比对 `norm_name_zh` —— 与 `/v1/checkin/resolve` 的解析口径
+    **同源**（都是 `lib/exercise_repo.py` 那一个归一函数）。计划里的 `name` 本来就来自
+    `search_zh` 命中的 `name_zh`，所以正常路径必然命中；命不中就**保持无 id**，绝不
+    塞一个猜的值（"缺值不能当 0"）。"""
+    try:
+        from app.runtime.repos import exercise_repo
+        ex = exercise_repo()
+    except Exception:
+        diag.bump("plan.attach_ids.repo")   # 检索层不可用 → 一个 id 也补不了，留痕
+        return 0
+    by_name: dict[str, str] = {}
+    for r in ex.by_id.values():
+        nz = r.get("norm_name_zh") or ""
+        if nz and nz not in by_name:
+            by_name[nz] = r.get("id")
+    added = 0
+    for d in (plan.get("training") or {}).get("items") or []:
+        if not isinstance(d, dict):         # 畸形 content 不得让整条计划链路挂掉
+            continue
+        for e in d.get("exercises") or []:
+            if not isinstance(e, dict):
+                continue
+            if e.get("id"):
+                continue                    # 已有 id 不覆盖（幂等 + 尊重查得的值）
+            eid = by_name.get(_norm_zh(str(e.get("name") or "")))
+            if eid:
+                e["id"] = eid
+                added += 1
+    return added
+
+
 def _register_plan(plan: dict, user_id: str) -> None:
     """计划产出 → 图谱 PlanVersion（静默：图谱不可用/失败不影响计划主链路）。"""
     try:
+        # 落 id 在任何早退**之前**：图谱不可用时计划照样会被渲染层消费，
+        # 而 id 正是"能不能写回训练记录"的前提（见 attach_exercise_ids）。
+        attach_exercise_ids(plan)
         from app.graph.memory import MemoryStore
         m = MemoryStore.get()
         if m is None:

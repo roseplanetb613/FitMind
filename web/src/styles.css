@@ -570,6 +570,82 @@ button.chat-option-media:hover { border-color: rgba(95, 212, 196, .5); }
 }
 
 /* ══════════════════════════════════════════════════════════
+   训练执行台 —— 全屏跟练。
+   规格：docs/superpowers/specs/2026-09-18-workout-session-design.md
+
+   ⚠ 与计划抽屉（上面那段）**不是一套**：那是居中卡片式的抽屉，这是 **inset:0 的
+   真全屏**。理由：跟练时用户站在器械旁边看手机，一屏只需要回答"现在做哪个动作、
+   第几组、歇多久"，留着背景只会分散注意力 —— 而且那背景是 3D 场景，白白渲染
+   （挂起由 main.ts 调 scene.setSuspended，见 render/scene.ts）。
+
+   ⚠ 强调色同 .chat-panel / .plan-card 的取舍：teal 175°，避开恢复度冷端 cyan 196°。
+   ══════════════════════════════════════════════════════════ */
+.workout-modal { display: none; }
+.workout-modal.is-open { display: block; }
+.workout-card {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  /* 底部留出 iPhone home indicator 的位置，否则"结束训练"按钮贴着边缘 */
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(170deg, rgba(14, 32, 40, .98), rgba(8, 16, 22, .995));
+  overflow-y: auto;
+}
+.workout-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; margin-bottom: 28px;
+}
+.workout-day { font-size: 13px; color: #5fd4c4; }
+.workout-progress { font-size: 12px; color: #6f7d86; white-space: nowrap; }
+.workout-title { margin: 0 0 10px; font-size: 18px; }
+.workout-exercise {
+  margin: 0 0 10px; font-size: 30px; line-height: 1.25; font-weight: 600;
+  word-break: break-word;
+}
+.workout-meta { margin: 0 0 24px; font-size: 14px; color: #9aa6b2; }
+.workout-countdown {
+  font-size: 84px; font-weight: 700; line-height: 1.05;
+  /* 等宽数字：不等宽的话倒计时每跳一秒宽度都在变，整块跟着抖 */
+  font-variant-numeric: tabular-nums;
+  color: #5fd4c4; margin: 4px 0 6px;
+}
+/* margin-top:auto 把按钮组推到底部 —— 单手够得着的地方 */
+.workout-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: auto; }
+.workout-actions button, .workout-close, .workout-end {
+  font: inherit; font-size: 15px; padding: 13px 20px; border-radius: 12px;
+  cursor: pointer; border: 1px solid transparent;
+}
+.workout-primary {
+  flex: 1 1 auto; min-width: 140px;
+  background: rgba(95, 212, 196, .18); color: #d8f6f1;
+  border-color: rgba(160, 240, 230, .35);
+}
+.workout-primary:hover { background: rgba(95, 212, 196, .3); }
+.workout-ghost {
+  background: transparent; color: #9aa6b2;
+  border-color: rgba(160, 240, 230, .18);
+}
+.workout-ghost:hover { background: rgba(255, 255, 255, .06); color: #e6ebf0; }
+.workout-foot { margin-top: 18px; }
+.workout-end {
+  background: transparent; color: #8d99a5; width: 100%;
+  border-color: rgba(255, 255, 255, .1);
+}
+.workout-end:hover { color: #e6ebf0; background: rgba(255, 255, 255, .05); }
+.workout-note { margin: 0 0 8px; font-size: 13px; color: #9aa6b2; line-height: 1.7; }
+/* 降级 / 读不到 用琥珀色标出来，别和"今天没有安排"长得一样 */
+.workout-note.is-error { color: #e0a458; }
+.workout-close {
+  align-self: flex-start; margin-top: 12px;
+  background: rgba(255, 255, 255, .06); color: #d8dee4;
+  border-color: rgba(255, 255, 255, .12);
+}
+
+@media (max-width: 480px) {
+  .workout-exercise { font-size: 24px; }
+  .workout-countdown { font-size: 64px; }
+  .workout-actions button { padding: 14px 16px; }
+}
+
+/* ══════════════════════════════════════════════════════════
    载入提示（#boot）—— 静态写在 index.html 里，3D 就绪后由 main.ts 移除。
    它盖在整屏之上，是**唯一**能盖住 #app 的元素（本仓不用 z-index）。
    ⚠ 底色与 html/body 一致：它出现时页面还没有别的内容，若用别的颜色

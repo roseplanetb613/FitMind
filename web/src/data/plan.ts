@@ -30,6 +30,12 @@ export interface PlanDay {
 }
 
 export interface PlanExercise {
+  /**
+   * 动作库 id。由后端写入侧落（`plan_skill.attach_exercise_ids`）——
+   * 训练执行台靠它写回打卡（见 `data/plan-parse.ts`）。
+   * ⚠ **存量老计划没有这个字段**（生成于 2026-09-18 之前），写回时按名字走。
+   */
+  id?: string
   name: string
   difficulty?: number
   /** 后端给的是区间字符串（"3-4"），不是数字——原样显示 */
@@ -64,6 +70,12 @@ export interface PlanContent {
   fitt?: { resistance?: string[] }
   macros?: PlanMacros
   training?: { scheme?: string; items?: PlanDay[] }
+  /**
+   * 计划生成的日期基准（ISO `YYYY-MM-DD`，由 `pipeline` 落、`split_cycle.reanchor` 用）。
+   * 训练执行台靠它定位"今天该练哪一天"（`plan-parse.ts::pickTodayDay`）——
+   * `PlanDay.date` 是生成时算好的中文串，隔日就过时了。
+   */
+  start_date?: string
 }
 
 export interface Plan {

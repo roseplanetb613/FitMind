@@ -682,7 +682,8 @@ const player = createWorkoutPlayer({
       engine.setPaused(paused)
       player.refresh()
     },
-    next: () => music?.userNext(),
+    // userNext 切歌后不重绘，歌名会一直停在旧曲——只在状态变化时刷新
+    next: () => { music?.userNext(); player.refresh() },
     setVolume: (v) => engine.setVolume(v),
     onOpenLibrary: () => { void workoutFlow.close(); musicPanel?.open() },
   },

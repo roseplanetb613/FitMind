@@ -75,9 +75,13 @@ export function createIdbAdapter(db: IDBDatabase): IdbAdapter {
   function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(SONGS_STORE, mode)
+      // 事务级失败（出错导致事务 abort）也必须 reject，否则 promise 一直挂着、
+      // importFiles 永远不结束。请求级 onerror 之外再加事务级兜底。
+      tx.onabort = () => reject(tx.error ?? new Error('idb 事务中止'))
+      tx.onerror = () => reject(tx.error ?? new Error('idb 事务错误'))
       const req = fn(tx.objectStore(SONGS_STORE))
       req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error ?? new Error('idb error'))
+      req.onerror = () => reject(req.error ?? new Error('idb 错误'))
     })
   }
   return {

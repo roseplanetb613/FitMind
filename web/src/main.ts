@@ -612,6 +612,8 @@ const workoutFlow = createWorkoutFlow({
   },
 })
 workoutToggleEl.addEventListener('click', () => {
+  // 在 await 之前先拿激活窗口（iOS），resume 幂等，onOpen 里另有兜底
+  void audioCtx.resume()
   // 先刷新歌单（事件在 open 内触发，歌单必须先就位），再开全屏
   void refreshMusic().then(() => workoutFlow.open())
 })
@@ -647,13 +649,22 @@ const engine = createAudioEngine({
 let musicLib: MusicLibrary | null = null
 let music: MusicSession | null = null
 let paused = false
+// 上一批 refreshMusic 用 createObjectURL 造的 URL（engine.stopAll 只 revoke 它自己
+// 装载的那 ≤2 个，剩下的要在这里整批补回收，否则泄漏到页面卸载为止）。
+let prevBatchUrls: string[] = []
 
 /** 以当前曲库重建调度器（每次「开始训练」前调用）。 */
 async function refreshMusic(): Promise<void> {
   if (!musicLib) return
   const all = await musicLib.list()
-  const toTrack = (s: StoredSong) => ({ id: s.id, name: s.name, url: URL.createObjectURL(s.blob) })
-  engine.stopAll()
+  engine.stopAll()                                  // 先停引擎（它自己 revoke 装载中的 URL）
+  for (const u of prevBatchUrls) URL.revokeObjectURL(u)  // 再把上一批剩余的补 revoke
+  prevBatchUrls = []
+  const toTrack = (s: StoredSong) => {
+    const url = URL.createObjectURL(s.blob)
+    prevBatchUrls.push(url)
+    return { id: s.id, name: s.name, url }
+  }
   paused = false
   music = createMusicSession({
     engine,
@@ -673,7 +684,7 @@ const player = createWorkoutPlayer({
     },
     next: () => music?.userNext(),
     setVolume: (v) => engine.setVolume(v),
-    onOpenLibrary: () => { void workoutFlow.close(); musicPanel.open() },
+    onOpenLibrary: () => { void workoutFlow.close(); musicPanel?.open() },
   },
   getState: () => {
     const st = music?.state()

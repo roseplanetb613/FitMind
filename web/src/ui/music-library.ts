@@ -122,7 +122,16 @@ export function createMusicLibraryPanel(deps: MusicLibraryPanelDeps): MusicLibra
   }
 
   return {
-    open: async () => { await render() },
-    close: () => { renderSeq += 1; clear() },
+    open: async () => {
+      // 面板根带 `.plan-modal`（styles.css 里默认 display:none，`is-open` 才显示）。
+      // open/close 必须自己管显隐 —— 否则内容渲染了、层却永远藏在地底下。
+      root.classList.add('is-open')
+      await render()
+    },
+    close: () => {
+      root.classList.remove('is-open')
+      renderSeq += 1
+      clear()
+    },
   }
 }

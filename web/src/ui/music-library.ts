@@ -96,35 +96,52 @@ export function createMusicLibraryPanel(deps: MusicLibraryPanelDeps): MusicLibra
     const list = await deps.library.list()
     if (seq !== renderSeq) return        // 有更新的渲染接管，丢弃这次（防止并发互叠）
 
+    // ⚠ 内容必须挂在 `.plan-card` 里，**不能**直接挂 root。
+    //
+    // `#music` 的样式只有 `.plan-modal` 那两条（display:none / is-open 时 display:block），
+    // 它自己**没有任何定位**。裸挂上去的内容就落在 #app 的普通文档流里，而它的前一个
+    // 兄弟 `#stage`（canvas，width/height:100%）在流内就吃掉一整个 100vh —— 于是面板被
+    // 排到 y≈100vh，也就是视口**下方一屏**。表现就是"点音乐没反应"：handler 跑了、
+    // 列表也渲染了，只是画在看不见的地方。`.plan-card` 靠 position:fixed 脱离文档流，
+    // 这才是 plan / profile 两个面板能显示出来的原因。
+    //
+    // backdrop 同理：fixed inset:0，顺带挡掉底下的 3D 交互，点击即关。
+    const backdrop = el('div', 'plan-backdrop')
+    backdrop.addEventListener('click', () => deps.onClose?.())
+    const card = el('div', 'plan-card')
+
     const head = el('div', 'music-head')
     const title = el('span', 'music-title', `曲库（${list.length}）`)
     const closeBtn = el('button', 'music-close', '关闭')
+    closeBtn.setAttribute('type', 'button')
     closeBtn.addEventListener('click', () => deps.onClose?.())
     head.append(title, closeBtn)
-    root.appendChild(head)
+    card.appendChild(head)
 
     if (!list.length) {
-      root.appendChild(el('p', 'music-empty-hint', '还没有歌曲 —— 先导入几首吧。'))
-      root.appendChild(makeImportZone('导入音乐'))
-      return
+      card.appendChild(el('p', 'music-empty-hint', '还没有歌曲 —— 先导入几首吧。'))
+      card.appendChild(makeImportZone('导入音乐'))
+    } else {
+      card.appendChild(makeImportZone('＋ 导入音乐'))
+      for (const s of list) card.appendChild(row(s))
+
+      const foot = el('div', 'music-foot')
+      const clearBtn = el('button', 'music-clear', '清空全部')
+      clearBtn.addEventListener('click', () => {
+        if (confirm('要清空整个曲库吗？')) void deps.library.clear().then(() => render())
+      })
+      foot.appendChild(clearBtn)
+      card.appendChild(foot)
     }
 
-    root.appendChild(makeImportZone('＋ 导入音乐'))
-    for (const s of list) root.appendChild(row(s))
-
-    const foot = el('div', 'music-foot')
-    const clearBtn = el('button', 'music-clear', '清空全部')
-    clearBtn.addEventListener('click', () => {
-      if (confirm('要清空整个曲库吗？')) void deps.library.clear().then(() => render())
-    })
-    foot.appendChild(clearBtn)
-    root.appendChild(foot)
+    root.append(backdrop, card)
   }
 
   return {
     open: async () => {
       // 面板根带 `.plan-modal`（styles.css 里默认 display:none，`is-open` 才显示）。
       // open/close 必须自己管显隐 —— 否则内容渲染了、层却永远藏在地底下。
+      // 显隐之外还有"画在哪"：内容层的 `.plan-card` 见 render() 顶部那段注释。
       root.classList.add('is-open')
       await render()
     },

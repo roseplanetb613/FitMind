@@ -32,6 +32,7 @@ import {
   STORE_VERSION, type StorageLike, type WorkoutProgress,
 } from '../data/workout-store'
 import { summarizeSync, writeExercise, type SyncOutcome } from '../data/checkin'
+import { equipmentLabel } from '../data/exercises'
 
 /** 「今天该练哪一天」的取数结果。**读不到计划**与**今天没安排**是两件事。 */
 export interface TodayLoad {
@@ -251,7 +252,11 @@ export function createWorkoutFlow(deps: WorkoutFlowDeps): WorkoutFlow {
       card.appendChild(el('h3', 'workout-exercise', ex.name))
       const meta = [`第 ${st.setIdx + 1}/${st.sets} 组`]
       if (ex.reps) meta.push(`目标 ${ex.reps} 次`)   // ⚠ 原样，不解析（有时间型"20-60s 保持"）
-      if (ex.equipment) meta.push(ex.equipment)
+      // 器械走 `data/exercises.ts` 的**中文表**（那是 slug→中文的唯一副本）。
+      // 后端给的是 normalized_equipment 的英文 slug（band / barbell / …），
+      // 直接显示会在界面上蹦出一串英文 —— 真机验收时抓到过。
+      const eq = equipmentLabel(ex.equipment)
+      if (eq) meta.push(eq)
       card.appendChild(el('p', 'workout-meta', meta.join(' · ')))
       const row = el('div', 'workout-actions')
       row.appendChild(button('完成一组', 'workout-primary', () => {

@@ -20,38 +20,77 @@
 - `pattern` 运动模式（push/pull/squat/core/…；用于计划偏好加权）
 - `kind`    本词的类型：`"region"`=区域词（编辑时**展开整个区域**，"腿"→股四+臀+腘绳；
             "腿日"不止 quadriceps）、`"muscle"`=细分工位（直接取该肌群）
+- `expands_to` 区域词在**检索旁路**里显式展开的肌群 id 列表（2026-09-20 定标）。
+            ⚠ **刻意不派生自 `region`**：`region` 只是本体的分区字段，与"用户说这个
+            部位时想要什么"不是一回事 —— `腰` 的 region 是 `back`，按它展开会把
+            斜方肌/背阔肌全拉进来（"腰"变"整个背"，过宽回归）。故逐词写死、可对账。
+            缺此字段 → 退回 `muscle`（单肌群），再退回 `region` 兜底。
 
 维保约定：新增部位词只改这里；`test_part2muscle_all_values_exist_in_graph` 会遍历
 全表校验每个 `muscle` 在图中真实存在。
 """
 from __future__ import annotations
 
+# 区域词的检索展开表（肌群 id 单源；顺序 = 代表肌群在前，用于跨肌群轮转的起点）。
+# 取值依据：本体 region 的成员 + `kind="region"` 的文档语义。
+_REGION_EXPANDS: dict[str, list[str]] = {
+    # 文档语义：腿日不止 quadriceps（"腿"→股四+臀+腘绳）
+    "腿": ["quadriceps", "hamstrings", "glutes"],
+    "大腿": ["quadriceps", "hamstrings"],          # 大腿=股+腘绳，不含臀
+    "臀": ["glutes"],
+    # ⚠ 刻意**不含** serratus_anterior（本体里它 region=chest，但"练胸"没人指前锯肌）：
+    # 全库只有 5 条以它为主目标的动作（肩胛骨俯卧撑 / 肩部抬举），而跨肌群轮转是
+    # 等权交替 —— 带上它，"练胸"前 8 条里 4 条是前锯肌（实测 2026-09-20，
+    # scripts/eval_retrieval.py L03）。与"背"不含 spine/levator_scapulae 同一取舍。
+    "胸": ["pectorals"],
+    "背": ["latissimus_dorsi", "trapezius", "rhomboids",
+           "upper_back", "lower_back"],
+    "肩": ["deltoids", "rotator_cuff"],
+    "臂": ["biceps", "triceps"],
+    "手臂": ["biceps", "triceps"],
+    "胳膊": ["biceps", "triceps"],
+    "腹": ["rectus_abdominis", "obliques"],
+    "核心": ["core", "rectus_abdominis", "obliques"],
+    "小腿": ["calves", "tibialis_anterior", "ankle_stabilizers"],
+    "前臂": ["forearms"],
+    "髋": ["abductors", "adductors", "hip_flexors"],
+    # ⚠ 刻意只留 lower_back：这就是"不按 region 展开"的样板词（region=back）
+    "腰": ["lower_back"],
+}
+
 PARTS: dict[str, dict] = {
     # ---- 区域词（kind="region"：编辑按区域展开，非单肌群）----
     "胸": {"region": "chest", "muscle": "pectorals", "pattern": "push",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["胸"]},
     "背": {"region": "back", "muscle": "latissimus_dorsi", "pattern": "pull",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["背"]},
     "肩": {"region": "shoulders", "muscle": "deltoids", "pattern": "push",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["肩"]},
     "腿": {"region": "upper_legs", "muscle": "quadriceps", "pattern": "squat",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["腿"]},
     "臀": {"region": "glutes", "muscle": "glutes", "pattern": "squat",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["臀"]},
     "腹": {"region": "core", "muscle": "rectus_abdominis", "pattern": "core",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["腹"]},
     "核心": {"region": "core", "muscle": "core", "pattern": "core",
-             "kind": "region"},
+             "kind": "region", "expands_to": _REGION_EXPANDS["核心"]},
     "臂": {"region": "upper_arms", "muscle": "biceps", "pattern": "pull",
-           "kind": "region"},
+           "kind": "region", "expands_to": _REGION_EXPANDS["臂"]},
     # ---- 区域别名（不额外给 muscle：语义上是同一区域的另一种说法）----
-    "大腿": {"region": "upper_legs", "muscle": "quadriceps", "kind": "region"},
-    "小腿": {"region": "lower_legs", "kind": "region"},
-    "手臂": {"region": "upper_arms", "kind": "region"},
-    "胳膊": {"region": "upper_arms", "kind": "region"},
-    "前臂": {"region": "forearms", "kind": "region"},
-    "髋": {"region": "hips", "kind": "region"},
-    "腰": {"region": "back", "muscle": "lower_back", "kind": "region"},
+    "大腿": {"region": "upper_legs", "muscle": "quadriceps", "kind": "region",
+             "expands_to": _REGION_EXPANDS["大腿"]},
+    "小腿": {"region": "lower_legs", "kind": "region",
+             "expands_to": _REGION_EXPANDS["小腿"]},
+    "手臂": {"region": "upper_arms", "kind": "region",
+             "expands_to": _REGION_EXPANDS["手臂"]},
+    "胳膊": {"region": "upper_arms", "kind": "region",
+             "expands_to": _REGION_EXPANDS["胳膊"]},
+    "前臂": {"region": "forearms", "kind": "region",
+             "expands_to": _REGION_EXPANDS["前臂"]},
+    "髋": {"region": "hips", "kind": "region",
+           "expands_to": _REGION_EXPANDS["髋"]},
+    "腰": {"region": "back", "muscle": "lower_back", "kind": "region",
+           "expands_to": _REGION_EXPANDS["腰"]},
     "脚踝": {"muscle": "ankle_stabilizers", "kind": "muscle"},
     # ---- 细分工位（kind="muscle"：直接取该肌群）----
     "二头": {"muscle": "biceps", "kind": "muscle"},
@@ -84,6 +123,16 @@ def pattern_of(part: str) -> str | None:
 def kind_of(part: str) -> str | None:
     """"region"=区域词（编辑按区域展开）/"muscle"=细分工位（取单肌群）/None。"""
     return (PARTS.get(part) or {}).get("kind")
+
+
+def expands_to(part: str) -> list[str] | None:
+    """部位词 → **显式**展开的肌群 id 列表（区域词的检索语义）；不展开 → None。
+
+    单源见 `_REGION_EXPANDS`。刻意不派生自 `region`（理由见模块 docstring 的
+    `expands_to` 字段说明与 `_muscles_for_part`）。
+    """
+    e = (PARTS.get(part) or {}).get("expands_to")
+    return list(e) if e else None
 
 
 def region_words() -> set[str]:

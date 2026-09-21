@@ -71,6 +71,12 @@ def _strip_fake_ack(reply: str) -> str:
 # 词形取"改变计划结构"的完成态断言；单字/疑问式不入表（"如果要去掉某个动作…"
 # 是建议而非断言，不该被降级——误判代价是渲染退化，漏判代价是用户被误导，
 # 故宁可略偏保守地多收完成态词形）。
+#
+# ⚠ 2026-09-20 补：**光靠词表区分不开"建议"与"断言"**。表里"后延/延后/顺延/
+# 推迟/平移/往后挪/挪到"是裸动词，在建议句里极常见，而它们又必须留着——
+# 上面那条实证 case 本身就是裸动词。故改为**词表不动 + 建议语境豁免**：
+# 命中后先看它是否处在"可以…/建议…/如果…"的语气里（`_in_advice_context`），
+# 是则不算声称。实测误判 5/8 → 0/10（见 test_nodes 的建议语境豁免一组）。
 _PLAN_EDIT_CLAIM_KW = ("已改", "已经改", "已调整", "已后延", "已延", "已顺延",
                        "已推迟", "已平移", "已挪", "后延", "延后", "顺延", "推迟",
                        "平移", "往后挪", "挪到", "已排到", "已去掉", "去掉了",
@@ -90,9 +96,65 @@ def _edit_ok_provenance(sources) -> bool:
     return False
 
 
+# 建议/条件语气的标记（2026-09-20）：**同一句内、改动词之前**出现这些词，
+# 说明这句是"你可以…/建议…"的**建议**，不是"我已经改了"的**断言**。
+_ADVICE_CTX = ("可以", "建议", "不妨", "不如", "推荐", "考虑", "试着", "试试",
+               "要不要", "如果", "假如", "或者", "也许", "或许", "最好")
+# 建议语气之后若又冒出完成态标记，说明已从"建议"翻成"声称已做"，不再豁免。
+# （"我建议你今天休息，已经帮你把训练往后挪了一天"仍要被抓。）
+_COMPLETION_CTX = ("已", "改好", "搞定", "弄好", "帮你", "给你", "完成")
+# 语境窗口取**整句**（只按句末标点回退，不按逗号切）。
+# ⚠ 为什么不用逗号：条件状语常与改动词分处两个逗号子句——
+# "如果累的话，把腿日推迟一天" 里 "如果" 在逗号**之前**，按逗号切就漏了。
+# 而跨子句误豁免的风险由 `_COMPLETION_CTX` 兜住（见下）。
+_SENT_BOUND = re.compile(r"[。！？!?\n]")
+
+
+def _in_advice_context(reply: str, at: int) -> bool:
+    """reply[at] 处的改动词是否处在**建议/条件**语气里（同句、且在它之前）。
+
+    ⚠ 2026-09-20 修误判。词表里既有完成态（"已改"）也有**裸动词**
+    （"往后挪"/"推迟"/"延后"/"平移"），而裸动词在建议句里极常见：
+    LLM 写"…可以适当降低强度或把背部训练**往后挪**一天"，被当成
+    "声称改动了计划"→ 整段回复被 `_render_fallback` 顶掉，实测 **5/8 = 62.5%**。
+
+    ⚠ 判据只能是**语境**，不能靠删裸动词：本护栏最初的实证 case 恰恰是
+    "把整周安排整体后延一天"（同为裸动词，且是真断言）。删词会把那条一起漏掉。
+    """
+    lo = 0
+    for m in _SENT_BOUND.finditer(reply, 0, at):
+        lo = m.end()                       # 回退到最近一个句末标点
+    window = reply[lo:at]
+    best, blen = -1, 0
+    for a in _ADVICE_CTX:                  # 取最靠右（最长）的建议标记
+        p = window.rfind(a)
+        if p > best or (p == best and len(a) > blen):
+            best, blen = p, len(a)
+    if best < 0:
+        return False
+    tail = window[best + blen:]
+    return not any(c in tail for c in _COMPLETION_CTX)
+
+
 def _fabricated_plan_edit(reply: str, sources) -> bool:
-    """reply 声称改动了计划，却无成功编辑依据 → 判幻觉（调用方降级零幻觉渲染）。"""
-    if not reply or not any(k in reply for k in _PLAN_EDIT_CLAIM_KW):
+    """reply 声称改动了计划，却无成功编辑依据 → 判幻觉（调用方降级零幻觉渲染）。
+
+    建议语气里的提及不算"声称"（见 `_in_advice_context`）。只要**有一处**
+    改动词落在非建议语境，就仍按断言处理（保守：宁多抓不漏抓）。
+    """
+    if not reply:
+        return False
+    claimed = False
+    for kw in _PLAN_EDIT_CLAIM_KW:
+        i = reply.find(kw)
+        while i >= 0:
+            if not _in_advice_context(reply, i):
+                claimed = True
+                break
+            i = reply.find(kw, i + 1)      # 同一词多处出现要逐一看语境
+        if claimed:
+            break
+    if not claimed:
         return False
     return not _edit_ok_provenance(sources)
 

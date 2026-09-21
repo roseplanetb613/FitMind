@@ -9,19 +9,41 @@
     python scripts/eval_rag.py --emit      # 生成/刷新自动正样本到标注集
     python scripts/eval_rag.py             # 全部检索器 + 阈值扫描
     python scripts/eval_rag.py --split 0.5 # dev 上选阈值，报 test 成绩
+    python scripts/eval_rag.py --retriever policy --split 0.5          # 判决层
+    python scripts/eval_rag.py --retriever policy --chunk-type exercise_cue --split 0.5
 
 结构：每个检索器先把每条 query 的 **top1(id, score) 算一次**，之后阈值只是纯过滤——
 否则每换一个阈值就要重跑一遍 embed。
 
 已测结论（2026-09-14，science_doc 25 正 / 12 负）：
     检索器          Acc    证据准  召回   WRONG  LEAK   备注
-    dense           0.76   0.74   0.68    5      1     生产现状（MIN_SCORE=0.55）
+    dense           0.76   0.74   0.68    5      1     当时的 MIN_SCORE=0.55
     字符bigram BM25  0.65   0.63   0.48    7      0     词法在此语料偏弱
     hybrid(RRF)     0.54   0.48   0.64    9      8     **比单路差**：融合稀释强路
     ce_rerank       0.81   0.79   0.76    4      1     提升来自**弃权分数**而非排序
   · 天花板：正确答案 **100% 落在稠密 top-5 内**（80% 在 top-1）→ 错误全是排序错误
   · 但 cross-encoder 的 argmax 只修好 3 条、弄坏 3 条（净 0）——**够不到天花板**
   · llm_rerank（qwen3:8b）实测会把本机 Ollama 压垮，见该函数注释，勿用
+
+已测结论（2026-09-20，标注集扩到 221 条，`--split 0.5` 的**留出 test**，n=104）：
+    检索器     证据准  召回   弃权准  WRONG  LEAK   备注
+    dense      0.83   0.84   0.83    10     4     dev 选出阈值 0.624
+    lexical    0.87   0.84   0.96     9     1     **只接一路就接它**
+    hybrid     0.67   0.85   0.12    12    21     RRF 最差：融合分把弃权信号洗掉
+    policy     0.79   0.86   0.50     6    12     **2026-09-20 新增**：判决层
+  · `policy` = `app.rag.policy`（按 chunk_type 分化 + 词法旁证 + fail-closed）。
+    在 `exercise_cue` 上留出 test 是 **准 1.000 / WRONG 0 / LEAK 0**，且召回不掉。
+  · ⚠⚠ **扩集后 `policy` 看着比 `dense` 差，别被这一行误导** —— 不是同类比较：
+    本脚本会给 `dense` **调阈值**（网格扫描，选出 0.624），而 `policy` 的网格被固定成
+    `[-1.0, 0.0]`，**它一直用 `MIN_SCORE`**。同一阈值下比才公平（见 §阈值表）。
+  · ⚠ **`MIN_SCORE` 已从 0.55 调到 0.60**（2026-09-20 晚）。依据：**负样本 17→50**
+    之后，0.55 在全量 test 上 **LEAK 14/24、弃权准 0.417**；0.60 是 LEAK 5 / 弃权准 0.792。
+    旧集只有 17 个负样本（进 test 更少），**把 LEAK 照得很小**，所以此前"0.55 够用"
+    的结论是**集合太瘦**造成的假象。
+  · ⚠ 本脚本的**阈值网格是给 `dense` 探边界用的**，不是自动调参器。要用它选值，
+    先确认负样本够（2026-09-20 前是 17 个，不够）。
+  · ⚠ 集合是 **171 正 / 50 负**（扩集前 145/17，`accuracy ≈ recall` 的偏差已明显缓解，
+    但正仍多于负）。读 Acc 时记住这点。
 
 判据（每 query 一个格子）：
     expected 有值 且 returned == expected → TP
@@ -40,10 +62,14 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-for p in ("", "lib"):
+for p in ("", "lib", "app"):
     p = str(ROOT / p)
     if p not in sys.path:
         sys.path.insert(0, p)
+
+# 词法索引的**唯一实现**在 app/rag/lex_index.py（评测与运行期共用，防同源漂移）。
+from app.rag import lex_index as _lex_index          # noqa: E402
+from app.rag.lex_index import _grams as _lex_grams   # noqa: E402
 
 LABELS = ROOT / "data" / "rag_eval" / "queries.jsonl"
 SEED = 20260914
@@ -109,49 +135,19 @@ def auto_grid(scores: list[float], n: int = 9) -> list[float]:
 
 
 def _grams(t: str) -> list[str]:
-    t = "".join(t.split())
-    return [t[i:i + 2] for i in range(len(t) - 1)] or [t]
+    """⚠ 已移到 `app/rag/lex_index.py`（运行期与评测共用一份实现，防同源漂移）。
+    这里保留 `_grams` / `LexIndex` 两个名字作为 import 别名 —— 本脚本内部有引用，
+    换成公共模块后**行为必须逐字一致**（由 `--retriever all` 的数字不变来保证）。"""
+    return _lex_grams(t)
 
 
-class LexIndex:
+class LexIndex(_lex_index.LexIndex):
     """字符二元组 BM25 —— 中文不依赖分词器的词法基线。
 
+    ⚠ 2026-09-21：实现已**逐字搬**到 `app/rag/lex_index.py`，这里只是子类别名。
+    搬移动机：接线 `exercise_cue` 判决层时运行期也要算词法旁证，必须是同一份实现。
     不用 pg_trgm 的原因：实测它在 2 字中文上算不出相似度（'深蹲' vs '深蹲膝盖姿势要点'
     = 0.200，低于默认阈值 0.3）。字符 bigram 没这个问题。索引建一次，多次查询复用。"""
-
-    def __init__(self, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75):
-        self.k1, self.b = k1, b
-        self.ids = [i for i, _ in docs]
-        self.corpus = [_grams(t) for _, t in docs]
-        self.lens = [len(g) for g in self.corpus]
-        self.avg = (sum(self.lens) / len(self.lens)) if self.lens else 1.0
-        self.df: Counter = Counter()
-        for g in self.corpus:
-            self.df.update(set(g))
-        self.n = len(self.corpus) or 1
-
-    def ranked(self, query: str, n: int | None = None) -> list[tuple[str, float]]:
-        """按 BM25 降序的全部（或前 n 个）(id, score)。RRF 融合需要排名而非仅 top1。"""
-        if not self.corpus:
-            return []
-        qterms = _grams(query)
-        scored = []
-        for doc_id, g, dl in zip(self.ids, self.corpus, self.lens):
-            tf = Counter(g)
-            s = 0.0
-            for term in qterms:
-                if term not in self.df:
-                    continue
-                idf = math.log(1 + (self.n - self.df[term] + 0.5) / (self.df[term] + 0.5))
-                s += idf * tf[term] * (self.k1 + 1) / (
-                    tf[term] + self.k1 * (1 - self.b + self.b * dl / self.avg))
-            scored.append((doc_id, s))
-        scored.sort(key=lambda kv: -kv[1])
-        return scored[:n] if n else scored
-
-    def top1(self, query: str) -> tuple[str | None, float]:
-        r = self.ranked(query, 1)
-        return r[0] if r else (None, 0.0)
 
 
 # ---------------- LLM rerank（本地 Ollama，零下载） ----------------
@@ -356,6 +352,50 @@ def lexical_top1(store, rows: list[dict]) -> list[tuple]:
     return out
 
 
+def policy_top1(store, emb, rows: list[dict]) -> list[tuple]:
+    """判决层（`app.rag.policy`）的 top1 —— 让规格里的规则在**标准工具**里可复算。
+
+    2026-09-20：判决此前焊在 `vector_search` 的 SQL 门槛里（一个标量要同时管
+    `exercise_cue` 与 `science_doc` 两种分布）。实测该标量在两个分布上重叠，
+    判决层把"接受/弃权"拆出来，按 chunk_type 分化：
+    `exercise_cue` 要求**词法旁证**（严格相等），`science_doc` 保持纯标量。
+
+    ⚠ 门槛本身（`MIN_SCORE`）**当天晚上从 0.55 调到了 0.60** —— 标注集扩到 221 条、
+    负样本 17→50 后，0.55 在全量 test 上 LEAK 14/24、弃权准 0.417，明显太低。
+    旧集负样本太少，把 LEAK 照小了。所以本行 `policy` 的成绩与 `dense` 行**不是
+    同一阈值下的比较**（`dense` 会被网格调到 0.624）。要比阈值请看
+    `MIN_SCORE` 的注释里的表。
+
+    ⚠ 返回的 score **只编码"接受/弃权"**（接受 1.0 / 弃权 -1.0）—— 照抄
+    `llm_rerank` 的先例：判决层已自带门槛（`policy.MIN_SCORE`），不该再被外层
+    网格扫一遍（`main` 对这两个检索器把 grid 固定成 `[-1.0, 0.0]`）。
+
+    ⚠ 旁证用的是本脚本的 `LexIndex`（跑在 `norm_zh(content)` = cue 正文上），
+    **不是**生产的 `exercise_repo.search_zh`（跑在动作名/别名上）。两条口径实测
+    top1 一致率 111/125；精度都打满（准 1.000 / WRONG 0 / LEAK 0），但召回
+    0.900（本口径）vs 0.842（生产口径）。口径差是**已知且量化过**的，见规格 §4.3。
+    """
+    from app.rag import policy
+    from app.rag import retriever
+    from exercise_repo import expand_aliases, norm_zh
+    idx: dict[str, LexIndex] = {}
+    out = []
+    for r in rows:
+        t = r["chunk_type"]
+        if t not in idx:
+            idx[t] = _lex_index(store, t)
+        hits = retriever.vector_search(
+            store, emb.embed_one(r["query"]), "bge-m3", top_k=1,
+            chunk_types=(t,), min_score=None)
+        ranked = policy.from_hits(hits)
+        lex_id, _ = idx[t].top1(norm_zh(expand_aliases(r["query"])))
+        d = policy.decide(ranked, chunk_type=t, lexical_top1_id=lex_id)
+        out.append((r.get("expected"),
+                    ranked[0][0] if (d.accepted and ranked) else None,
+                    1.0 if d.accepted else -1.0))
+    return out
+
+
 def _rrf(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion：score = Σ 1/(k + rank)。
 
@@ -446,7 +486,7 @@ def main() -> None:
     ap.add_argument("--emit", action="store_true")
     ap.add_argument("--retriever", default="all",
                     choices=["all", "dense", "lexical", "hybrid", "ce_rerank",
-                             "llm_rerank", "abstain", "random"])
+                             "llm_rerank", "policy", "abstain", "random"])
     ap.add_argument("--chunk-type", default=None)
     ap.add_argument("--split", type=float, default=0.0,
                     help="留出比例：dev 上选阈值，报 test 成绩（0 = 不分，阈值即在报告集上选，偏乐观）")
@@ -475,6 +515,19 @@ def main() -> None:
     from app.rag.store import PgStore
     from app.rag.embedder import OllamaEmbedder
     store, emb = PgStore(), OllamaEmbedder()
+
+    # PG 预检（2026-09-20）：与下面 Ollama 那条同理——**不能**静默降级。
+    # 此前 PG 不可达时直接抛 psycopg 的 traceback，读的人只看到
+    # "fe_sendauth: no password supplied"，不知道缺的是 DATABASE_URL。
+    try:
+        with store.conn():
+            pass
+    except Exception as e:
+        print("[FAIL] PG 不可达 —— 向量通道无法评估，且**不能**静默降级成 skip：")
+        print(f"       {type(e).__name__}: {str(e).splitlines()[0]}")
+        print("       修法：设 DATABASE_URL（缺省 DSN 无密码，见 app/rag/store.py）")
+        sys.exit(2)
+
     if args.dump:
         dump_candidates(store, emb, labels, 5, Path(args.dump))
         print(f"已 dump 稠密 top-5 -> {args.dump}（两段式第一步完成）")
@@ -509,7 +562,7 @@ def main() -> None:
     n_pos = sum(1 for r in test if r.get("expected"))
     print(f"标注集 {len(labels)} 条（正 {n_pos} / 负 {len(test) - n_pos}）\n")
 
-    names = (["dense", "lexical", "hybrid", "abstain", "random"]
+    names = (["dense", "lexical", "hybrid", "policy", "abstain", "random"]
              if args.retriever == "all" else [args.retriever])
 
     for name in names:
@@ -533,6 +586,9 @@ def main() -> None:
 
         if name == "dense":
             dev_t1, test_t1 = dense_top1(store, emb, dev), dense_top1(store, emb, test)
+        elif name == "policy":
+            dev_t1 = policy_top1(store, emb, dev)
+            test_t1 = policy_top1(store, emb, test)
         elif name == "hybrid":
             dev_t1 = hybrid_top1(store, emb, dev)
             test_t1 = hybrid_top1(store, emb, test)
@@ -547,8 +603,9 @@ def main() -> None:
 
         if args.grid:
             grid = [float(x) for x in args.grid.split(",")]
-        elif name == "llm_rerank":
-            # 分数只编码"选没选"（选中=1.0 / 弃权=-1.0），没有连续尺度可扫
+        elif name in ("llm_rerank", "policy"):
+            # 分数只编码"选没选/接不接"（接受=1.0 / 弃权=-1.0），没有连续尺度可扫
+            # —— 判决由检索器自己下（policy 自带 MIN_SCORE 门槛），不该被网格再扫
             grid = [-1.0, 0.0]
         else:
             grid = auto_grid([s for _, _, s in dev_t1 if s >= 0])

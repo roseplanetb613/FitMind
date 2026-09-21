@@ -133,8 +133,21 @@ def _science_blocks() -> list[tuple[str, str, str]]:
 
 
 def _write_embeddings(store: PgStore, ex: ExerciseRepo,
-                      embedder) -> bool:
-    """生成并写入 embedding 块。返回是否成功写入（False=跳过，图数据不受影响）。"""
+                      embedder, replace: bool = True) -> bool:
+    """生成并写入 embedding 块。返回是否成功写入（False=跳过，图数据不受影响）。
+
+    2026-09-21 数据丢失修复：`replace=True`（旧行为）会先 `clear_all()` 再重建，
+    两步不在同一事务，而重建整段被 `except Exception` 静默吞掉 ⇒
+    TRUNCATE 成功 + 重建失败 = 表**永久空**，且 `build()` 不抛错（已实测复现，
+    触发条件是 `OllamaEmbedder.healthy()` 的 3s 超时 + WSL 端口转发抖动）。
+
+    改为**先备好、再切换**：整个重建（生成向量 + 写入）在**同一个事务**里完成，
+    TRUNCATE 与 INSERT 之间没有"生成失败就走人"的窗口 —— 任何一步出错都 ROLLBACK，
+    旧数据原样保留。`replace=False` 则完全不碰既有数据（仅追加），供探针/增量场景用。
+
+    事务内 `clear_all()` 走的是 `store.conn()`（autocommit），与写入连接不是同一个，
+    所以这里**不走** `store.clear_all()`，而是用同一连接的游标执行 TRUNCATE，
+    保证 TRUNCATE 与 INSERT 原子共存亡。"""
     try:
         if not embedder.healthy():
             return False
@@ -153,24 +166,34 @@ def _write_embeddings(store: PgStore, ex: ExerciseRepo,
     except Exception:
         return False                       # 网络/embedder 出错 → 跳过，不中断图
 
-    with psycopg.connect(store.dsn, autocommit=False) as conn, conn.cursor() as cur:
-        for (ctype, sref, content, pending), vec in zip(rows, vecs):
-            cur.execute(
-                "INSERT INTO fitness.embeddings"
-                "(chunk_type,source_ref,content,embedding,pending_review) "
-                "VALUES(%s,%s,%s,%s,%s)",
-                (ctype, psycopg.types.json.Jsonb(sref), content, vec, pending))
-        conn.commit()
+    try:
+        with psycopg.connect(store.dsn, autocommit=False) as conn, \
+                conn.cursor() as cur:
+            if replace:
+                cur.execute("TRUNCATE fitness.embeddings RESTART IDENTITY")
+            for (ctype, sref, content, pending), vec in zip(rows, vecs):
+                cur.execute(
+                    "INSERT INTO fitness.embeddings"
+                    "(chunk_type,source_ref,content,embedding,pending_review) "
+                    "VALUES(%s,%s,%s,%s,%s)",
+                    (ctype, psycopg.types.json.Jsonb(sref), content, vec, pending))
+            conn.commit()
+    except Exception:
+        return False                       # 写库失败 → 事务已回滚，旧数据完好
     return True
 
 
 def build(store: PgStore | None = None, fill_embeddings: bool = True,
           graph: "GraphStore | None" = None) -> dict:
     """幂等重建：向量 → PG（store）；图 → Neo4j（graph，默认 GraphStore.get()）。
-    Neo4j 不可用 → 跳过图（nodes/edges=0），向量照常（双降级）。"""
+    Neo4j 不可用 → 跳过图（nodes/edges=0），向量照常（双降级）。
+
+    2026-09-21：这里**不再**无条件 `store.clear_all()`。清空已移交
+    `_write_embeddings(replace=True)`，与重建同事务 —— 否则"先清空、后重建"
+    之间一旦重建失败（Ollama 抖动）就是永久空表且不抛错。
+    `fill_embeddings=False` 时不再清空（调用方语义就是"别动向量"）。"""
     store = store or PgStore()
     store.apply_schema()
-    store.clear_all()
     ex = ExerciseRepo()
 
     graph = graph if graph is not None else GraphStore.get()
@@ -192,7 +215,8 @@ def build(store: PgStore | None = None, fill_embeddings: bool = True,
     embedder = OllamaEmbedder()
     embedding_skipped = False
     if fill_embeddings:
-        if not _write_embeddings(store, ex, embedder):
+        # replace=True：清空与重建同事务 —— 失败则整体回滚，旧数据完好（不是空表）。
+        if not _write_embeddings(store, ex, embedder, replace=True):
             embedding_skipped = True
 
     counts = store.counts()

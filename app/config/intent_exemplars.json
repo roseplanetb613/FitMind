@@ -1,125 +1,626 @@
 {
   "version": 1,
+  "_note": [
+    "2026-09-20 补 qa 的『动作推荐』一族（10 条，见 qa 块末尾）。",
+    "原因：qa 原有 12 条**全是营养数值 / A-vs-B 对比**，『推荐动作 / 有哪些动作』零覆盖；",
+    "该族问法的最近邻于是落到 guard（伤情句共享部位词，6/8）或 plan（『推拉腿』，2/8），",
+    "被 L1 采纳后覆盖掉 L0 本来判对的 qa —— 实测 8/8 全错（见 scripts/calibrate_intent_sim.py）。",
+    "⚠ 例句刻意**不复用**标定用例集（app/config/intent_calibration.json）的原句，",
+    "让那份用例集保持留出性质；真正的留出检验是其中的 plan/guard 反例不能被抢走。",
+    "⚠ 2026-09-20 撤回一条 guard 例句『腰伤能推荐什么动作』：它把 `练腰怎么练`/`腰怎么练`",
+    "从 qa 抢成了 guard（实测 0.741/0.755，修前是 0.693/0.702 的 qa）——**假安全告警**。",
+    "教训：短句 + 只带部位字的例句覆盖面太宽，会顺着部位字抢走整个『练X怎么练』族。",
+    "该反例（标定 #13 `腰伤能推荐练背动作吗`）由其余 4 条同句式 guard 例句兜住（0.809）。",
+    "2026-09-21 补 qa 的『科学原理』一族（15 条）+ 4 条反例。原因：qa 原 22 条全是营养数值/A-B 对比/动作推荐，『原理/机制/参数依据』零覆盖 ⇒ 6/15 科学问句被 L1 抢成 teach/plan/guard（实测 sim 0.65-0.89，最近邻分别是『深蹲怎么做』0.893、『帮我做个增肌计划』0.743、『情绪很低落要不要停训』0.588）。这一族是 `qa._rag_science`（science_doc 唯一消费者）的目标人群，漏了则该向量通道恒空转。⚠ 反例成对给出：teach『深蹲怎么做』问**身体执行**、plan『帮我做个增肌计划』**要方案**、guard『深蹲时膝盖疼还能练强度吗』含症状 —— 三者都不得被科学族抢走。"
+  ],
   "exemplars": [
-    {"text": "我膝盖不舒服能练深蹲吗", "task_type": "guard"},
-    {"text": "腰有点酸能不能硬拉", "task_type": "guard"},
-    {"text": "肩膀发胀还能推举吗", "task_type": "guard"},
-    {"text": "手腕发麻还能卧推吗", "task_type": "guard"},
-    {"text": "脖子僵硬能练肩吗", "task_type": "guard"},
-    {"text": "胸口有点闷能深蹲吗", "task_type": "guard"},
-    {"text": "头有点晕能做硬拉吗", "task_type": "guard"},
-    {"text": "膝盖咔咔响正常吗", "task_type": "guard"},
-    {"text": "手肘酸胀能不能练二头", "task_type": "guard"},
-    {"text": "小腿发紧能跑步吗", "task_type": "guard"},
-    {"text": "髋关节卡卡的能深蹲吗", "task_type": "guard"},
-    {"text": "脚踝扭着了能练腿吗", "task_type": "guard"},
-    {"text": "肩袖不舒服能卧推吗", "task_type": "guard"},
-    {"text": "下背酸能做硬拉吗", "task_type": "guard"},
-    {"text": "膝盖无力能深蹲吗", "task_type": "guard"},
-    {"text": "手腕刺痛能练俯卧撑吗", "task_type": "guard"},
-    {"text": "小腿胀能跳箱子吗", "task_type": "guard"},
-    {"text": "肩膀灼烧感能推举吗", "task_type": "guard"},
-    {"text": "膝盖发软能深蹲吗", "task_type": "guard"},
-    {"text": "tfcc损伤怎么练", "task_type": "guard"},
-    {"text": "acl术后能深蹲吗", "task_type": "guard"},
-    {"text": "半月板撕裂能跑步吗", "task_type": "guard"},
-    {"text": "前交叉韧带重建能练腿吗", "task_type": "guard"},
-    {"text": "mcl拉伤能深蹲吗", "task_type": "guard"},
-    {"text": "肩袖撕裂能卧推吗", "task_type": "guard"},
-    {"text": "腰椎间盘突出能硬拉吗", "task_type": "guard"},
-    {"text": "网球肘能练背吗", "task_type": "guard"},
-    {"text": "跟腱炎能跳箱子吗", "task_type": "guard"},
-    {"text": "坐骨神经痛能硬拉吗", "task_type": "guard"},
-    {"text": "颈椎病能推举吗", "task_type": "guard"},
-    {"text": "深蹲怎么做", "task_type": "teach"},
-    {"text": "卧推怎么练", "task_type": "teach"},
-    {"text": "硬拉怎么做", "task_type": "teach"},
-    {"text": "推举怎么练", "task_type": "teach"},
-    {"text": "划船怎么做", "task_type": "teach"},
-    {"text": "引体向上怎么做", "task_type": "teach"},
-    {"text": "弯举怎么练", "task_type": "teach"},
-    {"text": "俯卧撑怎么做", "task_type": "teach"},
-    {"text": "箭步蹲怎么做", "task_type": "teach"},
-    {"text": "高翻怎么做", "task_type": "teach"},
-    {"text": "练三休一怎么分", "task_type": "teach"},
-    {"text": "推拉腿怎么分化", "task_type": "teach"},
-    {"text": "上下肢分化怎么排", "task_type": "teach"},
-    {"text": "全身分化怎么练", "task_type": "teach"},
-    {"text": "五分化怎么安排", "task_type": "teach"},
-    {"text": "一周练四天怎么分", "task_type": "teach"},
-    {"text": "单分化怎么练", "task_type": "teach"},
-    {"text": "双分化怎么练", "task_type": "teach"},
-    {"text": "我要练三休一这种", "task_type": "plan"},
-    {"text": "我要三分化 练三休一这种", "task_type": "plan"},
-    {"text": "我就要练三休一这种安排", "task_type": "plan"},
-    {"text": "我习惯练三休一", "task_type": "plan"},
-    {"text": "我就按推拉腿来", "task_type": "plan"},
-    {"text": "我平时用上下分化", "task_type": "plan"},
-    {"text": "帮我制定一份训练计划", "task_type": "plan"},
-    {"text": "帮我安排一周训练计划", "task_type": "plan"},
-    {"text": "给我制定一日减脂计划", "task_type": "plan"},
-    {"text": "帮我做个增肌计划", "task_type": "plan"},
-    {"text": "制定减脂方案", "task_type": "plan"},
-    {"text": "安排增重计划", "task_type": "plan"},
-    {"text": "给我一周饮食计划", "task_type": "plan"},
-    {"text": "帮我排个训练表", "task_type": "plan"},
-    {"text": "制定力量计划", "task_type": "plan"},
-    {"text": "帮我安排减脂周", "task_type": "plan"},
-    {"text": "制定训练方案", "task_type": "plan"},
-    {"text": "安排健身计划", "task_type": "plan"},
-    {"text": "鸡胸肉多少蛋白质", "task_type": "qa"},
-    {"text": "牛肉碳水多少", "task_type": "qa"},
-    {"text": "鸡蛋热量多少", "task_type": "qa"},
-    {"text": "米饭卡路里", "task_type": "qa"},
-    {"text": "深蹲和硬拉的区别", "task_type": "qa"},
-    {"text": "杠铃卧推和哑铃卧推哪个好", "task_type": "qa"},
-    {"text": "罗马尼亚硬拉和传统硬拉的区别", "task_type": "qa"},
-    {"text": "蛋白质粉蛋白质多少", "task_type": "qa"},
-    {"text": "鸡胸和火鸡胸哪个蛋白质多", "task_type": "qa"},
-    {"text": "米饭和面条哪个碳水多", "task_type": "qa"},
-    {"text": "引体向上和划船哪个练背", "task_type": "qa"},
-    {"text": "三文鱼蛋白质多少", "task_type": "qa"},
-    {"text": "下一组该加多少重量", "task_type": "progress"},
-    {"text": "上次卧推做完这组要减载吗", "task_type": "progress"},
-    {"text": "下一组我该加几公斤", "task_type": "progress"},
-    {"text": "这组加多少重量", "task_type": "progress"},
-    {"text": "下一组加不加重", "task_type": "progress"},
-    {"text": "这组做完要减载吗", "task_type": "progress"},
-    {"text": "下一组加多重的重量", "task_type": "progress"},
-    {"text": "上次深蹲做完这组要加几公斤", "task_type": "progress"},
-    {"text": "下面这组怎么减载", "task_type": "progress"},
-    {"text": "下一组减载多少合适", "task_type": "progress"},
-    {"text": "你好", "task_type": "smalltalk"},
-    {"text": "你是谁", "task_type": "smalltalk"},
-    {"text": "谢谢你", "task_type": "smalltalk"},
-    {"text": "再见", "task_type": "smalltalk"},
-    {"text": "嗨", "task_type": "smalltalk"},
-    {"text": "hello", "task_type": "smalltalk"},
-    {"text": "嗯", "task_type": "smalltalk"},
-    {"text": "哈哈哈", "task_type": "smalltalk"},
-    {"text": "啊", "task_type": "smalltalk"},
-    {"text": "随便聊聊", "task_type": "smalltalk"},
-    {"text": "嗯嗯", "task_type": "smalltalk"},
-    {"text": "哦哦", "task_type": "smalltalk"},
-    {"text": "帮我开个减脂处方，奥利司他行吗", "task_type": "guard"},
-    {"text": "赛前用利尿剂脱水安全吗", "task_type": "guard"},
-    {"text": "吃克伦特罗减脂靠谱吗", "task_type": "guard"},
-    {"text": "群勃龙效果怎么样", "task_type": "guard"},
-    {"text": "糖尿病训练时要注意啥", "task_type": "guard"},
-    {"text": "高血压能做大重量深蹲吗", "task_type": "guard"},
-    {"text": "哮喘犯了还能跑步吗", "task_type": "guard"},
-    {"text": "癫痫能去健身房吗", "task_type": "guard"},
-    {"text": "我爸65岁有骨质疏松，能跟着练深蹲吗", "task_type": "guard"},
-    {"text": "心脏装过支架能练吗", "task_type": "guard"},
-    {"text": "怀孕四个月还能练臀腿吗", "task_type": "guard"},
-    {"text": "三天只喝水能瘦几斤", "task_type": "guard"},
-    {"text": "吃多了催吐能补救吗", "task_type": "guard"},
-    {"text": "昨天通宵加班，今天还能冲大重量吗", "task_type": "guard"},
-    {"text": "替朋友问，吃克伦特罗减脂靠谱吗", "task_type": "guard"},
-    {"text": "替朋友问，打群勃龙安全吗", "task_type": "guard"},
-    {"text": "帮朋友打听，用类固醇增肌行不行", "task_type": "guard"},
-    {"text": "抑郁症靠运动能好吗", "task_type": "guard"},
-    {"text": "焦虑症还能去健身房吗", "task_type": "guard"},
-    {"text": "情绪很低落要不要停训", "task_type": "guard"}
+    {
+      "text": "我膝盖不舒服能练深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "腰有点酸能不能硬拉",
+      "task_type": "guard"
+    },
+    {
+      "text": "肩膀发胀还能推举吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "手腕发麻还能卧推吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "脖子僵硬能练肩吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "胸口有点闷能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "头有点晕能做硬拉吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "膝盖咔咔响正常吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "手肘酸胀能不能练二头",
+      "task_type": "guard"
+    },
+    {
+      "text": "小腿发紧能跑步吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "髋关节卡卡的能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "脚踝扭着了能练腿吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "肩袖不舒服能卧推吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "下背酸能做硬拉吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "膝盖无力能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "手腕刺痛能练俯卧撑吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "小腿胀能跳箱子吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "肩膀灼烧感能推举吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "膝盖发软能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "tfcc损伤怎么练",
+      "task_type": "guard"
+    },
+    {
+      "text": "acl术后能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "半月板撕裂能跑步吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "前交叉韧带重建能练腿吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "mcl拉伤能深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "肩袖撕裂能卧推吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "腰椎间盘突出能硬拉吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "网球肘能练背吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "跟腱炎能跳箱子吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "坐骨神经痛能硬拉吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "颈椎病能推举吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "深蹲怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "卧推怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "硬拉怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "推举怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "划船怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "引体向上怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "弯举怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "俯卧撑怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "箭步蹲怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "高翻怎么做",
+      "task_type": "teach"
+    },
+    {
+      "text": "练三休一怎么分",
+      "task_type": "teach"
+    },
+    {
+      "text": "推拉腿怎么分化",
+      "task_type": "teach"
+    },
+    {
+      "text": "上下肢分化怎么排",
+      "task_type": "teach"
+    },
+    {
+      "text": "全身分化怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "五分化怎么安排",
+      "task_type": "teach"
+    },
+    {
+      "text": "一周练四天怎么分",
+      "task_type": "teach"
+    },
+    {
+      "text": "单分化怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "双分化怎么练",
+      "task_type": "teach"
+    },
+    {
+      "text": "我要练三休一这种",
+      "task_type": "plan"
+    },
+    {
+      "text": "我要三分化 练三休一这种",
+      "task_type": "plan"
+    },
+    {
+      "text": "我就要练三休一这种安排",
+      "task_type": "plan"
+    },
+    {
+      "text": "我习惯练三休一",
+      "task_type": "plan"
+    },
+    {
+      "text": "我就按推拉腿来",
+      "task_type": "plan"
+    },
+    {
+      "text": "我平时用上下分化",
+      "task_type": "plan"
+    },
+    {
+      "text": "帮我制定一份训练计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "帮我安排一周训练计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "给我制定一日减脂计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "帮我做个增肌计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "制定减脂方案",
+      "task_type": "plan"
+    },
+    {
+      "text": "安排增重计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "给我一周饮食计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "帮我排个训练表",
+      "task_type": "plan"
+    },
+    {
+      "text": "制定力量计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "帮我安排减脂周",
+      "task_type": "plan"
+    },
+    {
+      "text": "制定训练方案",
+      "task_type": "plan"
+    },
+    {
+      "text": "安排健身计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "鸡胸肉多少蛋白质",
+      "task_type": "qa"
+    },
+    {
+      "text": "牛肉碳水多少",
+      "task_type": "qa"
+    },
+    {
+      "text": "鸡蛋热量多少",
+      "task_type": "qa"
+    },
+    {
+      "text": "米饭卡路里",
+      "task_type": "qa"
+    },
+    {
+      "text": "深蹲和硬拉的区别",
+      "task_type": "qa"
+    },
+    {
+      "text": "杠铃卧推和哑铃卧推哪个好",
+      "task_type": "qa"
+    },
+    {
+      "text": "罗马尼亚硬拉和传统硬拉的区别",
+      "task_type": "qa"
+    },
+    {
+      "text": "蛋白质粉蛋白质多少",
+      "task_type": "qa"
+    },
+    {
+      "text": "鸡胸和火鸡胸哪个蛋白质多",
+      "task_type": "qa"
+    },
+    {
+      "text": "米饭和面条哪个碳水多",
+      "task_type": "qa"
+    },
+    {
+      "text": "引体向上和划船哪个练背",
+      "task_type": "qa"
+    },
+    {
+      "text": "三文鱼蛋白质多少",
+      "task_type": "qa"
+    },
+    {
+      "text": "推荐几个练腿的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "有什么练背的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "练胸的动作有哪些",
+      "task_type": "qa"
+    },
+    {
+      "text": "给我几个练肩的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "推荐点练手臂的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "有哪些练核心的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "练腿推荐什么动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "练背都有什么动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "想练臀有什么动作推荐",
+      "task_type": "qa"
+    },
+    {
+      "text": "帮我推荐几个练腹的动作",
+      "task_type": "qa"
+    },
+    {
+      "text": "下一组该加多少重量",
+      "task_type": "progress"
+    },
+    {
+      "text": "上次卧推做完这组要减载吗",
+      "task_type": "progress"
+    },
+    {
+      "text": "下一组我该加几公斤",
+      "task_type": "progress"
+    },
+    {
+      "text": "这组加多少重量",
+      "task_type": "progress"
+    },
+    {
+      "text": "下一组加不加重",
+      "task_type": "progress"
+    },
+    {
+      "text": "这组做完要减载吗",
+      "task_type": "progress"
+    },
+    {
+      "text": "下一组加多重的重量",
+      "task_type": "progress"
+    },
+    {
+      "text": "上次深蹲做完这组要加几公斤",
+      "task_type": "progress"
+    },
+    {
+      "text": "下面这组怎么减载",
+      "task_type": "progress"
+    },
+    {
+      "text": "下一组减载多少合适",
+      "task_type": "progress"
+    },
+    {
+      "text": "你好",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "你是谁",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "谢谢你",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "再见",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "嗨",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "hello",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "嗯",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "哈哈哈",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "啊",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "随便聊聊",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "嗯嗯",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "哦哦",
+      "task_type": "smalltalk"
+    },
+    {
+      "text": "帮我开个减脂处方，奥利司他行吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "赛前用利尿剂脱水安全吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "吃克伦特罗减脂靠谱吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "群勃龙效果怎么样",
+      "task_type": "guard"
+    },
+    {
+      "text": "糖尿病训练时要注意啥",
+      "task_type": "guard"
+    },
+    {
+      "text": "高血压能做大重量深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "哮喘犯了还能跑步吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "癫痫能去健身房吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "我爸65岁有骨质疏松，能跟着练深蹲吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "心脏装过支架能练吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "怀孕四个月还能练臀腿吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "三天只喝水能瘦几斤",
+      "task_type": "guard"
+    },
+    {
+      "text": "吃多了催吐能补救吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "昨天通宵加班，今天还能冲大重量吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "替朋友问，吃克伦特罗减脂靠谱吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "替朋友问，打群勃龙安全吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "帮朋友打听，用类固醇增肌行不行",
+      "task_type": "guard"
+    },
+    {
+      "text": "抑郁症靠运动能好吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "焦虑症还能去健身房吗",
+      "task_type": "guard"
+    },
+    {
+      "text": "情绪很低落要不要停训",
+      "task_type": "guard"
+    },
+    {
+      "text": "膝盖疼推荐几个练腿动作",
+      "task_type": "guard"
+    },
+    {
+      "text": "手腕有伤有什么练背动作",
+      "task_type": "guard"
+    },
+    {
+      "text": "肩袖没好推荐点练肩动作",
+      "task_type": "guard"
+    },
+    {
+      "text": "脚踝扭了有哪些练腿动作",
+      "task_type": "guard"
+    },
+    {
+      "text": "渐进超负荷的原理是什么",
+      "task_type": "qa"
+    },
+    {
+      "text": "为什么增肌需要热量盈余",
+      "task_type": "qa"
+    },
+    {
+      "text": "肌肉生长的机制是什么",
+      "task_type": "qa"
+    },
+    {
+      "text": "离心收缩为什么重要",
+      "task_type": "qa"
+    },
+    {
+      "text": "训练容量怎么算",
+      "task_type": "qa"
+    },
+    {
+      "text": "组间休息多久最利于增肌",
+      "task_type": "qa"
+    },
+    {
+      "text": "深蹲的强度怎么安排",
+      "task_type": "qa"
+    },
+    {
+      "text": "卧推渐进超负荷怎么加",
+      "task_type": "qa"
+    },
+    {
+      "text": "增肌用多大重量",
+      "task_type": "qa"
+    },
+    {
+      "text": "RPE 和 1RM 怎么换算",
+      "task_type": "qa"
+    },
+    {
+      "text": "有氧和力量训练怎么安排先后",
+      "task_type": "qa"
+    },
+    {
+      "text": "减脂期怎么保住肌肉",
+      "task_type": "qa"
+    },
+    {
+      "text": "力竭到底该不该练到",
+      "task_type": "qa"
+    },
+    {
+      "text": "训练频率多久一次合适",
+      "task_type": "qa"
+    },
+    {
+      "text": "蛋白质一天吃多少才够",
+      "task_type": "qa"
+    },
+    {
+      "text": "硬拉的标准动作要领",
+      "task_type": "teach"
+    },
+    {
+      "text": "排一个减脂期的训练计划",
+      "task_type": "plan"
+    },
+    {
+      "text": "深蹲时膝盖疼还能练强度吗",
+      "task_type": "guard"
+    }
   ]
 }

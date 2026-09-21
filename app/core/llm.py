@@ -10,6 +10,8 @@ from app.core.intent import Intent, PlannedCall
 from app.core.render_util import (empty_result_lines, item_lines,
                                   payload_lines, training_lines)
 from app.core.vocab import (GUARD_SIGNAL_EXTRA, GUARD_SYMPTOMS,
+                            any_symptom,
+                            is_medical_organ_concern,
                             is_profile_field_word, is_profile_query,
                             is_pure_soreness,
                             MEMORY_QUERY_RULE_KW)   # 记忆/档案词表单源（见 vocab.py）
@@ -59,7 +61,13 @@ _RULES = [
      lambda t, kw: {"query": t}),
     # guard：症状词单源（app.core.vocab.GUARD_SYMPTOMS，与 guard_skill 共享）
     # + 意图层补充信号（"能不能练"类问法）。tfcc/半月板等已含于症状表。
-    (GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA, "guard",
+    #
+    # ⚠ 2026-09-21：**剔除裸「酸」**。它是症状单字，但也是补剂/代谢物名词的词素
+    # （肌酸/叶酸/氨基酸/尿酸/乳酸…），留在本行会让 `吃肌酸会影响肾功能吗`、
+    # `尿酸高还能练吗` 被 conf=1.0 命中并路由 guard。
+    # 真症状的「酸」由上方 `any_symptom(t)` 分支兜住（它会先抠词素再查），
+    # 本行只负责**非「酸」**的症状词与 EXTRA 信号。
+    (tuple(k for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA if k != "酸"), "guard",
      lambda t, kw: {"signal": t}),
     # 康复确认句（2026-09-13）："我康复了/我好了"这类**不含任何症状词**，分类器
     # 不会当 guard → 永远到不了 guard_skill 的确认/续期流程 → 记下的伤只能等
@@ -284,7 +292,14 @@ class StubProvider(LLMProvider):
         # conf=1.0 使路由层直接采纳，L1 语义层无机会转判 guard
         elif is_pure_soreness(t):
             return Classification("qa", {"query": t}, confidence=1.0)
-        elif any(k in p or k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA):
+        elif any_symptom(t):
+            return Classification("guard", {"signal": t}, confidence=1.0)
+        # 器官/慢病 × 真医疗情境（2026-09-21「medical 进 guard」，用户定路由）。
+        # ⚠ **必须排在 `is_pure_soreness` 放行之后**：纯酸痛科普不受影响。
+        # 而"补剂 × 器官安全"的**辟谣疑问**（蛋白粉伤肾吗）由
+        # `is_medical_organ_concern` 判 False → 不拦，交回 qa 用 `_MYTH_KB` 辟谣。
+        # 只有带症状/用药/指标异常的（肝功能异常能练吗）才落 guard。
+        elif is_medical_organ_concern(t):
             return Classification("guard", {"signal": t}, confidence=1.0)
         # F2-B 未成年×强度语境复合规则（v3 triage R2）：年龄词 ∧ 冲强度/备战语境 →
         # guard 保守话术；仅年龄词（建档/普通询问）不拦（防误伤）。

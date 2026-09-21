@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "_note": [
+    "L1 语义层标定用例集（**离线资产**，只被 scripts/calibrate_intent_sim.py 消费，不参与运行时）。",
+    "为什么要单独一份：标定集原本寄生在 scripts/stress_test.py 的 200 题里，",
+    "而它的 100 条 EXPECTED 标签分布是 guard 40 / teach 20 / plan_exec 20 / smalltalk 20 ——",
+    "**qa 类 0 条**。L1 恰恰是按 task_type 判决的，标定集里却没有 qa，",
+    "于是「动作推荐」这一族问法从来没被检验过，缺陷才会发出去（2026-09-20 发现）。",
+    "本文件补上这一族，并且**成对地**给出反例（带「推荐」字样但属于 plan/guard 的问法），",
+    "因为补例句最大的风险不是漏召回，是**把别的意图抢过来**。",
+    "task_type 取值与 app/core/semantic.py::ExemplarStore 的返回一致：",
+    "guard / plan / progress / qa / smalltalk / teach。",
+    "2026-09-21 补 science_principle 族（5 条）+ 3 条反例。与上一轮『动作推荐族』同型的空洞：qa 原用例只覆盖数值/对比/推荐，**原理族 0 条**，于是 6/15 科学问句被 L1 抢走也没人发现。反例成对给出：teach『动作要领』、plan『排个训练计划』、guard『练强度时腰疼』—— 三者都含新 qa 例句的强词，绝不能被抢。"
+  ],
+  "cases": [
+    {
+      "id": 1,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "给我推荐几个练腿动作",
+      "why": "本次缺陷的原始触发句：最近邻落到 plan『我就按推拉腿来』0.735 被采纳"
+    },
+    {
+      "id": 2,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "推荐几个练背的动作"
+    },
+    {
+      "id": 3,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "有哪些练胸的动作"
+    },
+    {
+      "id": 4,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "练肩有什么动作"
+    },
+    {
+      "id": 5,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "给我几个练手臂的动作"
+    },
+    {
+      "id": 6,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "练腿的动作有哪些",
+      "why": "同族但语序不同（名词后置），防止只靠单一句式过拟合"
+    },
+    {
+      "id": 7,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "推荐点练核心的动作"
+    },
+    {
+      "id": 8,
+      "family": "action_recommend",
+      "task_type": "qa",
+      "text": "有什么练背的动作推荐",
+      "why": "同族但疑问词前置 + 尾部重复「推荐」"
+    },
+    {
+      "id": 9,
+      "family": "plan_near_miss",
+      "task_type": "plan",
+      "text": "帮我推荐一个训练计划",
+      "why": "反例：含「推荐」+「一个」，但这是排计划，不能被新 qa 例句抢走"
+    },
+    {
+      "id": 10,
+      "family": "plan_near_miss",
+      "task_type": "plan",
+      "text": "给我推荐个增肌方案",
+      "why": "反例：同上，「方案」是计划类名词"
+    },
+    {
+      "id": 11,
+      "family": "plan_near_miss",
+      "task_type": "plan",
+      "text": "推荐一套一周训练安排",
+      "why": "反例：同上，「一套…安排」是计划类结构"
+    },
+    {
+      "id": 12,
+      "family": "guard_near_miss",
+      "task_type": "guard",
+      "text": "膝盖不舒服还能练腿吗",
+      "why": "反例：含「练腿」，但带不适症状 → 必须留在 guard"
+    },
+    {
+      "id": 13,
+      "family": "guard_near_miss",
+      "task_type": "guard",
+      "text": "腰伤能推荐练背动作吗",
+      "why": "最刁的反例：同时含「推荐」「动作」「练背」，但主语是伤情，必须留在 guard"
+    },
+    {
+      "id": 14,
+      "family": "qa_regression",
+      "task_type": "qa",
+      "text": "鸡胸肉多少蛋白质",
+      "why": "回归锚点：qa 原有的一族（营养数值）不能被新增例句挤掉"
+    },
+    {
+      "id": 15,
+      "family": "how_to_region",
+      "task_type": "qa",
+      "text": "练腰怎么练",
+      "why": "2026-09-20 补：我加的 guard 例句『腰伤能推荐什么动作』曾把它抢成 guard（0.741）——**假安全告警**，把训练问题答成风险提示"
+    },
+    {
+      "id": 16,
+      "family": "how_to_region",
+      "task_type": "qa",
+      "text": "腰怎么练",
+      "why": "同上，同一族的另一种说法"
+    },
+    {
+      "id": 17,
+      "family": "how_to_region",
+      "task_type": "qa",
+      "text": "练背怎么练",
+      "why": "同族回归锚点：这一族（练X怎么练）本来就该是 qa，补 guard 例句时被连坐"
+    },
+    {
+      "id": 18,
+      "family": "science_principle",
+      "task_type": "qa",
+      "text": "渐进超负荷应该怎么加量",
+      "why": "本轮新增族的留出检验：原 17 条里 qa 只有'动作推荐/数值/怎么练'三族，科学原理族的空白正是缺陷漏出去的原因（与动作推荐族同型）"
+    },
+    {
+      "id": 19,
+      "family": "science_principle",
+      "task_type": "qa",
+      "text": "为什么减脂要控制热量缺口",
+      "why": "同族不同措辞（'为什么…要'）"
+    },
+    {
+      "id": 20,
+      "family": "science_principle",
+      "task_type": "qa",
+      "text": "肌肉是怎么长起来的",
+      "why": "同族口语化问法"
+    },
+    {
+      "id": 21,
+      "family": "science_principle",
+      "task_type": "qa",
+      "text": "增肌的重量该怎么选",
+      "why": "**最刁的一条**：含'增肌'（plan 例句『帮我做个增肌计划』的强词）且含'怎么选'，必须留在 qa"
+    },
+    {
+      "id": 22,
+      "family": "science_principle",
+      "task_type": "qa",
+      "text": "训练多久休息一次比较科学",
+      "why": "同族，含'训练/休息'（易被 plan 抢）"
+    },
+    {
+      "id": 23,
+      "family": "teach_near_miss",
+      "task_type": "teach",
+      "text": "罗马尼亚硬拉的动作要领",
+      "why": "反例：问**身体执行**（动作要领），不是问原理 → 必须留 teach"
+    },
+    {
+      "id": 24,
+      "family": "plan_near_miss",
+      "task_type": "plan",
+      "text": "给我排个增肌期的训练计划",
+      "why": "反例：含'增肌'（新 qa 例句强词）但**要一份方案** → 必须留 plan"
+    },
+    {
+      "id": 25,
+      "family": "guard_near_miss",
+      "task_type": "guard",
+      "text": "练强度的时候腰疼了怎么办",
+      "why": "反例：含'强度'（新 qa 例句强词）但**有症状** → 安全红线优先，必须留 guard"
+    }
+  ]
+}

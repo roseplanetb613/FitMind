@@ -160,3 +160,62 @@
 {"query": "史密斯 椅子 深蹲的要领", "chunk_type": "exercise_cue", "expected": "0750", "kind": "auto_name", "note": ""}
 {"query": "桥式 - 登山者 (交叉)练哪块肌肉", "chunk_type": "exercise_cue", "expected": "2466", "kind": "auto_name", "note": ""}
 {"query": "下背 弯举的标准动作", "chunk_type": "exercise_cue", "expected": "1352", "kind": "auto_name", "note": ""}
+{"query": "RPE10 做 8 次大概是几成 1RM", "chunk_type": "science_doc", "expected": "anchor_6", "kind": "science", "note": "细粒度判别：9 条锚点文档几乎同构，考排序分辨率"}
+{"query": "RPE10 做 10 次大概是几成 1RM", "chunk_type": "science_doc", "expected": "anchor_7", "kind": "science", "note": "同上"}
+{"query": "RPE10 做 12 次大概是几成 1RM", "chunk_type": "science_doc", "expected": "anchor_8", "kind": "science", "note": "同上"}
+{"query": "RPE10 做 3 次大概是几成 1RM", "chunk_type": "science_doc", "expected": "anchor_2", "kind": "science", "note": "同上"}
+{"query": "踝关节扭伤急性期能做什么", "chunk_type": "science_doc", "expected": "rt01_0", "kind": "science", "note": "分期文档：目标/允许/避免"}
+{"query": "踝关节扭伤恢复期能练什么", "chunk_type": "science_doc", "expected": "rt01_1", "kind": "science", "note": "同上"}
+{"query": "踝关节扭伤功能期怎么练", "chunk_type": "science_doc", "expected": "rt01_2", "kind": "science", "note": "同上"}
+{"query": "ACL 术后前两周能做什么", "chunk_type": "science_doc", "expected": "rt02_0", "kind": "science", "note": "同上"}
+{"query": "ACL 术后 2 到 6 周能练什么", "chunk_type": "science_doc", "expected": "rt02_1", "kind": "science", "note": "同上"}
+{"query": "腘绳肌拉伤急性期怎么处理", "chunk_type": "science_doc", "expected": "rt03_0", "kind": "science", "note": "同上"}
+{"query": "腘绳肌拉伤恢复期怎么练", "chunk_type": "science_doc", "expected": "rt03_1", "kind": "science", "note": "同上"}
+{"query": "足底筋膜炎缓解期怎么处理", "chunk_type": "science_doc", "expected": "rt04_0", "kind": "science", "note": "同上"}
+{"query": "足底筋膜炎重建期怎么练", "chunk_type": "science_doc", "expected": "rt04_1", "kind": "science", "note": "同上"}
+{"query": "肩袖损伤急性期能做什么", "chunk_type": "science_doc", "expected": "rt05_0", "kind": "science", "note": "同上"}
+{"query": "肩袖损伤恢复期怎么练", "chunk_type": "science_doc", "expected": "rt05_1", "kind": "science", "note": "同上"}
+{"query": "冻结肩疼痛期怎么处理", "chunk_type": "science_doc", "expected": "rt06_0", "kind": "science", "note": "同上"}
+{"query": "冻结肩僵硬期怎么练", "chunk_type": "science_doc", "expected": "rt06_1", "kind": "science", "note": "同上"}
+{"query": "近期骨折了还能练吗", "chunk_type": "science_doc", "expected": "cn05", "kind": "science", "note": "风险等级 red 的骨科禁忌"}
+{"query": "心梗后能不能做力量训练", "chunk_type": "science_doc", "expected": "cn06", "kind": "science", "note": "心血管禁忌"}
+{"query": "肩周炎急性期能做推举吗", "chunk_type": "science_doc", "expected": "cn07", "kind": "science", "note": "yellow 级：痛域外避免过顶"}
+{"query": "冻结肩是什么原因引起的", "chunk_type": "science_doc", "expected": "ep07", "kind": "science", "note": "粘连性关节囊炎流行病学"}
+{"query": "推举的力量标准是多少", "chunk_type": "science_doc", "expected": "lift_ohp", "kind": "science", "note": "此前覆盖 squat/bench/deadlift，缺 ohp"}
+{"query": "力量标准怎么分档", "chunk_type": "science_doc", "expected": "lift_header", "kind": "science", "note": "总述表头"}
+{"query": "力量标准和动作难度怎么对应", "chunk_type": "science_doc", "expected": "difficulty_mapping", "kind": "science", "note": "映射表"}
+{"query": "PAR-Q 全答否能开始运动吗", "chunk_type": "science_doc", "expected": "rule_all_no", "kind": "science", "note": "处置规则"}
+{"query": "新手第一次进健身房该练几组", "chunk_type": "science_doc", "expected": "resistance", "kind": "science", "note": "**曾列为候选负例，读正文后改判正例**：resistance FITT 明写「每肌群 2-4 组 × 8-12 次」+ 新手强度档 ⇒ 语料答得了"}
+{"query": "增肌期每天吃多少卡路里", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养，语料无"}
+{"query": "减脂要制造多大热量缺口", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养，语料无"}
+{"query": "碳水应该吃多少克", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养，语料无"}
+{"query": "蛋白质和碳水怎么搭配", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养配比，语料无"}
+{"query": "空腹有氧好不好", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养时机，语料无"}
+{"query": "局部减脂可能吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "减脂，语料无"}
+{"query": "体重没降是不是白练了", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "进度判读，语料无"}
+{"query": "肌酸有没有用", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "补剂，语料无"}
+{"query": "BCAA 有必要吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "补剂，语料无"}
+{"query": "增肌粉和蛋白粉有什么区别", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "补剂，语料无"}
+{"query": "每组都要练到力竭吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "编排：语料 FITT 无『力竭』概念"}
+{"query": "递减组怎么做", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "编排，语料无"}
+{"query": "有氧和力量能同一天练吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "编排，语料无"}
+{"query": "一定要练腹肌吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "编排，语料无"}
+{"query": "一天中什么时候练最好", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "时机，语料无"}
+{"query": "训练前要不要吃东西", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "营养时机，语料无"}
+{"query": "睡多久对增肌最好", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "睡眠，语料无"}
+{"query": "熬夜影响训练效果吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "睡眠，语料无"}
+{"query": "训练后多久可以洗澡", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "生活方式，语料无"}
+{"query": "怎么才能坚持健身", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "心理/行为，语料无"}
+{"query": "深蹲膝盖过脚尖要紧吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "技术细节，语料无"}
+{"query": "卧推要不要起桥", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "技术细节，语料无"}
+{"query": "拉伸能预防运动损伤吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "⚠硬负例(0.657)：top1 是腘绳肌拉伤的『偏心训练预防』，**不是拉伸** ⇒ 语料答不了"}
+{"query": "运动后肌肉酸痛正常吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "⚠硬负例(0.716)：top1 是 PAR-Q 胸痛题，正文完全无关 ⇒ 语料答不了"}
+{"query": "举重腰带要不要戴", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "装备，语料无"}
+{"query": "护膝有用吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "装备，语料无"}
+{"query": "运动手表的心率准吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "设备，语料无"}
+{"query": "健身房怎么选", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "消费决策，语料无"}
+{"query": "跑步机和户外跑哪个好", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "方式选择，语料无"}
+{"query": "青少年举铁会不会长不高", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "误区，语料无"}
+{"query": "经期可以训练吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "特殊人群，语料无"}
+{"query": "老年人能练力量吗", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "特殊人群，语料无"}
+{"query": "拉伤后该热敷还是冷敷", "chunk_type": "science_doc", "expected": null, "kind": "negative", "note": "急性处理，语料只有分期处方、无冷热敷处置"}

@@ -173,6 +173,33 @@ class QaSkill(Skill):
         # （错证据比没有证据更糟），沉默优于答错。要放开请先提升检索质量
         # （rerank / hybrid），不是改这里的条件。
         # 详见 docs/SDD/2026-09-14-variant-family-audit.md 同批的 RAG 评估结论。
+        #
+        # ⚠⚠ **2026-09-20 更正：上面"两个门互斥"是表象，真因在路由层。**
+        # 补上 PG 密码后重测（`tmp/probe_rag_live.py`）：`vector_search` 本身好得很
+        # ——「深蹲的强度怎么安排」0.6016 命中 `resistance`、「RPE 和 1RM 怎么换算」
+        # 0.6929 命中 `anchor_0`，无关题正确弃权。**强制走本分支（`kind="exercise"`）
+        # 时 `知识块(RAG)` 确实挂上了**（items 6→7，source=抗阻 FITT 参数）。
+        # 线上不触发的真因是**路由把两个条件拆到了不同技能**：
+        #   · 「深蹲的强度怎么安排」→ **teach** conf=1.0（含"强度"）
+        #   · 「卧推渐进超负荷怎么加」→ **teach** conf=0.92
+        #   · 「增肌用多大重量」→ **plan** conf=0.98
+        #   这三条都到不了本函数（`_rag_science` 只挂在 qa 的 `_exercises` 之后）。
+        #   · 「练腿后恢复要多久」→ qa conf=1.0，但在 qa 内部走**更早**的
+        #     `kind=="memory"` 恢复面板（本行之前 return）。
+        #   · 「RPE 和 1RM 怎么换算」→ qa conf=0.3，走到本分支但 `items` 为空。
+        # ⇒ 要让向量通道真的生效，改这里的门槛**没用**，得先在路由层决定
+        #   "带科学词的问句该不该留一条给 qa"，或把 `_rag_science` 提到
+        #   teach/plan 也能调到的位置。这是产品决策，别顺手改。
+        #
+        # ✅✅ **2026-09-21 已决并通过路由层落地：science 进 qa。**
+        #   答案不是动这里，而是补 **L1 例句库**（qa 科学原理族原本 0 条 →
+        #   整族最近邻落到 teach/plan/guard）。修法：
+        #     `app/config/intent_exemplars.json` 补 15 条 qa 科学例句 + 4 条反例。
+        #   实测（`docs/probes/route_science_medical_probe.py`）：
+        #     science→qa **8/15 → 15/15**；本函数随之真出证据：
+        #     `深蹲的强度怎么安排`→`resistance` 0.602、`RPE 和 1RM 怎么换算`→
+        #     `anchor_0` 0.693（均 policy accepted）。
+        #   ⚠ 本分支的门槛/条件**依然不用改** —— 路由对了，它们就自然生效。
         if res.ok and res.data.get("items"):
             self._rag_science(res.data["items"], query)
         # 概念/术语题：库内**未命中**才走通识分支（data_kind=knowledge，渲染侧按
@@ -751,6 +778,16 @@ class QaSkill(Skill):
         if fu is not None:
             return fu
         matched = ex.search_zh(q, limit=5, part_fallback=True)
+        if not matched:
+            # 2026-09-21 召回扩展：词法**完全落空**时，给向量一次机会。
+            # ⚠ 插在 `_followup_llm` **之前**是有意的：向量补位**便宜且确定**
+            # （一次 PG 查询），`_followup_llm` **贵且非确定**（一次 LLM 调用）。
+            # ⚠ 只在词法**空**时触发（口径：只做召回扩展，不做融合重排）——
+            # 词法命中时本函数一次都不被调用，56/60 的既有行为逐条不变。
+            # 实测（`tmp/probe_recall_ext.py`）：60 条 test 里仅 4 条词法空，
+            # 且**全是负例** ⇒ 它的实际作用是"不让向量污染空结果"，
+            # 不是召回补位。详见 docs/superpowers/specs/2026-09-21-exercise-cue-wiring-design.md
+            matched = self._vector_recall_ext(q)
         items = [self._exercise_item(e) for e in matched]
         if not items:
             # 词表没接住的省略式追问 → LLM 结合历史判断（第二层）。
@@ -773,6 +810,86 @@ class QaSkill(Skill):
         return SkillResult(ok=True, data={"items": items},
                            provenance=[f"ex:{it['id']}" for it in items])
 
+    def _vector_recall_ext(self, query: str) -> list:
+        """召回扩展：词法落空时，用**判决层把关**的向量 top1 补一条动作。
+
+        ## 为什么需要它
+
+        判决层（`app/rag/policy.py`）的 `exercise_cue` 分支自 2026-09-20 建好、
+        测好、在标准工具里可复算，但**没有任何运行期消费者** ——
+        `vector_search` 在全技能层只有 `qa_skill._rag_science` 一处调用点，
+        而那是 `science_doc` 通道。本函数给 `exercise_cue` 判决层接上消费者。
+
+        ## 口径：只做召回扩展（不做融合重排）
+
+        仅当 `search_zh` 返回**空**时才调用。理由：词法命中时行为逐条不变
+        （既有 30 条词法回归与 6 级回退全部不受影响），而词法为空正是
+        "用户什么都拿不到"的最坏情况。**明确不做**的是"词法非空但可能不够好"
+        时补位 —— 那会改变现有返回，而"够不够好"没有零自由度的判据。
+
+        ⚠ **实测它动的面很窄，而且方向不同于直觉**（`tmp/probe_recall_ext.py`）：
+        `exercise_cue` test 60 条里只有 **4 条**词法空，而这 4 条**全是负例**
+        （用户问的不是动作，词法正确地返回了空）。⇒ 本函数真正的价值是
+        **让"接向量"变安全**（fail-closed 保证不把错证据塞进空结果），
+        而**不是**提升召回。别把它说成召回提升。
+
+        ## 审批链（三道闸门，任一不过就返回空）
+
+        1. 取 query 在 **cue 正文**语料上的词法 top1 —— 拿不到直接返回 `[]`
+           （**fail-closed**：没有旁证就不动）。
+        2. 向量取原始近邻（`min_score=None`，门槛交给判决层），
+           经 `policy.decide` 判决；不接受 ⇒ `[]`。
+        3. 接受的 id 必须在库内取得到记录，否则 `[]`（**不猜**）。
+
+        ⚠ 为什么旁证用 **cue 正文**口径而不是 `search_zh` 的动作名口径：
+        本函数**只在 `search_zh` 返回空时**被调用，那时动作名口径的 top1
+        **必然也是空** ⇒ 旁证恒 `None` ⇒ 一律 fail-closed ⇒ 接线等于没接。
+        实测确认过这个死结（`tmp/probe_recall_ext.py`：cue 口径 4/4 拿得到旁证）。
+        评测侧同口径（`scripts/eval_rag.py::policy_top1` 用同一份 `LexIndex`）。
+
+        ## 不变式
+
+        - **零自由度**：不引入任何新数值常量。`top_k=1` 与判决层语义绑定
+          （判决只看 `ranked[0]`，取更多不会改变结论），不是可调旋钮。
+        - **全降级**：PG / Ollama / import 失败一律返回 `[]`，**绝不抛出**。
+          `[]` 等价于"没做扩展"，调用方随后走原有的 `_followup_llm` 兜底。
+        """
+        if not (query or "").strip():
+            return []
+        try:
+            from app.rag import lex_index, policy, retriever
+            from app.rag.store import PgStore
+            from app.rag.embedder import OllamaEmbedder
+            from exercise_repo import expand_aliases, norm_zh
+
+            store = PgStore()
+            # 闸门①：词法旁证（cue 正文口径）。拿不到 → fail-closed 弃权。
+            lex_id = lex_index.cached_top1_id(
+                store, "exercise_cue", norm_zh(expand_aliases(query)))
+            if lex_id is None:
+                return []
+
+            # 闸门②：向量 top1 + 判决层（门槛 0.60 + 旁证严格相等）
+            embedder = OllamaEmbedder()
+            qv = retriever.embed_query(embedder, query)
+            hits = retriever.vector_search(
+                store, qv, getattr(embedder, "model", "bge-m3"),
+                top_k=1, chunk_types=("exercise_cue",),
+                min_score=None)              # 门槛交给 policy，不在这里过滤
+            ranked = policy.from_hits(hits)
+            d = policy.decide(ranked, chunk_type="exercise_cue",
+                              lexical_top1_id=lex_id)
+            if not (d.accepted and ranked):
+                return []
+
+            # 闸门③：id 必须在库内取得到记录 —— 取不到宁可不给。
+            # 用共享单例（app.runtime.repos），与 `_exercises` 的 `ex` 同源，
+            # 不另造一个 ExerciseRepo 实例（大表，多份占内存）。
+            rec = repos()[0].get(ranked[0][0])
+            return [rec] if rec else []
+        except Exception:
+            return []
+
     def _rag_science(self, items: list, query: str) -> None:
         """科学/医学语境 → 追加 top1 science_doc 知识块。全 try/except 静默降级。
 
@@ -783,11 +900,21 @@ class QaSkill(Skill):
         3. 正文键用 `value` 而非 `content`，并补 `source` / `source_ref`。
            此前是 `{"name": "知识块(RAG)", "content": ...}`，而
            `render_util.item_lines` 只认 name/name_zh/value —— **正文整段被丢掉**，
-           离线渲染出来只有一行 `· 知识块(RAG)`；出处（source_ref）也在这一层丢。"""
+           离线渲染出来只有一行 `· 知识块(RAG)`；出处（source_ref）也在这一层丢。
+
+        ⚠ **2026-09-20：门槛判定移交 `app/rag/policy.py`（判决单源）。**
+        原先是 `vector_search(..., min_score=retriever.MIN_SCORE)` 把门槛写进 SQL。
+        现改为 `min_score=None` 取原始近邻，再由 `policy.decide` 判决。
+        **行为对 `science_doc` 逐条等价**（该类型不在 `policy.CORROBORATED_TYPES`，
+        判决退化为纯标量 `score >= MIN_SCORE`，与 SQL 的 `>=` 同口径）——
+        等价性由 `test_rag_policy.py::test_rag_science_decision_matches_scalar` 钉住。
+        这么改是为了让判决有**一个**落点：将来 `exercise_cue` 接线时不必再动这里。
+        ⚠ 被接受的那条按"hits 里第一条 dict"取，而不是写死 `hits[0]` —— 不依赖
+        "`vector_search` 永远只产出 dict"这个没写进契约的前提。"""
         if not any(k in query for k in QaSkill._SCIENCE_KW):
             return
         try:
-            from app.rag import retriever
+            from app.rag import policy, retriever
             from app.rag.store import PgStore
             from app.rag.embedder import OllamaEmbedder
             store, embedder = PgStore(), OllamaEmbedder()
@@ -795,18 +922,23 @@ class QaSkill(Skill):
             hits = retriever.vector_search(
                 store, qv, getattr(embedder, "model", "bge-m3"),
                 top_k=1, chunk_types=("science_doc",),
-                min_score=retriever.MIN_SCORE)
+                min_score=None)          # 门槛交给 policy，不在这里过滤
         except Exception:
             return
-        if not hits:
+        ranked = policy.from_hits(hits)
+        if not policy.decide(ranked, chunk_type="science_doc").accepted:
             return
-        sr = hits[0].get("source_ref") or {}
+        # 被接受的那条 = hits 里**第一条 dict**。`from_hits` 只跳过非 dict 条目且保序，
+        # 所以它与 `ranked[0]` 是同一行；这里按 dict 取而不是写死 `hits[0]`，
+        # 免得依赖"vector_search 永远只产出 dict"这个未写进契约的前提。
+        top = next(h for h in hits if isinstance(h, dict))
+        sr = top.get("source_ref") or {}
         # 出处：优先语料写入时的可读名（source_ref.title），无则退回 id ——
         # 老库未重建时 title 缺失，不能因此渲染成空
-        items.append({"name": "知识块(RAG)", "value": hits[0]["content"],
+        items.append({"name": "知识块(RAG)", "value": top.get("content"),
                       "source": sr.get("title") or sr.get("id") or None,
                       "source_ref": sr,
-                      "pending_review": hits[0]["pending_review"],
+                      "pending_review": top.get("pending_review"),
                       "rag": True})
 
     @staticmethod

@@ -84,8 +84,17 @@ _SORE_WORDS = ("酸胀", "酸痛", "发酸", "有点酸", "酸")
 
 
 def is_pure_soreness(text: str) -> bool:
-    """纯 DOMS 语境判定（llm 分类前置 + qa 科普配套）。"""
+    """纯 DOMS 语境判定（llm 分类前置 + qa 科普配套）。
+
+    ⚠ 判据必须看**原句**有没有器官/慢病词，不能只看剥完酸系词的剩余：
+      `尿酸高还能练吗` 剥掉「尿酸」后剩「高还能练吗」，看似纯酸痛 → 会被放行
+      到 qa 科普，而它其实是**慢病咨询**（该 guard）。
+      故先查原句：出现器官/慢病词即非纯酸痛。
+    """
     if "酸" not in text:
+        return False
+    # 器官/慢病词先看原句（"尿酸高"剥完只剩"高"，不能据此放行）
+    if any(k in text for k in ORGAN_KW + ORGAN_DISEASE_KW):
         return False
     rest = text
     for w in _SORE_WORDS:
@@ -95,6 +104,105 @@ def is_pure_soreness(text: str) -> bool:
     if any(k in rest for k in GUARD_SIGNAL_EXTRA):
         return False
     return True
+
+
+# ---------------------------------------------- 「酸」作词素 vs 作症状（2026-09-21）
+# 裸「酸」在 GUARD_SYMPTOMS 里是**症状单字**（肌肉酸），但它同时是大量
+# **补剂/代谢物名词**的词素：肌酸、叶酸、氨基酸、尿酸、乳酸、草酸、果酸…
+# 于是 `吃肌酸会影响肾功能吗` / `尿酸高还能练吗` 会被症状行以 conf=1.0 命中
+# 并路由 guard —— 前者应是 qa 辟谣（`_MYTH_KB` 有『正常摄入蛋白粉不伤肾』），
+# 后者是慢病咨询（该 guard）。
+#
+# 判据：把这些**词素词**整体抠掉后再查症状词。抠掉后还剩「酸」→ 才是真症状。
+# 单源：消费方（llm.classify）只调 `any_symptom()`，不再自己 `in GUARD_SYMPTOMS`。
+_ACID_MORPHEME_KW = ("肌酸", "叶酸", "氨基酸", "支链氨基酸", "尿酸", "乳酸",
+                     "草酸", "果酸", "玻尿酸", "脂肪酸", "盐酸", "碳酸",
+                     "苹果酸", "柠檬酸", "谷氨酸", "烟酸", "泛酸", "水杨酸")
+
+
+def strip_acid_morphemes(text: str) -> str:
+    """抠掉「酸」作词素的补剂/代谢物名词，剩下的「酸」才算症状。"""
+    s = text or ""
+    for w in _ACID_MORPHEME_KW:
+        s = s.replace(w, "")
+    return s
+
+
+def any_symptom(text: str) -> bool:
+    """文本是否含**真症状**信号（GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA）。
+
+    ⚠ 与裸 `k in GUARD_SYMPTOMS` 的区别：先抠掉「酸」作词素的词（肌酸/尿酸…），
+    否则 `吃肌酸会影响肾功能吗` 会被裸「酸」误判为症状陈述。
+    这是 `llm.classify` 里症状行的**唯一**判据入口（防再有人写裸 `in`）。
+    """
+    t = strip_acid_morphemes(text)
+    return any(k in t for k in GUARD_SYMPTOMS + GUARD_SIGNAL_EXTRA)
+
+
+# ------------------------------------------------- 器官/慢病（2026-09-21 条件路由）
+# 用户定路由：**science 进 qa，medical 进 guard**。
+#
+# ⚠ 但器官名词**不能**直接进 GUARD_SIGNAL_EXTRA 无条件拦 —— 会误伤辟谣族：
+#   `蛋白粉喝多了肾会坏掉吗` 项目**已意在 qa 辟谣**（`qa_skill._MYTH_KB` 有
+#   『正常摄入蛋白粉不伤肾』条目，由 `test_myth_eval_questions_to_qa_not_plan` 钉住）。
+#   无条件拦会把这族顶到 guard 出安全提示，辟谣能力消失。
+#
+# 故按**是否含症状/就医信号**分（用户 2026-09-21 选定）：
+#   · 器官词 + 症状/指标异常/用药就医 → guard（真医疗情境）
+#   · 器官词、纯"会不会伤X"疑问        → qa（辟谣族，保留 _MYTH_KB）
+#       「蛋白粉喝多了肾会坏掉吗」→ 无任何医疗情境词 → False → qa 辟谣
+#
+# 判据落在 `is_medical_organ_concern()`，**消费方只读不算**（与其余词表同约定）。
+ORGAN_KW = ("肾", "肾功能", "肝", "肝功能", "胃", "肠胃", "肠",
+            "肺", "脾", "胆", "甲状腺", "血糖", "血脂",
+            "贫血", "心律", "免疫", "结石")
+ORGAN_DISEASE_KW = ("痛风", "尿酸")
+
+# 「慢病/异常状态」表述：器官/指标词 + 这些后缀即为**确诊或异常**语境
+# （"脂肪肝"/"甲状腺有问题"/"尿酸高"/"血糖偏高"）→ 该 guard。
+# ⚠ 与辟谣族的边界：辟谣问的是**将来会不会**伤（"喝多了会坏掉吗"），
+# 本表收的是**已经存在**的异常状态（"高/偏低/有问题/异常/病史"）与确诊名。
+_ORGAN_CONDITION_KW = ("脂肪肝", "酒精肝", "肝硬化", "肾炎", "肾虚", "肾结石",
+                       "胃病", "胃炎", "肠炎", "肺病", "哮喘", "糖尿病",
+                       "甲亢", "甲减", "甲状腺", "贫血", "心律不齐", "心脏病",
+                       "病史", "有问题", "不太好", "不正常")
+_ORGAN_ABNORMAL_KW = ("偏高", "偏高", "偏低", "过高", "过低", "超了", "超标",
+                      "异常", "高", "低")
+
+# 「真医疗情境」信号：已在系统里的症状词/用药/就医词，或明确的身体异常诉求。
+_ORGAN_SYMPTOM_KW = ("疼", "痛", "不适", "难受", "发炎", "肿", "出血", "恶心",
+                     "呕吐", "头晕", "晕", "闷", "无力", "乏力", "发抖",
+                     "指标", "检查", "化验")
+
+
+def is_medical_organ_concern(text: str) -> bool:
+    """器官名词句是否属**真医疗情境**（→ guard），而非辟谣疑问（→ qa 辟谣）。
+
+    判据（从严）：
+      · 必须出现器官/慢病名词；
+      · **且**满足其一：
+          a. 出现症状词（疼/不适/异常…）；
+          b. 出现**已存在的异常状态/确诊**表述（脂肪肝/甲状腺有问题/尿酸高）；
+          c. 出现用药/就医/慢病信号（吃药/医院/糖尿病/心脏…）。
+    "蛋白粉喝多了肾会坏掉吗" 三项皆无（问的是**将来会不会**，非既存异常）
+    → False → 交回 qa 辟谣。
+    "尿酸高还能练吗" 命中 (b) → True → guard。
+    """
+    t = text or ""
+    if not any(k in t for k in ORGAN_KW + ORGAN_DISEASE_KW):
+        return False
+    if any(k in t for k in _ORGAN_SYMPTOM_KW):
+        return True
+    if any(k in t for k in _ORGAN_CONDITION_KW):
+        return True
+    # 指标 + 异常量词（"尿酸高"/"血糖偏高"/"血脂低"）
+    if any(k in t for k in _ORGAN_ABNORMAL_KW):
+        return True
+    # 用药/就医/慢病信号（复用 GUARD_SIGNAL_EXTRA 的医疗子集，不另起词表）
+    if any(k in t for k in ("药物", "吃药", "用药", "医院", "医生",
+                            "糖尿病", "高血压", "血压", "心脏", "支架")):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- 记忆查询（单源）

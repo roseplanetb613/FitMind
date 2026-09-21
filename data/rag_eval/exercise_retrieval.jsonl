@@ -1,0 +1,33 @@
+{"id": "L01", "channel": "lexical", "family": "region_expand", "query": "练腿", "part_fallback": true, "top_k": 8, "expect": {"primary_target_in": ["quadriceps", "hamstrings", "glutes"], "min_distinct": 3}, "note": "三块都属『腿』，轮转应三块都出现——只给股四头就是漏了腘绳/臀"}
+{"id": "L02", "channel": "lexical", "family": "region_expand", "query": "练背", "part_fallback": true, "top_k": 8, "expect": {"primary_target_in": ["latissimus_dorsi", "trapezius", "rhomboids", "upper_back", "lower_back"], "min_distinct": 2}, "note": "2026-09-20 前前 5 是『下背弯举/上背拉伸/背阔肌拉伸』——字面含『背』的拉伸动作，不是练背"}
+{"id": "L03", "channel": "lexical", "family": "region_expand", "query": "练胸", "part_fallback": true, "top_k": 8, "expect": {"primary_target_in": ["pectorals"], "min_distinct": 1}, "note": "用户说的『胸』=胸大肌。前锯肌虽在本体里 region=chest，但『肩胛骨俯卧撑』不是用户要的东西——这条钉的就是别把它当胸"}
+{"id": "L04", "channel": "lexical", "family": "region_expand", "query": "练肩", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["deltoids", "rotator_cuff"], "min_distinct": 1}, "note": ""}
+{"id": "L05", "channel": "lexical", "family": "region_expand", "query": "核心怎么练", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["core", "rectus_abdominis", "obliques"], "min_distinct": 1}, "note": "库内没有叫『核心』的动作，必须走部位旁路；纯字面必空"}
+{"id": "L06", "channel": "lexical", "family": "region_expand", "query": "小腿", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["calves", "tibialis_anterior", "ankle_stabilizers"], "min_distinct": 1}, "note": "只有 region 没有 muscle 的部位词——2026-09-20 前整类失效"}
+{"id": "L07", "channel": "lexical", "family": "region_expand", "query": "前臂怎么练", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["forearms"], "min_distinct": 1}, "note": "前臂 312 条里只有 37 条以 forearms 为主目标；不按主目标排的话前 5 全是引体向上（前臂只是次要）"}
+{"id": "L08", "channel": "lexical", "family": "region_expand", "query": "髋部怎么练", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["abductors", "adductors", "hip_flexors"], "min_distinct": 1}, "note": ""}
+{"id": "L09", "channel": "lexical", "family": "region_expand_guard", "query": "腰怎么练", "part_fallback": true, "top_k": 5, "expect": {"primary_target_in": ["lower_back"], "min_distinct": 1}, "note": "『腰』刻意只展开到 lower_back：region=back 不能当语义来源，否则『腰』会捞出整个背阔肌群（见 lib/parts.py 的刻意注释）。⚠ 全库没有一条以 lower_back 为**主目标**的动作（target=0 / muscle_group=6 / 仅次要=64），所以这条实际测的是 rank≤1（肌群归属）那条路——判据必须用 target∨muscle_group，否则这条在任何实现下都不通过"}
+
+{"id": "L10", "channel": "lexical", "family": "alias", "query": "箭步蹲", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["弓步"]}, "note": "库内叫『弓步』，用户说『箭步蹲』——NAME_ALIASES 归一"}
+{"id": "L11", "channel": "lexical", "family": "alias", "query": "倒蹬机", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["腿举"]}, "note": "库内叫『腿举』；不归一的话字面全空，checkin_resolve 会直接业务 404"}
+{"id": "L12", "channel": "lexical", "family": "alias", "query": "夹腿", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["内收"]}, "note": "器械俗称 → 解剖学名『髋内收』"}
+{"id": "L13", "channel": "lexical", "family": "alias", "query": "开腿", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["外展"]}, "note": ""}
+{"id": "L14", "channel": "lexical", "family": "alias", "query": "夹胸", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["飞鸟"]}, "note": "蝴蝶机/绳索夹胸 ≈ 飞鸟"}
+{"id": "L15", "channel": "lexical", "family": "alias", "query": "拉背", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["下拉"]}, "note": "高位下拉俗称"}
+{"id": "L16", "channel": "lexical", "family": "alias", "query": "推胸", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["胸部推举"]}, "note": "器械推胸"}
+{"id": "L17", "channel": "lexical", "family": "alias", "query": "肩推举", "part_fallback": true, "top_k": 5, "expect": {"name_contains_any": ["肩推"]}, "note": "库内无整词『肩推举』（有『肩推』）；压测 #76 空结果根因"}
+
+{"id": "L18", "channel": "lexical", "family": "scene_equip", "query": "在家能做的腿部训练", "part_fallback": true, "top_k": 5, "expect": {"all_equipment": "body weight"}, "note": "场景词『在家』→ 器械约束 body weight，必须在排序前过滤"}
+{"id": "L19", "channel": "lexical", "family": "scene_equip", "query": "家里没有器械怎么练胸", "part_fallback": true, "top_k": 5, "expect": {"all_equipment": "body weight"}, "note": "修饰词剥完剩『没有器械练胸』，两头都不等于『胸』，靠 part_words_in 从中间找"}
+{"id": "L20", "channel": "lexical", "family": "scene_equip", "query": "用哑铃练肩", "part_fallback": true, "top_k": 5, "expect": {"all_equipment": "dumbbell"}, "note": "用户点名了器械。_SCENE_EQUIP 只认场景词（在家/徒手/自重）不认器械词——这条钉的就是它"}
+
+{"id": "L21", "channel": "lexical", "family": "verbatim", "query": "引体向上", "part_fallback": true, "top_k": 5, "expect": {"top1_id": "0652"}, "note": "对照组：精确同名必须 top1（库里存在同名动作 0652 引体向上）"}
+{"id": "L22", "channel": "lexical", "family": "verbatim", "query": "弹力带 单腿 提踵", "part_fallback": true, "top_k": 5, "expect": {"top1_id": "0999"}, "note": "对照组：全名精确命中，库里唯一一条"}
+{"id": "L23", "channel": "lexical", "family": "verbatim", "query": "空中蹬车", "part_fallback": true, "top_k": 5, "expect": {"top1_id": "0003"}, "note": "对照组：全名精确命中"}
+
+{"id": "L24", "channel": "lexical", "family": "no_fabrication", "query": "今天天气怎么样", "part_fallback": true, "top_k": 5, "expect": {"expect_empty": true}, "note": "完全无关的中文查询在稠密检索上能拿到 0.49~0.52（见 retriever.MIN_SCORE 注释）；词法这一路必须干净地空"}
+{"id": "L25", "channel": "lexical", "family": "no_fabrication", "query": "帮我写一首诗", "part_fallback": true, "top_k": 5, "expect": {"expect_empty": true}, "note": ""}
+{"id": "L26", "channel": "lexical", "family": "no_fabrication", "query": "红烧肉怎么做", "part_fallback": true, "top_k": 5, "expect": {"expect_empty": true}, "note": "饮食话题，不该捞动作"}
+{"id": "L27", "channel": "lexical", "family": "no_fabrication", "query": "鸡胸肉怎么做", "part_fallback": false, "top_k": 5, "expect": {"expect_empty": true}, "note": "**part_fallback=False**：『鸡胸』含『胸』，开了旁路会命中肌肉动作，于是食物偏好被误判成动作（_part_scan docstring 记录的实测）。判定类检索必须保持空"}
+{"id": "L28", "channel": "lexical", "family": "gap_negative", "query": "腿屈伸", "part_fallback": false, "top_k": 5, "expect": {"expect_empty": true}, "note": "leg extension 库内无对应动作（只有『椅子 腿 伸展 拉伸』这个拉伸）——属数据集缺口。严格路径必须空；对话路径（part_fallback=True）会退化成腿类近似动作，那是已知的静默近似，见 note 于 MEMORY"}
+{"id": "L29", "channel": "lexical", "family": "gap_negative", "query": "腿屈伸机怎么调座位", "part_fallback": false, "top_k": 5, "expect": {"expect_empty": true}, "note": "同 L28，但带器械细节——确认不会因为『机』『座位』等字面碎片捞到东西"}

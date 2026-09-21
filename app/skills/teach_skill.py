@@ -67,7 +67,6 @@ def _out_item(e: dict) -> dict:
         "rest_sec": sug.get("rest_sec"),
         "equipment": e.get("normalized_equipment"),
         "pattern": e.get("movement_pattern"),
-        "rag": False,
     }
     it["cue"] = _cue(it)
     return it
@@ -303,7 +302,15 @@ class TeachSkill(Skill):
         本文件这一处写入）。它当初是作为"RAG 扩展位"预留的，消费它的渲染器一直没写。
         因此在接上渲染之前，这里的产出**对用户不可见**——别误以为它在生效。
         要与用户可见的出处标注区分：那个走的是 items[].source / source_ref
-        （见 qa._rag_science 与 render_util.item_lines）。"""
+        （见 qa._rag_science 与 render_util.item_lines）。
+
+        ⚠ **`rag` 布尔位已于 2026-09-21 删除**（连同 `_out_item` 里的
+        `"rag": False` 初值）。它原是与之配套的"本条挂了 RAG"标记，但**全仓
+        0 个读取点**（`render_util.item_lines` 只认 name/name_zh/value/source，
+        LLM 渲染器由 `json.dumps` 整体送、无规则读它）。留着只会让人以为
+        RAG 在生效——正是本段注释要防的那种误判。删它**不影响任何用户可见行为**。
+        注意它与 `rag_evidence` 去留不同：后者保留了，因为它的载荷形状有
+        测试钉住、是将来接渲染时的既定结构。"""
         try:
             from app.rag import retriever
             from app.graph.store import GraphStore
@@ -320,6 +327,5 @@ class TeachSkill(Skill):
                     continue
                 if alts:
                     it["rag_evidence"] = {"alternatives": alts}
-                    it["rag"] = True
         except Exception:
             pass

@@ -68,8 +68,9 @@ for p in ("", "lib", "app"):
         sys.path.insert(0, p)
 
 # 词法索引的**唯一实现**在 app/rag/lex_index.py（评测与运行期共用，防同源漂移）。
-from app.rag import lex_index as _lex_index          # noqa: E402
-from app.rag.lex_index import _grams as _lex_grams   # noqa: E402
+# `LexIndex` / `_grams` 以 import 别名保留本脚本内的既有调用点 —— **不是子类**：
+# 子类会让人以为"评测可以覆盖实现"，而本设计的全部意义正是两边**同一份**实现。
+from app.rag.lex_index import LexIndex, _grams                # noqa: E402
 
 LABELS = ROOT / "data" / "rag_eval" / "queries.jsonl"
 SEED = 20260914
@@ -134,20 +135,13 @@ def auto_grid(scores: list[float], n: int = 9) -> list[float]:
     return [round(hi * i / (n - 1), 4) for i in range(n)]
 
 
-def _grams(t: str) -> list[str]:
-    """⚠ 已移到 `app/rag/lex_index.py`（运行期与评测共用一份实现，防同源漂移）。
-    这里保留 `_grams` / `LexIndex` 两个名字作为 import 别名 —— 本脚本内部有引用，
-    换成公共模块后**行为必须逐字一致**（由 `--retriever all` 的数字不变来保证）。"""
-    return _lex_grams(t)
-
-
-class LexIndex(_lex_index.LexIndex):
-    """字符二元组 BM25 —— 中文不依赖分词器的词法基线。
-
-    ⚠ 2026-09-21：实现已**逐字搬**到 `app/rag/lex_index.py`，这里只是子类别名。
-    搬移动机：接线 `exercise_cue` 判决层时运行期也要算词法旁证，必须是同一份实现。
-    不用 pg_trgm 的原因：实测它在 2 字中文上算不出相似度（'深蹲' vs '深蹲膝盖姿势要点'
-    = 0.200，低于默认阈值 0.3）。字符 bigram 没这个问题。索引建一次，多次查询复用。"""
+# ⚠ `_grams` / `LexIndex` 的实现已**逐字搬到** `app/rag/lex_index.py`（2026-09-21），
+# 本脚本改为**直接 import**，不再本地重复定义（原先留过一层子类别名，已去掉）。
+# 搬移动机：接线 `exercise_cue` 判决层时运行期也要算词法旁证，必须是同一份实现。
+# 行为逐字一致由 `--retriever all` 的四行数字不变来保证；任何差异都说明搬移改了算法。
+#
+# 不用 pg_trgm 的原因：实测它在 2 字中文上算不出相似度（'深蹲' vs '深蹲膝盖姿势要点'
+# = 0.200，低于默认阈值 0.3）。字符 bigram 没这个问题。索引建一次，多次查询复用。
 
 
 # ---------------- LLM rerank（本地 Ollama，零下载） ----------------

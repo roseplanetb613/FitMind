@@ -938,8 +938,11 @@ class QaSkill(Skill):
         items.append({"name": "知识块(RAG)", "value": top.get("content"),
                       "source": sr.get("title") or sr.get("id") or None,
                       "source_ref": sr,
-                      "pending_review": top.get("pending_review"),
-                      "rag": True})
+                      "pending_review": top.get("pending_review")})
+        # ⚠ 此处原有 `"rag": True`，2026-09-21 删除 —— 全仓 0 个读取点
+        # （确定性渲染只认 name/name_zh/value/source；LLM 渲染器整体送 JSON、
+        # 无规则读它）。条目名"知识块(RAG)"本身已足以表明这是知识块，
+        # 布尔位是冗余的，且留着会让人以为有消费方。详见 teach_skill._rag_enrich。
 
     @staticmethod
     def _sounds_food(q: str) -> bool:

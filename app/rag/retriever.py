@@ -131,6 +131,15 @@ def graph_muscle_peers(store, seed_id: str,
     return store.muscle_peers(seed_id, limit=limit)
 
 
+def graph_contraindicated(store, seed_id: str) -> list[dict]:
+    """该动作的禁忌（疾病 → 危险模式）。返回 [{"pattern","condition","risk_level"}]。
+
+    ⚠ 空结果是**正常**的（Condition 只 7 个 / Pattern 只 10 个），不是依赖故障 ——
+    调用方必须把"空"与"Neo4j 挂了"分开记（见 fusion.compose 的 reason）。
+    """
+    return store.contraindications(seed_id)
+
+
 # ---- 向量检索 ----
 
 def vector_search(store, query_vec: list[float], embedder_name: str,

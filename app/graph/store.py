@@ -375,6 +375,27 @@ class GraphStore:
             return [{"id": r["id"], "name_zh": r["name_zh"], "kind": "exercise"}
                     for r in res]
 
+    def contraindications(self, exercise_id: str) -> list[dict]:
+        """动作的禁忌链：Exercise -pattern_of-> Pattern <-contraindicates- Condition。
+
+        返回 [{"pattern","condition","risk_level"}]。
+
+        ⚠ 这是**唯一**能产出"别做这个"的能力，也是图相对向量的结构性优势
+        （向量只有相似度，说不出"因为有肩伤所以别做"）。
+        ⚠ 覆盖稀疏：`Condition` 只 7 个、`Pattern` 只 10 个，而 `Exercise` 有 1324 个
+        —— 走不通是**正常结果**，不是错误（调用方不得因此报错）。见探针 P5。
+        """
+        with self._driver.session(database=self._database) as s:
+            res = s.run(
+                "MATCH (e:Exercise {id: $eid})-[:pattern_of]->(p:Pattern)"
+                "<-[:contraindicates]-(c:Condition) "
+                "RETURN DISTINCT p.name AS pattern, c.name AS condition, "
+                "       c.risk_level AS risk_level "
+                "ORDER BY risk_level DESC, p.name LIMIT 20",
+                eid=exercise_id)
+            return [{"pattern": r["pattern"], "condition": r["condition"],
+                     "risk_level": r["risk_level"]} for r in res]
+
     # ---- 别名子图（在线沉淀 + 前置查询） ----
 
     def lookup_alias(self, text: str, domain: str) -> str | None:

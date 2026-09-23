@@ -77,7 +77,7 @@ def plan_check(conditions: Iterable[str], patterns: Iterable[str]) -> dict:
         entry = contraindication(cond)
         if not entry:
             continue
-        # 升级到更重的等级 —— 序取自 RISK_ORDER（唯一来源），不再 here 重编 if/elif。
+        # 升级到更重的等级 —— 序取自 RISK_ORDER（唯一来源），不再在此重编 if/elif。
         level = min(level, entry["risk_level"],
                     key=lambda v: RISK_ORDER.get(v, len(RISK_ORDER)))
         hit = [p for p in patterns if p in entry["danger_patterns"]]

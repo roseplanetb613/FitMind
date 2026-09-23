@@ -789,6 +789,10 @@ class QaSkill(Skill):
             # 不是召回补位。详见 docs/superpowers/specs/2026-09-21-exercise-cue-wiring-design.md
             matched = self._vector_recall_ext(q)
         items = [self._exercise_item(e) for e in matched]
+        if items:
+            # 图检索事实（同族替代/同主肌/禁忌）—— 只挂首条，不改排序。
+            # 必须在 `if not items:` 之前：空结果无实体可挂。
+            self._attach_graph_facts(items, q)
         if not items:
             # 词表没接住的省略式追问 → LLM 结合历史判断（第二层）。
             # **只在字面检索为空后调**：正常路径零 LLM 成本，且"按字面查不到"
@@ -809,6 +813,72 @@ class QaSkill(Skill):
                                provenance=["qa#exercise_repo.search"])
         return SkillResult(ok=True, data={"items": items},
                            provenance=[f"ex:{it['id']}" for it in items])
+
+    def _attach_graph_facts(self, items: list, query: str, *,
+                            graph=None, pg=None, embedder=None) -> None:
+        """给**首条**动作挂图检索事实（同族替代 / 同主肌动作 / 禁忌）。
+
+        ## 种子从哪来（本函数最容易做重的地方）
+
+        **优先用已解析的实体**：词法通道已经把 query 落到某条动作上时，
+        `items[0]["id"]` **就是**种子 —— 零成本，不需要 embed。
+        **只有拿不到 id 时**才走向量播种（`seed_exercise`）兜底。
+
+        ⚠ 为什么不让向量播种当首选：`_exercises` 是动作查询的**热路径**，
+        每次多跑一次 `embed_query` 就多一次 Ollama 往返（
+        `docs/SDD/2026-09-20-retrieval-wiring-audit.md` 记录过 Ollama 下线时
+        "60s 超时 ×3 重试"的真实代价）。而实测（P1 探针）词法已解析出实体时，
+        向量播种给出的**是同一个 id**（`seed == dense_top1` 120/120），纯属零信息量的往返。
+
+        ## 口径
+
+        ⚠ 只挂首条：事实是"这条动作的替代与禁忌"，铺满整批会让卡片长度爆炸，
+        且第 2 条起的替代清单会与首条高度重叠（同族/同肌群是传递的）。
+
+        ⚠ **不改候选集、不改排序**（规格 §3.6 不变式 4 + §6.4 的"旧通道行为逐条不变"）。
+        图扩展集参与排序是 Phase B；且 P3 已实测 rerank 在扩展集上**净修 = 0**
+        （`docs/SDD/2026-09-23-graph-channel-probe.md` §4）⇒ `rank_ids` 不接线。
+
+        ## 降级
+
+        图不可用 / 播种不中 / 任何异常 ⇒ 静默返回，**绝不抛出**。
+        理由必须记账（`diag.bump`），否则"图挂了"会与"这条动作刚好没有替代"
+        长得一模一样 —— 那正是 `policy.py` 设立 `reason` 要对抗的静默失败。
+
+        `graph` / `pg` / `embedder` 是**测试注入点**；生产留空由本方法自建
+        （先例：`ingest.build(..., graph=None)` 的注入式签名 + `getattr` 兜底）。
+        """
+        if not items:
+            return
+        try:
+            from app.core import diag
+            from app.graph.store import GraphStore
+            from app.rag import fusion, retriever
+
+            graph = graph if graph is not None else GraphStore.get()
+            if graph is None:
+                diag.bump(f"rag.{fusion.REASON_GRAPH_DOWN}", 1)
+                return
+
+            seed = items[0].get("id")
+            if not seed:                       # 词法没解析出实体 → 向量播种兜底
+                if embedder is None:
+                    from app.rag.embedder import OllamaEmbedder
+                    embedder = OllamaEmbedder()
+                if pg is None:
+                    from app.rag.store import PgStore
+                    pg = PgStore()
+                vec = retriever.embed_query(embedder, query)
+                seed = retriever.seed_exercise(
+                    pg, vec, getattr(embedder, "model", "bge-m3"))
+
+            out = fusion.compose(graph, seed)
+            if any(out["facts"].values()):
+                items[0]["rag_evidence"] = out["facts"]
+            if out["reason"]:
+                diag.bump(f"rag.{out['reason']}", 1)
+        except Exception:
+            pass
 
     def _vector_recall_ext(self, query: str) -> list:
         """召回扩展：词法落空时，用**判决层把关**的向量 top1 补一条动作。

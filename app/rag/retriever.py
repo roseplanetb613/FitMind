@@ -92,6 +92,29 @@ def graph_family_alternatives(store, exercise_id: str) -> list[dict]:
     return store.family_alternatives(exercise_id)
 
 
+def seed_exercise(store, query_vec: list[float], embedder_name: str,
+                  min_score: float | None = MIN_SCORE) -> str | None:
+    """query 向量 → 种子动作 id（图检索的入口）。`None` = "不是动作域的问题"。
+
+    补上本模块缺失的最后一环：`graph_*` 三个原语此前**只吃精确键**（动作 id /
+    英文肌名），没有任何一条能从自然语言 query 进来。
+
+    ⚠ **门槛复用 `MIN_SCORE`，本函数不新造阈值**（判决层的零自由度不变式）。
+    低于门槛返回 `None` ⇒ 调用方**不扩展**。否则会把无关 query 硬接进图，
+    产生 `policy` 那一类 LEAK 的形状（实测 `hybrid` 的 LEAK 就是这么来的）。
+
+    ⚠ 只查 `exercise_cue`：`science_doc` 是散文、无实体可挂，图对它只能是 no-op。
+
+    调用方负责 embed（与 `vector_search` 同一约定 —— `embed_query` 是独立原语）。
+    """
+    hits = vector_search(store, query_vec, embedder_name, top_k=1,
+                         chunk_types=("exercise_cue",), min_score=min_score)
+    if not hits:
+        return None
+    sr = hits[0].get("source_ref") or {}
+    return sr.get("id") or None
+
+
 # ---- 向量检索 ----
 
 def vector_search(store, query_vec: list[float], embedder_name: str,

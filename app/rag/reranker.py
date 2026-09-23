@@ -86,3 +86,32 @@ class Reranker:
                 return [_sigmoid(float(x)) for x in logits.float().cpu().tolist()]
         except Exception:
             return []
+
+
+def rank_ids(query: str, ids: list[str], texts: list[str]) -> list[str]:
+    """按 cross-encoder 分数重排 `ids`。模型不可用/失败 ⇒ **原样返回**（全降级）。
+
+    ## 新定位：给**没有现成序**的候选集定序
+
+    实测（`scripts/eval_rag.py` 文件头，2026-09-14）：正确答案 100% 落在稠密 top-5
+    内，但 cross-encoder 的 argmax 只修好 3 条、弄坏 3 条（**净 0**）——
+    所以"重排 dense top-5"是**已被证伪**的用法（那里本来就有稠密序，重排跟自己打架）。
+
+    本函数服务的是**图扩展出来的候选集**（同主肌动作、同族替代）——
+    那里 dense 从未排序过，**没有现成的序可以打输**，"净修 0"的结论不适用。
+    ⚠ 但这也**不是**已知有收益的改动：探针 P3 必须实测净修条数，
+    数字不支持就只当"确定性顺序"用，不写进收益。
+
+    ⚠ 本函数**不提供门槛**：`score` 是有界 [0,1]（可当门槛），但本设计的
+    零自由度不变式只允许 `MIN_SCORE` 一个门槛。定序与判决分开。
+    """
+    if len(ids) < 2:
+        return list(ids)
+    rr = Reranker.get()
+    if rr is None:
+        return list(ids)
+    scores = rr.score(query, texts)
+    if len(scores) != len(ids):
+        return list(ids)
+    order = sorted(range(len(ids)), key=lambda i: -scores[i])
+    return [ids[i] for i in order]

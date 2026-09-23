@@ -43,3 +43,12 @@ node_modules/
 
 # CodeGraph 索引目录（工具产物，非项目内容；曾被 git status 显示为未跟踪）
 .codegraph/
+
+# ——— 以下路径不在公开仓库中 ———
+# 本仓是 E://FitMind 的派生副本（scripts/publish_public.py 生成），
+# 下列内容有意剔除；源仓仍完整保留它们的版本历史。
+app/tests/
+web/tests/
+docs/
+.workbuddy/
+.claude/

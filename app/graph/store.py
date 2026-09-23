@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.llm import load_dotenv
+from lib.screening import sort_by_risk
 
 load_dotenv()
 
@@ -378,10 +379,21 @@ class GraphStore:
     def contraindications(self, exercise_id: str) -> list[dict]:
         """动作的禁忌链：Exercise -pattern_of-> Pattern <-contraindicates- Condition。
 
-        返回 [{"pattern","condition","risk_level"}]。
+        返回 [{"pattern","condition","risk_level"}]，按严重度 **red → yellow → green**
+        排序。序**只来自** `lib.screening.sort_by_risk`（`RISK_ORDER` 是全仓唯一来源，
+        见该模块注释）—— 不要在别处再写一份。
 
-        ⚠ 这是**唯一**能产出"别做这个"的能力，也是图相对向量的结构性优势
-        （向量只有相似度，说不出"因为有肩伤所以别做"）。
+        ⚠ 为什么不在 Cypher 里排：`risk_level` 是英文枚举（red/yellow/green），
+        `ORDER BY risk_level DESC` 是**字符串比较**，码点序是 'yellow' > 'red' > 'green'
+        —— 会把 red 排到**最后**。2026-09-23 首版即此写法（本仓实测踩过）。
+
+        ⚠ 为什么没有 LIMIT：一个动作只有一个 `movement_pattern`，`Condition` 全集
+        只 7 个节点，结果天然有界。先 LIMIT 再排序正是 red 被丢掉的方式。
+
+        ⚠ **检索层**唯一能产出"别做这个"的能力，也是图相对向量的结构性优势
+        （向量只有相似度，说不出"因为有肩伤所以别做"）。同源的禁忌块另有
+        `lib/screening.py:plan_check` 与 `app/skills/guard_skill.py:_memory_intercept`
+        —— 三者都从同一份 contraindications.json 出发，改一处要一起看。
         ⚠ 覆盖稀疏：`Condition` 只 7 个、`Pattern` 只 10 个，而 `Exercise` 有 1324 个
         —— 走不通是**正常结果**，不是错误（调用方不得因此报错）。见探针 P5。
         """
@@ -390,11 +402,11 @@ class GraphStore:
                 "MATCH (e:Exercise {id: $eid})-[:pattern_of]->(p:Pattern)"
                 "<-[:contraindicates]-(c:Condition) "
                 "RETURN DISTINCT p.name AS pattern, c.name AS condition, "
-                "       c.risk_level AS risk_level "
-                "ORDER BY risk_level DESC, p.name LIMIT 20",
+                "       c.risk_level AS risk_level",
                 eid=exercise_id)
-            return [{"pattern": r["pattern"], "condition": r["condition"],
+            rows = [{"pattern": r["pattern"], "condition": r["condition"],
                      "risk_level": r["risk_level"]} for r in res]
+        return sort_by_risk(rows)
 
     # ---- 别名子图（在线沉淀 + 前置查询） ----
 

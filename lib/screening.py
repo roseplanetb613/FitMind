@@ -20,6 +20,26 @@ _CI = json.load(open(SCI_DATA / "contraindications.json", encoding="utf-8"))
 CONDITIONS = _CI["conditions"]
 RISK_LEVELS = _CI["risk_levels"]
 
+# 严重度序：red 最重（0）。**全仓唯一**的严重度序 —— 检索层与筛查层共用，
+# 不要在别处再写一份（同源漂移，本仓架构铁律）。
+#
+# ⚠ 不要用字符串比较代替它：'yellow' > 'red' > 'green'（码点序），
+# 所以 `ORDER BY risk_level DESC` 会把 red 排到**最后**。
+# 2026-09-23 实测踩过（图检索 contraindications 首版即此写法）。
+RISK_ORDER = {"red": 0, "yellow": 1, "green": 2}
+
+
+def sort_by_risk(rows: list[dict]) -> list[dict]:
+    """按严重度升序（red → yellow → green），同度按 condition、pattern 稳定排序。
+
+    未知 risk_level 排在最后且**不抛异常**（全降级）。
+    """
+    return sorted(
+        rows,
+        key=lambda r: (RISK_ORDER.get(r.get("risk_level"), len(RISK_ORDER)),
+                       r.get("condition") or "",
+                       r.get("pattern") or ""))
+
 
 def parq_questions() -> list[dict]:
     return _PARQ["questions"]
@@ -57,10 +77,9 @@ def plan_check(conditions: Iterable[str], patterns: Iterable[str]) -> dict:
         entry = contraindication(cond)
         if not entry:
             continue
-        if entry["risk_level"] == "red":
-            level = "red"
-        elif entry["risk_level"] == "yellow" and level != "red":
-            level = "yellow"
+        # 升级到更重的等级 —— 序取自 RISK_ORDER（唯一来源），不再 here 重编 if/elif。
+        level = min(level, entry["risk_level"],
+                    key=lambda v: RISK_ORDER.get(v, len(RISK_ORDER)))
         hit = [p for p in patterns if p in entry["danger_patterns"]]
         blocks.append({
             "condition": entry["condition_zh"], "risk_level": entry["risk_level"],

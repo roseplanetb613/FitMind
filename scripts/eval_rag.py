@@ -390,6 +390,44 @@ def policy_top1(store, emb, rows: list[dict]) -> list[tuple]:
     return out
 
 
+def graph_top1(store, emb, rows: list[dict]) -> list[tuple]:
+    """图通道（`app.rag.fusion` + 图扩展）的 top1 —— 让新能力在**标准工具**里可复算。
+
+    ⚠ 本通道的产出是**候选集 + 事实**，不是"从全库选一条"，所以它与 dense/lexical
+    的 top1 **不是同类比较**。这里报的是"图扩展集里是否有 expected"：
+      · 扩展集非空且 expected 在内 → 用 expected 作为 returned（TP）
+      · 扩展集非空但 expected 不在 → 用扩展集首条（WRONG —— 图给了个别的）
+      · 扩展集为空 / 图不可用 → 返回 None（MISS/TN，诚实弃权）
+    ⚠ 分数只编码"接没接"（接受 1.0 / 弃权 -1.0），照抄 `policy_top1` 的先例：
+    图通道自带门槛（`MIN_SCORE`），不该再被外层网格扫一遍。
+
+    新能力的**主验收**不在这里（本表衡量不了枚举能力），而在
+    `app/tests/test_graph_channel.py` 的可见性用例。本函数只保证它**可复算、可对比**。
+    """
+    from app.graph.store import GraphStore
+    from app.rag import fusion, retriever
+    graph = GraphStore.get()
+    out = []
+    for r in rows:
+        exp = r.get("expected")
+        ok = ({exp} if isinstance(exp, str) else set(exp)) if exp else set()
+        if graph is None:
+            out.append((exp, None, -1.0))
+            continue
+        try:
+            vec = retriever.embed_query(emb, r["query"])
+            seed = retriever.seed_exercise(store, vec, "bge-m3")
+            facts = fusion.compose(graph, seed)["facts"]
+            cands = [p["id"] for p in facts.get("peers", [])] + \
+                    [a["id"] for a in facts.get("alternatives", [])]
+        except Exception:
+            cands = []
+        hit = next((c for c in cands if c in ok), None)
+        rid = hit or (cands[0] if cands else None)
+        out.append((exp, rid, 1.0 if rid else -1.0))
+    return out
+
+
 def _rrf(rankings: list[list[str]], k: int = 60) -> list[tuple[str, float]]:
     """Reciprocal Rank Fusion：score = Σ 1/(k + rank)。
 
@@ -480,7 +518,7 @@ def main() -> None:
     ap.add_argument("--emit", action="store_true")
     ap.add_argument("--retriever", default="all",
                     choices=["all", "dense", "lexical", "hybrid", "ce_rerank",
-                             "llm_rerank", "policy", "abstain", "random"])
+                             "llm_rerank", "policy", "graph", "abstain", "random"])
     ap.add_argument("--chunk-type", default=None)
     ap.add_argument("--split", type=float, default=0.0,
                     help="留出比例：dev 上选阈值，报 test 成绩（0 = 不分，阈值即在报告集上选，偏乐观）")
@@ -586,6 +624,9 @@ def main() -> None:
         elif name == "hybrid":
             dev_t1 = hybrid_top1(store, emb, dev)
             test_t1 = hybrid_top1(store, emb, test)
+        elif name == "graph":
+            dev_t1 = graph_top1(store, emb, dev)
+            test_t1 = graph_top1(store, emb, test)
         elif name == "llm_rerank":
             dev_t1 = llm_rerank_top1(store, emb, dev)
             test_t1 = llm_rerank_top1(store, emb, test)
@@ -597,9 +638,9 @@ def main() -> None:
 
         if args.grid:
             grid = [float(x) for x in args.grid.split(",")]
-        elif name in ("llm_rerank", "policy"):
+        elif name in ("llm_rerank", "policy", "graph"):
             # 分数只编码"选没选/接不接"（接受=1.0 / 弃权=-1.0），没有连续尺度可扫
-            # —— 判决由检索器自己下（policy 自带 MIN_SCORE 门槛），不该被网格再扫
+            # —— 判决由检索器自己下（policy/graph 自带 MIN_SCORE 门槛），不该被网格再扫
             grid = [-1.0, 0.0]
         else:
             grid = auto_grid([s for _, _, s in dev_t1 if s >= 0])

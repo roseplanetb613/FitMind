@@ -1,0 +1,8 @@
+{"query": "练胸的动作都有哪些", "chunk_type": "exercise_cue", "expected": ["0025", "0033", "0036", "0047", "0009"], "kind": "enumerate", "note": "同主肌枚举：命中任一即 TP"}
+{"query": "有什么能替代杠铃卧推", "chunk_type": "exercise_cue", "expected": ["0033", "0036", "0047"], "kind": "substitute", "note": "同族替代：杠铃类卧推变体"}
+{"query": "肩关节不稳的人练卧推要注意什么", "chunk_type": "exercise_cue", "expected": ["0025"], "kind": "contraindication", "note": "种子命中即算；禁忌事实由 P5 链支撑"}
+{"query": "下斜卧推怎么练", "chunk_type": "exercise_cue", "expected": ["0033"], "kind": "substitute", "note": "同族替代的另一入口"}
+{"query": "弹力带耸肩练哪块肌肉", "chunk_type": "exercise_cue", "expected": ["1018"], "kind": "enumerate", "note": "不同肌群的动作，验证不是只对胸有效"}
+{"query": "曲杠抗重力推举的标准动作", "chunk_type": "exercise_cue", "expected": ["0445"], "kind": "enumerate", "note": "肩部动作，第三类肌群"}
+{"query": "仰卧起坐的要领", "chunk_type": "exercise_cue", "expected": ["0001"], "kind": "enumerate", "note": "核心动作"}
+{"query": "空中蹬车怎么做", "chunk_type": "exercise_cue", "expected": ["0003"], "kind": "enumerate", "note": "核心动作，与 0001 同肌群"}

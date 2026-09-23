@@ -40,6 +40,7 @@ Agent：（命中运动医学禁忌表）急性期不建议过顶推举。替代
 - [编排流程](#编排流程)
 - [快速开始](#快速开始)
 - [检索质量评估](#检索质量评估)
+- [更新日志](#更新日志)
 - [HTTP 接口](#http-接口)
 - [目录结构](#目录结构)
 - [数据资产与许可](#数据资产与许可)
@@ -302,6 +303,8 @@ python scripts/eval_rag.py       # 需 Ollama 在线；不在线会 FAIL 而不�
 
 ### 图检索接通用户可见（v0.2.3）
 
+> 完整说明见[更新日志](#2026-09-23--图检索接通用户可见)；本节只讲**检索侧**的设计理由。
+
 此前**图检索的产出没有任何用户可见出口**：`teach_skill` 把同族替代写进
 `it["rag_evidence"]`，而**全仓 0 个读取方**；`graph_*` 三个原语只吃**精确键**
 （动作 id / 英文肌名），没有任何一条能从自然语言 query 进来。
@@ -354,6 +357,20 @@ print('\n'.join(item_lines(r.data)))"
 
 实测出处：[`docs/SDD/2026-09-23-graph-channel-probe.md`](docs/SDD/2026-09-23-graph-channel-probe.md)
 （探针 P1–P5）· 规格与计划：`docs/superpowers/specs\|plans/2026-09-23-graph-vector-hybrid-retrieval*.md`
+
+#### 同一波修掉的严重度排序反向 bug
+
+`GraphStore.contraindications` 的 `ORDER BY risk_level DESC` 在 Cypher 里是
+**字符串比较**，码点序 `yellow > red > green` ⇒ `red`（暂停训练 / 建议就医）
+被排到**最后**，再加 `LIMIT` 就是首丢。
+
+**为什么原本全绿**：`FakeGraph` 是假 store，**根本不执行 Cypher**。
+⇒ 教训：**逻辑写在 Cypher 里 ⇒ 单测看不见**。凡 Cypher 侧逻辑（排序 / 截断 / 过滤）
+必须有「`GraphStore.__new__` + 注入假 driver 直接测真方法」或等价护栏。
+
+修法：严重度序统一到 `lib/screening.RISK_ORDER` + `sort_by_risk`
+（**全仓唯一**来源，`plan_check` 与图禁忌共用），Cypher 里不再有字符串序。
+护栏用例同时钉住「返回序」与「Cypher 里不得再有字符串序」，**已证可证伪**。
 
 ### 数据安全修复：向量重建不再可能清空（v0.2.2）
 
@@ -418,6 +435,77 @@ WSL 里、端口转发偶发抖动。实测已复现（预置 5 行 → 清空 �
 `eval_rag.py --retriever policy --split 0.5` 与修前**逐字一致**（纯路由改动）。  
 回归守卫见 [`app/tests/test_semantic_coverage.py`](app/tests/test_semantic_coverage.py)  
 与 [`app/tests/test_llm.py`](app/tests/test_llm.py)（移除 15 条科学例句时 3 条会变红）。
+
+---
+
+## 更新日志
+
+### 2026-09-23 — 图检索接通用户可见
+
+此前**图检索的产出没有任何用户可见出口**：同族替代被写进 `it["rag_evidence"]`，
+而全仓 **0 个读取方**；`graph_*` 三个原语只吃**精确键**（动作 id / 英文肌名），
+没有任何一条能从自然语言 query 进来。本次补上三个缺口并接成一条链。
+
+**新增**
+
+- `retriever.seed_exercise` —— 图检索的 **query 入口**（query 向量 → 种子动作 id，
+  复用 `MIN_SCORE` 门槛，不新造阈值）。
+- `retriever.graph_muscle_peers` —— 同主肌枚举，取代此前的 `graph_muscle_exercises`。
+- `retriever.graph_contraindicated` + `GraphStore.contraindications` —— 禁忌链
+  （`Exercise -pattern_of-> Pattern <-contraindicates- Condition`）。
+- `app/rag/fusion.py` —— **组合层**：角色分离（graph 扩候选集 / dense 定序 /
+  lexical 旁证），**不融合分数**，产出固定形状 `facts`。
+- `app/rag/policy.py` 新增两个理由：`REASON_GRAPH_EMPTY`（正常空）与
+  `REASON_GRAPH_DOWN`（依赖故障）—— **刻意分开**，否则"Neo4j 挂了"会永远
+  看起来像"这个动作刚好没有替代"。
+
+**修复**
+
+- **严重度排序反向 bug**：`ORDER BY risk_level DESC` 在 Cypher 里是**字符串比较**，
+  码点序 `yellow > red > green` ⇒ `red`（暂停训练/建议就医）被排到**最后**，
+  再加 `LIMIT` 就是首丢。改为取行后由 `lib/screening.sort_by_risk` 排序
+  —— 该函数是**全仓唯一**的严重度序来源（`plan_check` 与图禁忌共用）。
+  ⚠ 教训：**逻辑写在 Cypher 里 ⇒ 单测看不见**（假图不执行 Cypher，原本全绿）。
+
+**变更**
+
+- `render_util.item_lines` 认领 `rag_evidence`，渲染为「可替代：…」「同肌群：…」
+  「禁忌：…」三行。**无 `rag_evidence` 时输出逐字不变**。
+- `qa_skill._attach_graph_facts` 挂载图事实（**只挂首条**，种子优先取已解析实体
+  `items[0]["id"]`，向量播种仅兜底 —— 热路径不加嵌入往返）。**不改候选集、不改排序。**
+- 删除孤儿原语 `retriever.graph_context` / `graph_muscle_exercises`、
+  `GraphStore.context` / `muscle_exercises` / `_kind_of`（全仓 0 运行期调用点）。
+- CLI 新增 `python scripts/eval_rag.py --retriever graph`。
+
+**实测与验收**
+
+| 项 | 结果 |
+|---|---|
+| 全量测试 | **1018 passed / 0 failed**（本波起点 991） |
+| `scripts/eval_retrieval.py` | **29/29** |
+| 旧通道回归 | `eval_rag --retriever all --split 0.5` 四行基线与 `docs/SDD/2026-09-20-retrieval-wiring-audit.md` 所载**逐字一致** |
+| 端到端可见性 | `练胸的动作` 首条渲染出「同肌群：…」「禁忌：近期骨折（red）…」 |
+| 探针 P1 播种命中 | 109/120 (0.908) == dense top1 ⇒ 门槛零损失 |
+| 探针 P3 rerank 净修 | **0**（修好 0 / 弄坏 0 / 不变 119）⇒ 见下 |
+
+⚠ **三点别误读**：
+
+1. **未提升检索指标，新增的是"用户可见能力"。** `compose` 不动候选集、不动 top-1，
+   旧通道行为逐条不变（由上表第三行保证）。
+2. **rerank 仍然不接线，且是刻意的。** 探针 P3 实测 cross-encoder 在图扩展集上
+   **净修 = 0**，且成因是**结构性的**：种子恒不在自己的 `peers` 里（0/120），
+   而种子 == dense top1（120/120）⇒ **正确答案压根不在被重排的候选集内**。
+   `rank_ids` 保留实现与单测，**不得写成收益**。
+3. **`--retriever graph` 的评测行衡量不了本能力。** 它报的是"扩展集里有没有
+   expected"（实测 test `TP=1 WRONG=66`），枚举/替代这类能力超出 top-1 表的口径；
+   该行的用途是**可复算**，不是成绩。
+
+实测出处：[`docs/SDD/2026-09-23-graph-channel-probe.md`](docs/SDD/2026-09-23-graph-channel-probe.md)
+（探针 P1–P5，含被作废的首测与作废理由）。
+
+### 2026-09-21 — 路由口径：science 进 qa，medical 进 guard
+
+见上文[检索质量评估](#检索质量评估)末节。
 
 ---
 

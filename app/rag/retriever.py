@@ -115,6 +115,22 @@ def seed_exercise(store, query_vec: list[float], embedder_name: str,
     return sr.get("id") or None
 
 
+def graph_muscle_peers(store, seed_id: str,
+                       limit: int | None = None) -> list[dict]:
+    """同主肌的其它动作（枚举）。返回 [{"id","name_zh","kind"}]。
+
+    2 跳语义扩展 —— 这是词法与向量都做不到的能力：向量 top-k 只能给 k 条，
+    无法"枚举某一肌群的全部动作"。
+
+    ⚠ `limit` 缺省时**不传**，由 `GraphStore.muscle_peers` 用它自己的
+    `_GRAPH_PEER_LIMIT` —— 上限**只有一个来源**。在这里再写一个 `= 6` 就是
+    两处常量，改一处忘另一处 ⇒ 同源漂移（本仓架构铁律）。
+    """
+    if limit is None:
+        return store.muscle_peers(seed_id)
+    return store.muscle_peers(seed_id, limit=limit)
+
+
 # ---- 向量检索 ----
 
 def vector_search(store, query_vec: list[float], embedder_name: str,

@@ -45,6 +45,9 @@ _CROSS_RELS = ("TARGETS", "ABOUT_MUSCLE")
 # 同族替代的条数上限。词干族最大 49 人，即使语义正确（如 f003 'curl' 27 人全是
 # biceps），26 条"替代动作"也不是一份可用的清单。6 是"够挑几个换着练"的量级。
 _FAMILY_ALT_LIMIT = 6
+# 同主肌动作的条数上限。28 块肌群里大肌群（如 pectorals）会有上百个动作，
+# 无上限的清单对用户不可用。取值依据见 docs/SDD/2026-09-23-graph-channel-probe.md 的 P2。
+_GRAPH_PEER_LIMIT = 6
 _REL_MAP = {  # 冻结 rel 白名单（防注入）
     "targets", "uses", "pattern_of", "contraindicates", "member_of",
     "ALIAS_OF", "IMPLIES_INTENT", "MAPS_TO",
@@ -346,6 +349,28 @@ class GraphStore:
                 "RETURN alt.id AS id, alt.name_zh AS name_zh, shared "
                 "ORDER BY shared DESC, alt.id "
                 "LIMIT $limit",
+                eid=exercise_id, limit=limit)
+            return [{"id": r["id"], "name_zh": r["name_zh"], "kind": "exercise"}
+                    for r in res]
+
+    def muscle_peers(self, exercise_id: str,
+                     limit: int = _GRAPH_PEER_LIMIT) -> list[dict]:
+        """同主目标肌的**其它**动作（枚举能力的来源）。
+
+        返回 [{"id","name_zh","kind"}]，与 `family_alternatives` 同一形状。
+
+        ⚠ 与 `member_of` 族的区别：族是按动作**词干**划的（`2026-09-14` 审计：
+        140 族里 f001 真混语义），而这里按 `targets{role:'target'}` 的实际
+        目标肌走 —— 语义正确性由数据保证，不靠族表。
+        ⚠ 必须带上限：这是 2 跳遍历，大肌群会返回上百条。
+        """
+        with self._driver.session(database=self._database) as s:
+            res = s.run(
+                "MATCH (e:Exercise {id: $eid})-[:targets {role: 'target'}]"
+                "->(m:Muscle)<-[:targets {role: 'target'}]-(alt:Exercise) "
+                "WHERE alt.id <> $eid "
+                "RETURN DISTINCT alt.id AS id, alt.name_zh AS name_zh "
+                "ORDER BY alt.id LIMIT $limit",
                 eid=exercise_id, limit=limit)
             return [{"id": r["id"], "name_zh": r["name_zh"], "kind": "exercise"}
                     for r in res]

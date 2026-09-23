@@ -294,36 +294,6 @@ class GraphStore:
 
     # ---- 图检索（retriever 迁移用，签名对齐现 PG 版返回结构） ----
 
-    def context(self, name: str, hops: int = 1,
-                rels: tuple[str, ...] | None = None) -> list[dict]:
-        """沿边多跳遍历。返回 [{"name","kind","rel","depth"}]；rel 限定边类型。
-        Exercise 节点按 id（name=null），其余按 name 匹配。"""
-        rels_ok = [r for r in (rels or ()) if r in _REL_MAP]
-        with self._driver.session(database=self._database) as s:
-            q = ("MATCH (start) WHERE start.name = $name OR start.id = $name "
-                 "RETURN start AS d, 0 AS depth, null AS last_rel "
-                 "UNION ALL "
-                 "MATCH (start) WHERE start.name = $name OR start.id = $name "
-                 f"MATCH path = (start)-[*1..{int(hops)}]-(d) ")
-            if rels_ok:
-                q += "WHERE ALL(r IN relationships(path) WHERE type(r) IN $rels) "
-            q += ("RETURN d, length(path) AS depth,"
-                  " type(last(relationships(path))) AS last_rel LIMIT 500")
-            res = s.run(q, name=name, rels=rels_ok)
-            return [{"name": (r["d"].get("name") or r["d"].get("id")),
-                     "kind": _kind_of(r["d"]),
-                     "rel": r["last_rel"] if r["depth"] else None,
-                     "depth": r["depth"]} for r in res]
-
-    def muscle_exercises(self, muscle: str, limit: int = 8) -> list[dict]:
-        """经 targets 反查锻炼该肌肉的动作，返回 [{"name","kind"}]（name=动作 id）。"""
-        with self._driver.session(database=self._database) as s:
-            res = s.run(
-                "MATCH (n:Exercise)-[:targets]->(m:Muscle {name: $muscle}) "
-                "RETURN DISTINCT n.id AS name LIMIT $limit",
-                muscle=muscle, limit=limit)
-            return [{"name": r["name"], "kind": "exercise"} for r in res]
-
     def family_alternatives(self, exercise_id: str,
                             limit: int = _FAMILY_ALT_LIMIT) -> list[dict]:
         """同族变体（可替代）：member_of → 同族其它动作。
@@ -558,10 +528,3 @@ def _node_label_key(labels_: list[str]) -> tuple[str | None, str | None]:
         if lbl in _NODE_KEYS:
             return lbl, _NODE_KEYS[lbl]
     return None, None
-
-
-def _kind_of(node) -> str:
-    for lbl in _ENTITY_LABELS:
-        if lbl in node.labels:
-            return lbl.lower()
-    return next(iter(node.labels), "entity").lower()

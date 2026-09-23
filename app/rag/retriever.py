@@ -72,17 +72,6 @@ def embed_query(embedder, text: str) -> list[float]:
 
 # ---- 图检索（Neo4j，Cypher 实现；store=GraphStore） ----
 
-def graph_context(store, node_name: str, hops: int = 1,
-                  rels: tuple[str, ...] | None = None) -> list[dict]:
-    """从实体出发沿边遍历。返回 [{"name","kind","rel","depth"}]。"""
-    return store.context(node_name, hops=hops, rels=rels)
-
-
-def graph_muscle_exercises(store, muscle: str, limit: int = 8) -> list[dict]:
-    """经 targets 反查锻炼该肌肉的动作（去重）。返回 [{"name","kind"}]。"""
-    return store.muscle_exercises(muscle, limit=limit)
-
-
 def graph_family_alternatives(store, exercise_id: str) -> list[dict]:
     """同族变体（可替代）：member_of → 同族其它动作。
 

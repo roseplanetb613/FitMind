@@ -10,6 +10,14 @@ import re
 # 说给用户——llm 渲染提示词第 6 条明令禁止"结构化/字段/为空"这类措辞。
 _PAYLOAD_TEXT_KEYS = ("advice", "message")
 
+# 图检索事实的渲染前缀（`rag_evidence` 的三个子键 → 用户可见行）。
+# ⚠ 这三个键由 `app/rag/fusion.py::_FACT_KEYS` 定义，**必须保持同源** ——
+# 两处各写一份是本仓"同源漂移"的经典入口。改一处必须改另一处。
+# `test_render_fact_labels_match_fusion_fact_keys` 把两者钉死。
+# ⚠ 键顺序即输出顺序；缺键/空列表一律不输出（见 item_lines 的向后兼容约束）。
+_FACT_LABELS = (("alternatives", "可替代"), ("peers", "同肌群"),
+                ("contraindications", "禁忌"))
+
 
 def payload_lines(d: dict) -> list[str]:
     """data 的文本载荷（advice / message）单源。
@@ -70,6 +78,24 @@ def item_lines(d: dict) -> list[str]:
         if src:
             line += f"（来源：{src}）"
         out.append(line)
+        # 图检索事实（2026-09-23）：`rag_evidence` 此前**全仓 0 读取方**
+        # （teach_skill 写入、没有任何地方读），所以图检索的产出对用户不可见。
+        # ⚠ 缺键/空列表一律不输出 —— 无 rag_evidence 时本段输出逐字不变。
+        ev = it.get("rag_evidence")
+        if isinstance(ev, dict):
+            for key, label in _FACT_LABELS:
+                vals = ev.get(key)
+                if not isinstance(vals, list) or not vals:
+                    continue
+                if key == "contraindications":
+                    names = [f"{v.get('condition')}（{v.get('risk_level')}）"
+                             for v in vals if isinstance(v, dict) and v.get("condition")]
+                else:
+                    names = [v.get("name_zh") or v.get("id")
+                             for v in vals if isinstance(v, dict)]
+                names = [n for n in names if n]
+                if names:
+                    out.append(f"  {label}：{'、'.join(names)}")
     return out
 
 

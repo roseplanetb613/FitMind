@@ -62,6 +62,14 @@ REASON_NO_CORROBORATION = "no_corroboration"  # 旁证通道不可用（**异常
 REASON_DISAGREE = "disagree"                  # 两条通道不一致（正常弃权）
 REASON_OK = "ok"                              # 接受
 
+# 图通道专用理由。存在的意义与上面四个相同：让"为什么没有图事实"可归因。
+# ⚠ 这两个**必须分开**，因为它们的处置方向相反（见规格 §4）：
+#   · GRAPH_DOWN  = 依赖故障 → 全降级（退回现状），**不是**弃权，该报警；
+#   · GRAPH_EMPTY = 正常空结果（该动作没有同族/没有禁忌）→ 无需处置。
+# 合并成一个理由会让"Neo4j 挂了"永远看起来像"这个动作刚好没有替代"。
+REASON_GRAPH_EMPTY = "graph_empty"
+REASON_GRAPH_DOWN = "graph_down"
+
 
 @dataclass(frozen=True)
 class Decision:

@@ -300,6 +300,61 @@ python scripts/eval_rag.py       # 需 Ollama 在线；不在线会 FAIL 而不�
 3. **`policy` 的 `exercise_cue` 分支目前仍无运行期消费者** —— 接线是独立的一波，  
    见 [`docs/superpowers/specs/2026-09-21-exercise-cue-wiring-design.md`](docs/superpowers/specs/2026-09-21-exercise-cue-wiring-design.md)。
 
+### 图检索接通用户可见（v0.2.3）
+
+此前**图检索的产出没有任何用户可见出口**：`teach_skill` 把同族替代写进
+`it["rag_evidence"]`，而**全仓 0 个读取方**；`graph_*` 三个原语只吃**精确键**
+（动作 id / 英文肌名），没有任何一条能从自然语言 query 进来。
+
+本波补上三个缺口，并把它们接成一条链：
+
+| 环节 | 落点 | 作用 |
+|---|---|---|
+| **入口** | `retriever.seed_exercise` | query 向量 → 种子动作 id（复用 `MIN_SCORE` 门槛，不新造阈值） |
+| **组合** | `app/rag/fusion.py::compose` | 角色分离，**不融合分数**；产出固定形状 `facts` |
+| **渲染** | `render_util.item_lines` | 认领 `rag_evidence` → 「可替代：…」「同肌群：…」「禁忌：…」 |
+
+端到端实测（真 PG + 真 Neo4j）：
+
+```bash
+D:/dev/runtime/python/python.exe -c "
+import sys; sys.path[:0]=['','lib','app']
+from app.core.llm import load_dotenv; load_dotenv()
+from app.skills.qa_skill import QaSkill
+from app.skills.base import ExecutionContext
+from app.core.session import Session
+from app.core.render_util import item_lines
+ex=ExecutionContext(session=Session(id='e2e'),profile={},mode='direct',skill_log=[])
+r=QaSkill().execute(ex,{'query':'练胸的动作','kind':'exercise'})
+print('\n'.join(item_lines(r.data)))"
+```
+
+输出（`练胸的动作`，首条挂了三键）：
+
+```
+· 弓箭手 俯卧撑
+  同肌群：辅助 胸部臂屈伸 (跪姿)、杠铃 卧推、杠铃 下斜卧推、…
+  禁忌：近期骨折（red）、肩周炎（yellow）、肩袖损伤（yellow）
+```
+
+⚠ **五点别误读**：
+
+1. **这是「候选集 + 结构化事实」，不改 top-1。** `compose` **不动候选集、不动排序**
+   —— 旧通道行为逐条不变由 `eval_rag.py --retriever all` 的四行数字不变来保证。
+2. **为什么不融合分数**：实测 RRF 的 `hybrid` 行 准 0.67 / LEAK 21，**比单路都差**
+   （融合分数对无关 query 也恒有值，没有"该弃权"的信息）。
+3. **rerank 仍然不接线。** 探针 P3 实测 cross-encoder 在图扩展集上**净修 = 0**
+   （修好 0 / 弄坏 0 / 不变 119），且该 0 是**结构性的**（种子恒不在自己的 `peers`
+   里 ⇒ 正确答案不在被重排的候选集内）。`rank_ids` 保留实现与单测，**不得写成收益**。
+4. **`graph` 评测行衡量不了本能力。** `eval_rag.py --retriever graph` 报的是
+   "扩展集里有没有 expected"（实测 test `TP=1 WRONG=66`），枚举/替代这类能力
+   本来就超出 top-1 表的口径 —— 它的用途是**可复算、可对比**，不是成绩。
+5. **`peers` 的排序仍是确定但任意的**（6 条从 p50=150 里按 `alt.id` 截出）——
+   已知缺口，挂到 Phase B。
+
+实测出处：[`docs/SDD/2026-09-23-graph-channel-probe.md`](docs/SDD/2026-09-23-graph-channel-probe.md)
+（探针 P1–P5）· 规格与计划：`docs/superpowers/specs\|plans/2026-09-23-graph-vector-hybrid-retrieval*.md`
+
 ### 数据安全修复：向量重建不再可能清空（v0.2.2）
 
 **问题**：`ingest.build()` 先 `store.clear_all()`（`TRUNCATE fitness.embeddings`）  
